@@ -16,9 +16,13 @@ if ! docker info &> /dev/null; then
     exit 1
 fi
 
-# Pull the image
-echo "Pulling Satori Lite image..."
-docker pull satorinet/satori-lite:latest
+# Pull the image (skip if already exists locally)
+if docker image inspect satorinet/satori-lite:latest &> /dev/null; then
+    echo "Satori Lite image already exists locally"
+else
+    echo "Pulling Satori Lite image..."
+    docker pull satorinet/satori-lite:latest
+fi
 
 # Stop and remove existing container if exists
 if docker ps -a --format '{{.Names}}' | grep -q '^satori$'; then

@@ -102,3 +102,9 @@ Thumbs.db
 tmp/
 tasks/
 me-guide/
+
+
+#security
+neuron-lite/wallet/*
+neuron-lite/config/config.yaml
+neuron-lite/config/relay.yaml
