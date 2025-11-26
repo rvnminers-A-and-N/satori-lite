@@ -46,7 +46,7 @@ class SatoriServerClient(object):
         *args, **kwargs
     ):
         self.wallet = wallet
-        self.url = url or 'https://central.satorinet.io'
+        self.url = url or 'https://stage.satorinet.io'
         self.sendingUrl = sendingUrl or 'https://mundo.satorinet.io'
         self.topicTime: dict[str, float] = {}
         self.lastCheckin: int = 0
