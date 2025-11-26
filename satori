@@ -1,0 +1,64 @@
+#!/bin/bash
+
+CONTAINER_NAME="satori"
+
+# Help
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Satori Lite CLI"
+    echo ""
+    echo "Usage: satori [command]"
+    echo ""
+    echo "Commands:"
+    echo "  (none)      Enter interactive CLI"
+    echo "  start       Start the neuron container"
+    echo "  stop        Stop the neuron container"
+    echo "  restart     Restart the neuron container"
+    echo "  logs        Show container logs"
+    echo "  status      Show container status"
+    echo "  --help      Show this help"
+    exit 0
+fi
+
+# Commands
+case "$1" in
+    start)
+        docker start $CONTAINER_NAME
+        echo "Satori neuron started"
+        ;;
+    stop)
+        docker stop $CONTAINER_NAME
+        echo "Satori neuron stopped"
+        ;;
+    restart)
+        docker restart $CONTAINER_NAME
+        echo "Satori neuron restarted"
+        ;;
+    logs)
+        docker logs $CONTAINER_NAME --tail 100 -f
+        ;;
+    status)
+        if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+            echo "Satori neuron is running"
+            docker ps --filter "name=$CONTAINER_NAME" --format "Container: {{.Names}}\nStatus: {{.Status}}\nCreated: {{.CreatedAt}}"
+        else
+            echo "Satori neuron is not running"
+        fi
+        ;;
+    "")
+        # Default: enter CLI
+        if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+            echo "Satori neuron is not running. Starting..."
+            docker start $CONTAINER_NAME 2>/dev/null || {
+                echo "Error: Container not found. Please run the installer first."
+                exit 1
+            }
+            sleep 2
+        fi
+        docker exec -it $CONTAINER_NAME python cli.py
+        ;;
+    *)
+        echo "Unknown command: $1"
+        echo "Run 'satori --help' for usage"
+        exit 1
+        ;;
+esac

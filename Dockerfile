@@ -29,5 +29,5 @@ ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine"
 # Working directory
 WORKDIR /Satori/Neuron
 
-# Default command
+# Default command - run neuron (CLI available via docker exec)
 CMD ["python", "start.py"]

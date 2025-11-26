@@ -24,5 +24,5 @@ ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine"
 # Working directory
 WORKDIR /Satori/Neuron
 
-# Default command
-CMD ["python", "start.py"]
+# Default command - run CLI which starts neuron in background
+CMD ["python", "cli.py"]
