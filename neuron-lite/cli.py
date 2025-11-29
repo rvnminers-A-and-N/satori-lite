@@ -10,6 +10,7 @@ import time
 import threading
 import io
 import logging as stdlib_logging
+import readline  # Enables arrow keys and command history
 
 # Save original file descriptors BEFORE any redirection
 _original_stdout_fd = os.dup(1)
@@ -17,8 +18,8 @@ _original_stderr_fd = os.dup(2)
 _original_stdin_fd = os.dup(0)
 
 # Create file objects from the duplicated fds
-_console_out = os.fdopen(_original_stderr_fd, 'w', buffering=1)
-_console_in = os.fdopen(_original_stdin_fd, 'r', buffering=1)
+_console_out = os.fdopen(os.dup(_original_stdout_fd), 'w', buffering=1)
+_console_in = os.fdopen(os.dup(_original_stdin_fd), 'r', buffering=1)
 
 # Global log buffer
 _log_buffer: list[str] = []
@@ -94,6 +95,33 @@ def console_write(msg: str):
 def console_readline() -> str:
     """Read a line from console."""
     return _console_in.readline()
+
+
+def console_input(prompt: str = "") -> str:
+    """Read input with readline support (arrow keys, history)."""
+    # Print prompt manually to our console output
+    console_write(prompt)
+
+    # Only restore stdin fd for readline - keep stdout redirected to prevent leaks
+    saved_stdin = os.dup(0)
+
+    try:
+        # Restore original stdin at fd level for readline
+        os.dup2(_original_stdin_fd, 0)
+
+        # Temporarily point sys.stdin to original for readline
+        old_stdin = sys.stdin
+        sys.stdin = sys.__stdin__
+
+        try:
+            # Use empty prompt since we printed it manually
+            return input()
+        finally:
+            sys.stdin = old_stdin
+    finally:
+        # Restore redirected stdin
+        os.dup2(saved_stdin, 0)
+        os.close(saved_stdin)
 
 
 class NeuronCLI:
@@ -325,10 +353,13 @@ class NeuronCLI:
         # Start neuron in background
         self.start_neuron_background()
 
+        # Configure readline for history and arrow keys
+        readline.parse_and_bind('set editing-mode emacs')
+
         while True:
             try:
-                console_write("> ")
-                user_input = console_readline().strip()
+                # Use console_input() for readline support (arrow keys, history)
+                user_input = console_input("> ").strip()
 
                 if not user_input:
                     continue

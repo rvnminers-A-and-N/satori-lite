@@ -55,7 +55,7 @@ case "$1" in
                 docker run -d --name $CONTAINER_NAME \
                     --restart unless-stopped \
                     -v satori-data:/Satori/Neuron/data \
-                    satorinet/satori-lite:latest || {
+                    satorinet/satori-lite:dev || {
                     echo "Error: Failed to create container. Is Docker running?"
                     exit 1
                 }
