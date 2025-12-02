@@ -328,7 +328,7 @@ def register_routes(app):
     @login_required
     def api_pool_toggle():
         """Proxy pool toggle request."""
-        return proxy_api('/pool/toggle-open', 'POST')
+        return proxy_api('/pool/toggle-open', 'POST', request.json)
 
     @app.route('/api/wallet/address')
     @login_required
