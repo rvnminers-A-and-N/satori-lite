@@ -61,15 +61,33 @@ case "$1" in
             # Try to start existing container, or create new one
             if ! docker start $CONTAINER_NAME 2>/dev/null; then
                 echo "Container not found. Creating..."
-                docker run -d --name $CONTAINER_NAME \
-                    --restart unless-stopped \
-                    -p 5001:5000 \
-                    -v satori-data:/Satori/Neuron/data \
-                    -e SATORI_CENTRAL_URL=$CENTRAL_URL \
-                    $IMAGE || {
-                    echo "Error: Failed to create container. Is Docker running?"
-                    exit 1
-                }
+                # For dev image, override CMD to use start.py and mount code
+                if [ "$IMAGE_TAG" = "dev" ]; then
+                    docker run -d --name $CONTAINER_NAME \
+                        --restart unless-stopped \
+                        -p 5001:5000 \
+                        -v "$(pwd)/lib-lite:/Satori/Lib" \
+                        -v "$(pwd)/neuron-lite:/Satori/Neuron" \
+                        -v "$(pwd)/engine-lite:/Satori/Engine" \
+                        -v "$(pwd)/web:/Satori/web" \
+                        -v satori-data:/Satori/Neuron/data \
+                        -e SATORI_CENTRAL_URL=$CENTRAL_URL \
+                        -e PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori" \
+                        $IMAGE python /Satori/Neuron/start.py || {
+                        echo "Error: Failed to create container. Is Docker running?"
+                        exit 1
+                    }
+                else
+                    docker run -d --name $CONTAINER_NAME \
+                        --restart unless-stopped \
+                        -p 5001:5000 \
+                        -v satori-data:/Satori/Neuron/data \
+                        -e SATORI_CENTRAL_URL=$CENTRAL_URL \
+                        $IMAGE || {
+                        echo "Error: Failed to create container. Is Docker running?"
+                        exit 1
+                    }
+                fi
             fi
             sleep 2
         fi

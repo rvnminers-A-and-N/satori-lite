@@ -209,6 +209,21 @@ class NeuronCLI:
 
     def prompt_mandatory_vault_password(self) -> bool:
         """Prompt user to create a vault password. Returns True if successful."""
+        # Check if vault password already exists (could be set via web UI or another CLI instance)
+        if self.check_vault_password_exists():
+            console_print()
+            console_print("=" * 60)
+            console_print("  VAULT PASSWORD ALREADY EXISTS")
+            console_print("=" * 60)
+            console_print()
+            console_print("A vault password has already been created.")
+            console_print("You can use it to unlock your vault.")
+            console_print()
+            console_print("If you set it in another interface (web UI), use that password.")
+            console_print("=" * 60)
+            console_print()
+            return True
+
         console_print()
         console_print("=" * 60)
         console_print("  VAULT PASSWORD SETUP REQUIRED")
@@ -240,6 +255,14 @@ class NeuronCLI:
                 console_print("Passwords do not match. Please try again.")
                 console_print()
                 continue
+
+            # Double-check if password was created elsewhere (race condition protection)
+            if self.check_vault_password_exists():
+                console_print()
+                console_print("Vault password was already created by another process.")
+                console_print("Please use the existing password to unlock your vault.")
+                console_print()
+                return True
 
             # Save password to config
             from satorineuron import config

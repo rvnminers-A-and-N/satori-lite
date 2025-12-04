@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 _vault = None
 
 
+def check_vault_password_exists():
+    """Check if vault password exists in config.
+
+    Returns:
+        bool: True if vault password exists and is not empty, False otherwise
+    """
+    try:
+        from satorineuron import config
+        vault_password = config.get().get('vault password')
+        return vault_password is not None and len(str(vault_password)) > 0
+    except Exception as e:
+        logger.warning(f"Failed to check vault password: {e}")
+        return False
+
+
 def set_vault(vault):
     """Set the vault instance for the routes to use."""
     global _vault
@@ -133,7 +148,11 @@ def register_routes(app):
 
     @app.route('/')
     def index():
-        """Redirect to dashboard if logged in, otherwise to login."""
+        """Redirect to dashboard if logged in, vault setup if needed, otherwise to login."""
+        # Check if vault password exists first
+        if not check_vault_password_exists():
+            return redirect(url_for('vault_setup'))
+
         if session.get('vault_open'):
             return redirect(url_for('dashboard'))
         return redirect(url_for('login'))
@@ -141,6 +160,10 @@ def register_routes(app):
     @app.route('/login', methods=['GET', 'POST'])
     def login():
         """Handle vault unlock/login."""
+        # Check if vault password exists, redirect to setup if not
+        if not check_vault_password_exists():
+            return redirect(url_for('vault_setup'))
+
         if request.method == 'POST':
             password = request.form.get('password', '')
 
@@ -183,6 +206,52 @@ def register_routes(app):
                 flash('Error: Vault not initialized', 'error')
 
         return render_template('login.html')
+
+    @app.route('/vault-setup', methods=['GET', 'POST'])
+    def vault_setup():
+        """Handle initial vault password creation."""
+        # If vault password already exists, redirect to login with message
+        if check_vault_password_exists():
+            flash('Vault password already exists. Please log in with your existing password.', 'info')
+            logger.info("Attempted to access vault setup but password already exists")
+            return redirect(url_for('login'))
+
+        if request.method == 'POST':
+            password = request.form.get('password', '')
+            password_confirm = request.form.get('password_confirm', '')
+
+            # Validate password length
+            if len(password) < 4:
+                flash('Password must be at least 4 characters long', 'error')
+                return render_template('vault_setup.html')
+
+            # Validate passwords match
+            if password != password_confirm:
+                flash('Passwords do not match. Please try again.', 'error')
+                return render_template('vault_setup.html')
+
+            # Save password to config with double-check to prevent race condition
+            try:
+                from satorineuron import config
+
+                # Double-check: verify password still doesn't exist before writing
+                # This prevents race condition where CLI/another instance creates it
+                # between our initial check and now
+                if check_vault_password_exists():
+                    flash('Vault password was already created. Please log in.', 'info')
+                    logger.info("Vault password already exists (created elsewhere), redirecting to login")
+                    return redirect(url_for('login'))
+
+                config.add(data={'vault password': password})
+                flash('Vault password created successfully! Please log in.', 'success')
+                logger.info("Vault password created via web UI")
+                return redirect(url_for('login'))
+            except Exception as e:
+                logger.error(f"Failed to save vault password: {e}")
+                flash('Error saving vault password. Please try again.', 'error')
+                return render_template('vault_setup.html')
+
+        return render_template('vault_setup.html')
 
     @app.route('/logout')
     def logout():
