@@ -11,6 +11,9 @@ import time
 import logging
 import base64
 import requests
+import uuid
+from threading import Lock
+from cryptography.fernet import Fernet
 from flask import (
     render_template,
     redirect,
@@ -24,8 +27,12 @@ from flask import (
 
 logger = logging.getLogger(__name__)
 
-# Global vault reference (will be set by the application)
-_vault = None
+# Global vault reference (will be set by the application) - used by background processes
+_startup_vault = None
+
+# Session-specific vaults - each browser session gets its own WalletManager
+_session_vaults = {}
+_vault_lock = Lock()
 
 
 def check_vault_password_exists():
@@ -44,14 +51,110 @@ def check_vault_password_exists():
 
 
 def set_vault(vault):
-    """Set the vault instance for the routes to use."""
-    global _vault
-    _vault = vault
+    """Set the startup vault instance (used by background processes)."""
+    global _startup_vault
+    _startup_vault = vault
 
 
 def get_vault():
-    """Get the vault instance."""
-    return _vault
+    """Get the startup vault instance (for backward compatibility)."""
+    return _startup_vault
+
+
+def get_or_create_session_vault():
+    """Get or create WalletManager for current session.
+
+    Each browser session gets its own WalletManager instance.
+    This provides true session isolation - one user's logout doesn't
+    affect another user's session.
+
+    Returns:
+        WalletManager instance for this session
+    """
+    # Get or generate session ID
+    session_id = session.get('session_id')
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id
+        session.permanent = True  # Make session persistent
+        logger.info(f"Generated new session ID: {session_id}")
+
+    # Get or create vault for this session
+    with _vault_lock:
+        if session_id not in _session_vaults:
+            try:
+                from satorineuron.init.wallet import WalletManager
+                from satorineuron import config
+
+                # Create NEW WalletManager instance for this session
+                logger.info(f"Creating new WalletManager for session: {session_id}")
+                _session_vaults[session_id] = WalletManager(
+                    wallet=config.walletPath('wallet.yaml'),
+                    vault=config.walletPath('vault.yaml'),
+                    cachePath=config.cachePath(),
+                    temporary=False  # Don't persist changes from web UI
+                )
+            except Exception as e:
+                logger.error(f"Failed to create session vault: {e}")
+                return None
+
+    return _session_vaults[session_id]
+
+
+def cleanup_session_vault(session_id):
+    """Clean up vault when session ends.
+
+    Args:
+        session_id: The session ID to cleanup
+    """
+    with _vault_lock:
+        if session_id in _session_vaults:
+            try:
+                logger.info(f"Cleaning up session vault: {session_id}")
+                _session_vaults[session_id].closeVault()
+            except Exception as e:
+                logger.warning(f"Error closing vault for session {session_id}: {e}")
+
+            try:
+                del _session_vaults[session_id]
+            except Exception as e:
+                logger.warning(f"Error deleting session vault {session_id}: {e}")
+
+
+def encrypt_vault_password(password):
+    """Encrypt vault password for storage in session.
+
+    Args:
+        password: Plaintext password
+
+    Returns:
+        tuple: (encrypted_password, session_key) both as strings
+    """
+    session_key = Fernet.generate_key()
+    f = Fernet(session_key)
+    encrypted_pw = f.encrypt(password.encode())
+    return encrypted_pw.decode(), session_key.decode()
+
+
+def decrypt_vault_password_from_session():
+    """Decrypt vault password from current session.
+
+    Returns:
+        str: Decrypted password, or None if not available
+    """
+    try:
+        encrypted_pw = session.get('encrypted_vault_password')
+        session_key = session.get('session_key')
+
+        if not encrypted_pw or not session_key:
+            return None
+
+        f = Fernet(session_key.encode())
+        password = f.decrypt(encrypted_pw.encode()).decode()
+        return password
+    except Exception as e:
+        logger.error(f"Failed to decrypt vault password: {e}")
+        return None
 
 
 def ensure_peer_registered(app, wallet_manager, max_retries=3):
@@ -137,6 +240,11 @@ def login_required(f):
     """Decorator to require login for a route."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Ensure session ID exists for tracking
+        if not session.get('session_id'):
+            session['session_id'] = str(uuid.uuid4())
+            session.permanent = True
+
         if not session.get('vault_open'):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
@@ -167,7 +275,8 @@ def register_routes(app):
         if request.method == 'POST':
             password = request.form.get('password', '')
 
-            wallet_manager = get_vault()
+            # Get session-specific wallet manager
+            wallet_manager = get_or_create_session_vault()
             if wallet_manager:
                 try:
                     # WalletManager.openVault(password) unlocks the vault
@@ -181,8 +290,13 @@ def register_routes(app):
                         # Wrong password - vault is still encrypted
                         flash('Error: Invalid password', 'error')
                     else:
-                        # Successfully decrypted
+                        # Successfully decrypted - vault stays unlocked for this session
                         session['vault_open'] = True
+
+                        # Encrypt and store password in session for future use
+                        encrypted_pw, session_key = encrypt_vault_password(password)
+                        session['encrypted_vault_password'] = encrypted_pw
+                        session['session_key'] = session_key
 
                         # Register peer with API server (non-blocking)
                         try:
@@ -256,12 +370,10 @@ def register_routes(app):
     @app.route('/logout')
     def logout():
         """Handle logout/vault lock."""
-        wallet_manager = get_vault()
-        if wallet_manager:
-            try:
-                wallet_manager.closeVault()
-            except Exception:
-                pass
+        # Cleanup session-specific vault
+        session_id = session.get('session_id')
+        if session_id:
+            cleanup_session_vault(session_id)
 
         session.clear()
         return redirect(url_for('login'))
@@ -293,7 +405,7 @@ def register_routes(app):
         2. Sign it with the identity wallet
         3. Return headers with pubkey, message, and signature
         """
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if not wallet_manager or not wallet_manager.wallet:
             return None
 
@@ -415,7 +527,7 @@ def register_routes(app):
     @login_required
     def api_wallet_address():
         """Get wallet and vault addresses."""
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if wallet_manager:
             result = {}
             # Get wallet address
@@ -431,7 +543,7 @@ def register_routes(app):
     @login_required
     def api_wallet_private_key():
         """Get vault's private key (sensitive - requires login)."""
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if wallet_manager and wallet_manager.vault:
             try:
                 privkey = wallet_manager.vault.privkey
@@ -444,7 +556,7 @@ def register_routes(app):
     @login_required
     def api_wallet_identity_private_key():
         """Get identity wallet's private key (for backup - requires login)."""
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if wallet_manager and wallet_manager.wallet:
             try:
                 privkey = wallet_manager.wallet.privkey
@@ -457,7 +569,7 @@ def register_routes(app):
     @login_required
     def api_wallet_send():
         """Send SATORI tokens from vault."""
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if not wallet_manager or not wallet_manager.vault:
             return jsonify({'error': 'Vault not initialized'}), 500
 
@@ -533,7 +645,7 @@ def register_routes(app):
         This bypasses the Satori API server and queries the blockchain directly
         via the electromax server using the wallet objects.
         """
-        wallet_manager = get_vault()
+        wallet_manager = get_or_create_session_vault()
         if not wallet_manager:
             return jsonify({'error': 'Wallet manager not initialized'}), 500
 

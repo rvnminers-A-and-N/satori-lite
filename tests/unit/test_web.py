@@ -55,21 +55,24 @@ class TestLoginPage:
     @pytest.mark.unit
     def test_login_page_renders(self, client):
         """Login page should render successfully."""
-        response = client.get('/login')
+        with patch('web.routes.check_vault_password_exists', return_value=True):
+            response = client.get('/login')
         assert response.status_code == 200
         assert b'password' in response.data.lower()
 
     @pytest.mark.unit
     def test_login_page_has_form(self, client):
         """Login page should contain a password form."""
-        response = client.get('/login')
+        with patch('web.routes.check_vault_password_exists', return_value=True):
+            response = client.get('/login')
         assert b'<form' in response.data
         assert b'type="password"' in response.data
 
     @pytest.mark.unit
     def test_root_redirects_to_login_when_vault_locked(self, client):
         """Root URL should redirect to login when vault is locked."""
-        response = client.get('/')
+        with patch('web.routes.check_vault_password_exists', return_value=True):
+            response = client.get('/')
         assert response.status_code in [302, 303]
         assert b'/login' in response.data or '/login' in response.location
 
@@ -78,26 +81,30 @@ class TestVaultUnlock:
     """Test vault unlock functionality."""
 
     @pytest.mark.unit
-    @patch('web.routes.get_vault')
-    def test_login_with_correct_password_redirects_to_dashboard(self, mock_get_vault, client):
+    def test_login_with_correct_password_redirects_to_dashboard(self, client):
         """Correct password should unlock vault and redirect to dashboard."""
         mock_wallet_manager = MagicMock()
-        mock_wallet_manager.openVault.return_value = MagicMock()
-        mock_get_vault.return_value = mock_wallet_manager
+        mock_vault = MagicMock()
+        mock_vault.isDecrypted = True
+        mock_wallet_manager.openVault.return_value = mock_vault
 
-        response = client.post('/login', data={'password': 'correct_password'})
+        with patch('web.routes.check_vault_password_exists', return_value=True):
+            with patch('web.routes.get_or_create_session_vault', return_value=mock_wallet_manager):
+                response = client.post('/login', data={'password': 'correct_password'})
+
         assert response.status_code in [302, 303]
         assert '/dashboard' in response.location or b'/dashboard' in response.data
 
     @pytest.mark.unit
-    @patch('web.routes.get_vault')
-    def test_login_with_incorrect_password_shows_error(self, mock_get_vault, client):
+    def test_login_with_incorrect_password_shows_error(self, client):
         """Incorrect password should show error message."""
         mock_wallet_manager = MagicMock()
         mock_wallet_manager.openVault.side_effect = Exception("Invalid password")
-        mock_get_vault.return_value = mock_wallet_manager
 
-        response = client.post('/login', data={'password': 'wrong_password'})
+        with patch('web.routes.check_vault_password_exists', return_value=True):
+            with patch('web.routes.get_or_create_session_vault', return_value=mock_wallet_manager):
+                response = client.post('/login', data={'password': 'wrong_password'})
+
         assert response.status_code == 200
         assert b'error' in response.data.lower() or b'invalid' in response.data.lower()
 
@@ -113,19 +120,22 @@ class TestDashboard:
         assert '/login' in response.location or b'/login' in response.data
 
     @pytest.mark.unit
-    @patch('web.routes.get_vault')
-    def test_dashboard_renders_when_logged_in(self, mock_get_vault, client):
+    def test_dashboard_renders_when_logged_in(self, client):
         """Dashboard should render when vault is open."""
+        mock_wallet_manager = MagicMock()
         mock_vault = MagicMock()
         mock_vault.is_open = True
         mock_vault.wallet = MagicMock()
-        mock_get_vault.return_value = mock_vault
+        mock_wallet_manager.vault = mock_vault
 
         # Simulate logged in session
         with client.session_transaction() as sess:
             sess['vault_open'] = True
+            sess['session_id'] = 'test-session-id'
 
-        response = client.get('/dashboard')
+        with patch('web.routes.get_or_create_session_vault', return_value=mock_wallet_manager):
+            response = client.get('/dashboard')
+
         assert response.status_code == 200
         assert b'dashboard' in response.data.lower()
 
@@ -134,19 +144,19 @@ class TestLogout:
     """Test logout functionality."""
 
     @pytest.mark.unit
-    @patch('web.routes.get_vault')
-    def test_logout_clears_session(self, mock_get_vault, client):
+    def test_logout_clears_session(self, client):
         """Logout should clear session and redirect to login."""
-        mock_vault = MagicMock()
-        mock_get_vault.return_value = mock_vault
-
         # Simulate logged in session
         with client.session_transaction() as sess:
             sess['vault_open'] = True
+            sess['session_id'] = 'test-session-id'
 
-        response = client.get('/logout')
+        with patch('web.routes.cleanup_session_vault') as mock_cleanup:
+            response = client.get('/logout')
+
         assert response.status_code in [302, 303]
         assert '/login' in response.location or b'/login' in response.data
+        mock_cleanup.assert_called_once_with('test-session-id')
 
 
 class TestHealthCheck:
