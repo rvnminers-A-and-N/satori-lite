@@ -245,7 +245,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         def watchForever():
             latestTag = LatestTag(self.version, serverURL=self.urlServer)
             while True:
-                time.sleep(60 * 60 * 6)
+                time.sleep(60 * 60 * 24)
                 if latestTag.mustUpdate():
                     terminatePid(getPidByName("satori.py"))
 
@@ -253,6 +253,56 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             target=watchForever,
             daemon=True)
         self.watchVersionThread.start()
+
+    def pollObservationsForever(self):
+        """
+        Poll the central server for new observations every 11 hours.
+        When new observations arrive, pass them to the engine for predictions.
+        """
+        import pandas as pd
+
+        def pollForever():
+            while True:
+                time.sleep(60 * 60 * 11)
+                try:
+                    if not hasattr(self, 'server') or self.server is None:
+                        logging.warning("Server not initialized, skipping observation poll", color='yellow')
+                        continue
+
+                    if not hasattr(self, 'aiengine') or self.aiengine is None:
+                        logging.warning("AI Engine not initialized, skipping observation poll", color='yellow')
+                        continue
+
+                    # Get latest observation from central-lite
+                    observation = self.server.getObservation()
+
+                    if observation is None:
+                        logging.info("No new observations available", color='blue')
+                        continue
+
+                    # Convert observation to DataFrame for engine
+                    # Expected format: columns = [ts, value, hash/id]
+                    df = pd.DataFrame([{
+                        'ts': observation.get('observed_at') or observation.get('ts'),
+                        'value': observation.get('value'),
+                        'hash': observation.get('hash') or observation.get('id'),
+                    }])
+
+                    # Pass to each stream in the engine
+                    for streamUuid, streamModel in self.aiengine.streamModels.items():
+                        try:
+                            logging.info(f"Passing observation to stream {streamUuid}", color='green')
+                            streamModel.onDataReceived(df)
+                        except Exception as e:
+                            logging.error(f"Error passing observation to stream {streamUuid}: {e}", color='red')
+
+                except Exception as e:
+                    logging.error(f"Error polling observations: {e}", color='red')
+
+        self.pollObservationsThread = threading.Thread(
+            target=pollForever,
+            daemon=True)
+        self.pollObservationsThread.start()
 
     def delayedEngine(self):
         time.sleep(60 * 60 * 6)
@@ -439,6 +489,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
             engineThread = threading.Thread(target=runEngine, daemon=True)
             engineThread.start()
+
+            # Start polling for observations from central-lite
+            self.pollObservationsForever()
+
             logging.info("AI Engine spawned successfully", color="green")
         except Exception as e:
             logging.error(f"Failed to spawn AI Engine: {e}")

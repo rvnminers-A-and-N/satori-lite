@@ -1037,6 +1037,36 @@ class SatoriServerClient(object):
             return None
         return True
 
+    def getObservation(self) -> Union[dict, None]:
+        """
+        Get the latest observation from the Central Server.
+
+        Returns:
+            dict with keys: id, value, observed_at, hash, ts
+            None if request fails or no observation available
+        """
+        try:
+            response = self._makeAuthenticatedCall(
+                function=requests.get,
+                endpoint='/api/v1/observation/get',
+                raiseForStatus=False
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data is None:
+                    return None
+                return data
+            else:
+                logging.warning(
+                    f"Failed to get observation. Status code: {response.status_code}",
+                    color='yellow')
+                return None
+        except Exception as e:
+            logging.error(
+                f"Error occurred while fetching observation: {str(e)}",
+                color='red')
+            return None
+
     # def getProposalById(self, proposal_id: str) -> dict:
     #    try:
     #        response = self._makeUnauthenticatedCall(
