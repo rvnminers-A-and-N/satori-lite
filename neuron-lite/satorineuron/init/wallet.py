@@ -214,8 +214,9 @@ class WalletManager:
         create: bool = False,
     ) -> Union[EvrmoreWallet, None]:
         if isinstance(self._vault, EvrmoreWallet):
-            if self._vault.isDecrypted:
-                return self._vault
+            # SECURITY FIX: Always close and re-decrypt with provided password
+            # This prevents bypassing password validation when vault is already decrypted
+            self._vault.close()
             self._vault.open(password)
             return self._vault
 
