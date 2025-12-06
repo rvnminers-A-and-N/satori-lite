@@ -87,10 +87,12 @@ def get_or_create_session_vault():
                 from satorineuron import config
 
                 # Create NEW WalletManager instance for this session
+                # Don't auto-decrypt vault - user must provide password via login
                 logger.info(f"Creating new WalletManager for session: {session_id}")
                 _session_vaults[session_id] = WalletManager.create(
                     walletPath=config.walletPath('wallet.yaml'),
-                    vaultPath=config.walletPath('vault.yaml')
+                    vaultPath=config.walletPath('vault.yaml'),
+                    useConfigPassword=False  # Don't auto-decrypt with config password
                     # cachePath is optional and defaults to None
                 )
             except Exception as e:
