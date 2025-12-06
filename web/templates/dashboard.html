@@ -155,13 +155,17 @@
                 </div>
                 <div class="card-body">
                     <div class="row text-center py-3">
-                        <div class="col-6">
+                        <div class="col-md-4 col-6 mb-3 mb-md-0">
                             <h3 id="tokenBalance">--</h3>
                             <p class="text-muted mb-0">SATORI Token</p>
                         </div>
-                        <div class="col-6">
+                        <div class="col-md-4 col-6 mb-3 mb-md-0">
                             <h3 id="stakeBalance">--</h3>
                             <p class="text-muted mb-0">SATORI Stake</p>
+                        </div>
+                        <div class="col-md-4 col-12">
+                            <h3 id="evrBalance">--</h3>
+                            <p class="text-muted mb-0">Evrmore (EVR)</p>
                         </div>
                     </div>
                 </div>
@@ -399,10 +403,11 @@
 
     async function refreshBalance() {
         // Get real-time balance from electrumx blockchain (wallet + vault)
-        // Only updates token balance, NOT stake (stake is only known by Satori API)
+        // Only updates token balance and EVR balance, NOT stake (stake is only known by Satori API)
         const result = await apiCall('/wallet/balance/direct');
         if (result) {
             document.getElementById('tokenBalance').textContent = result.total !== undefined ? result.total.toFixed(8) : '--';
+            document.getElementById('evrBalance').textContent = result.total_evr !== undefined ? result.total_evr.toFixed(8) : '--';
             // Stake value is NOT updated - it's only available from Satori API
         }
     }

@@ -177,13 +177,15 @@ class WalletManager:
                     self._wallet.electrumx = self._electrumx
                 if self._vault:
                     self._vault.electrumx = self._electrumx
+                if self._updateConnectionStatus:
+                    self._updateConnectionStatus(
+                        connTo=ConnectionTo.electrumx,
+                        status=True)
+                return True
+            if self._updateConnectionStatus:
                 self._updateConnectionStatus(
                     connTo=ConnectionTo.electrumx,
-                    status=True)
-                return True
-            self._updateConnectionStatus(
-                connTo=ConnectionTo.electrumx,
-                status=False)
+                    status=False)
             return False
         except Exception as e:
             logging.error(f"Failed to establish Electrumx connection: {e}")
