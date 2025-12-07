@@ -35,18 +35,19 @@ _session_vaults = {}
 _vault_lock = Lock()
 
 
-def check_vault_password_exists():
-    """Check if vault password exists in config.
+def check_vault_file_exists():
+    """Check if vault.yaml file exists.
 
     Returns:
-        bool: True if vault password exists and is not empty, False otherwise
+        bool: True if vault.yaml file exists, False otherwise
     """
     try:
         from satorineuron import config
-        vault_password = config.get().get('vault password')
-        return vault_password is not None and len(str(vault_password)) > 0
+        import os
+        vault_path = config.walletPath('vault.yaml')
+        return os.path.exists(vault_path)
     except Exception as e:
-        logger.warning(f"Failed to check vault password: {e}")
+        logger.warning(f"Failed to check vault file: {e}")
         return False
 
 
@@ -258,8 +259,8 @@ def register_routes(app):
     @app.route('/')
     def index():
         """Redirect to dashboard if logged in, vault setup if needed, otherwise to login."""
-        # Check if vault password exists first
-        if not check_vault_password_exists():
+        # Check if vault file exists first
+        if not check_vault_file_exists():
             return redirect(url_for('vault_setup'))
 
         if session.get('vault_open'):
@@ -269,8 +270,8 @@ def register_routes(app):
     @app.route('/login', methods=['GET', 'POST'])
     def login():
         """Handle vault unlock/login."""
-        # Check if vault password exists, redirect to setup if not
-        if not check_vault_password_exists():
+        # Check if vault file exists, redirect to setup if not
+        if not check_vault_file_exists():
             return redirect(url_for('vault_setup'))
 
         # Auto-login on GET if config password exists
@@ -366,9 +367,9 @@ def register_routes(app):
     @app.route('/vault-setup', methods=['GET', 'POST'])
     def vault_setup():
         """Handle initial vault password creation."""
-        # If vault password already exists, redirect to login with message
-        if check_vault_password_exists():
-            flash('Vault password already exists. Please log in with your existing password.', 'info')
+        # If vault file already exists, redirect to login with message
+        if check_vault_file_exists():
+            flash('Vault already exists. Please log in with your existing password.', 'info')
             logger.info("Attempted to access vault setup but password already exists")
             return redirect(url_for('login'))
 
