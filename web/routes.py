@@ -693,18 +693,28 @@ def register_routes(app):
             vault.getReadyToSend()
 
             if sweep:
-                # Send all tokens
+                # Send all tokens - returns string (txid)
                 txid = vault.sendAllTransaction(address)
+                if txid and len(txid) == 64:
+                    return jsonify({'success': True, 'txid': txid})
+                else:
+                    return jsonify({'error': 'Transaction failed', 'details': str(txid)}), 500
             else:
-                # Send specific amount
-                txid = vault.typicalNeuronTransaction(
+                # Send specific amount - returns TransactionResult object
+                result = vault.typicalNeuronTransaction(
                     amount=amount,
                     address=address)
 
-            if txid and len(txid) == 64:
-                return jsonify({'success': True, 'txid': txid})
-            else:
-                return jsonify({'error': 'Transaction failed', 'details': str(txid)}), 500
+                # Check if result is a TransactionResult object
+                if hasattr(result, 'success') and hasattr(result, 'msg'):
+                    if result.success and result.msg and len(result.msg) == 64:
+                        return jsonify({'success': True, 'txid': result.msg})
+                    else:
+                        error_msg = result.msg or 'Transaction failed'
+                        return jsonify({'error': error_msg}), 500
+                # Fallback for unexpected return type
+                else:
+                    return jsonify({'error': 'Unexpected transaction result', 'details': str(result)}), 500
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
