@@ -283,6 +283,10 @@ def register_routes(app):
 
         # Auto-login on GET if config password exists
         if request.method == 'GET':
+            # Skip auto-login if user just logged out explicitly
+            if session.get('logged_out'):
+                return render_template('login.html')
+
             from satorineuron import config
             config_password = config.get().get('vault password')
 
@@ -296,6 +300,7 @@ def register_routes(app):
                         if vault and vault.isDecrypted:
                             # Successfully auto-logged in
                             session['vault_open'] = True
+                            session.pop('logged_out', None)  # Clear logout flag
 
                             # Encrypt and store password in session for future use
                             encrypted_pw, session_key = encrypt_vault_password(config_password)
@@ -342,6 +347,7 @@ def register_routes(app):
                     else:
                         # Successfully decrypted - vault stays unlocked for this session
                         session['vault_open'] = True
+                        session.pop('logged_out', None)  # Clear logout flag
 
                         # Encrypt and store password in session for future use
                         encrypted_pw, session_key = encrypt_vault_password(password)
@@ -428,7 +434,9 @@ def register_routes(app):
         if session_id:
             cleanup_session_vault(session_id)
 
+        # Set flag before clearing to prevent auto-login
         session.clear()
+        session['logged_out'] = True
         return redirect(url_for('login'))
 
     @app.route('/dashboard')
