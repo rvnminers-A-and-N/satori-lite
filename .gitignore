@@ -109,3 +109,7 @@ neuron-lite/wallet/*
 neuron-lite/config/config.yaml
 neuron-lite/config/docker-compose.example.yaml
 neuron-lite/config/relay.yaml
+config/
+wallet/
+models/
+data/
