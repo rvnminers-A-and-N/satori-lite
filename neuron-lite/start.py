@@ -92,7 +92,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.latestObservationTime: float = 0
         self.configRewardAddress: str = None
         self.setRewardAddress()
-        self.setEngineVersion()
         self.setupWalletManager()
         self.ip = getPublicIpv4UsingCurl()
         self.checkinCheckThread = threading.Thread(
@@ -593,16 +592,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         if hasattr(self, 'server') and self.server is not None:
             self.server.setMiningMode(miningMode)
         return self.miningMode
-
-    def setEngineVersion(self, version: Union[str, None] = None) -> str:
-        default = 'v2'
-        version = (
-            version
-            if version in ['v1', 'v2']
-            else config.get().get('engine version', default))
-        self.engineVersion = version if version in ['v1', 'v2'] else default
-        config.add(data={'engine version': self.engineVersion})
-        return self.engineVersion
 
     # Removed setInvitedBy - central-lite doesn't use referrer system
 
