@@ -124,6 +124,47 @@ def console_input(prompt: str = "") -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+def console_password_input(prompt: str = "") -> str:
+    """Read password input with asterisk masking."""
+    console_write(prompt)
+
+    # Use the original stdin fd for reading
+    fd = _original_stdin_fd
+    old_settings = termios.tcgetattr(fd)
+
+    try:
+        tty.setraw(fd)
+
+        password = ""
+
+        while True:
+            # Read one character
+            ch = os.read(fd, 1).decode('utf-8', errors='ignore')
+
+            if ch == '\r' or ch == '\n':  # Enter
+                console_write('\r\n')
+                break
+            elif ch == '\x03':  # Ctrl+C
+                console_write('\r\n')
+                raise KeyboardInterrupt
+            elif ch == '\x04':  # Ctrl+D
+                console_write('\r\n')
+                raise EOFError
+            elif ch == '\x7f' or ch == '\x08':  # Backspace
+                if len(password) > 0:
+                    password = password[:-1]
+                    # Erase last asterisk
+                    console_write('\b \b')
+            elif ch >= ' ':  # Printable character
+                password += ch
+                console_write('*')
+
+        return password
+
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 class NeuronCLI:
     """Interactive CLI for Satori Neuron."""
 
@@ -181,16 +222,14 @@ class NeuronCLI:
         console_print()
 
         while True:
-            console_write("Enter new vault password (min 4 characters): ")
-            password1 = console_readline().strip()
+            password1 = console_password_input("Enter new vault password (min 4 characters): ")
 
             if len(password1) < 4:
                 console_print("Password must be at least 4 characters. Please try again.")
                 console_print()
                 continue
 
-            console_write("Confirm password: ")
-            password2 = console_readline().strip()
+            password2 = console_password_input("Confirm password: ")
 
             if password1 != password2:
                 console_print("Passwords do not match. Please try again.")
@@ -276,8 +315,7 @@ class NeuronCLI:
 
             # Prompt for password (unlimited attempts, like web UI)
             while True:
-                console_write("Enter vault password: ")
-                password = console_readline().strip()
+                password = console_password_input("Enter vault password: ")
 
                 if self.unlock_existing_vault(password):
                     console_print()
@@ -294,16 +332,14 @@ class NeuronCLI:
         Matches web UI behavior.
         """
         while True:
-            console_write("Enter new vault password (min 4 characters): ")
-            password1 = console_readline().strip()
+            password1 = console_password_input("Enter new vault password (min 4 characters): ")
 
             if len(password1) < 4:
                 console_print("Password must be at least 4 characters. Please try again.")
                 console_print()
                 continue
 
-            console_write("Confirm password: ")
-            password2 = console_readline().strip()
+            password2 = console_password_input("Confirm password: ")
 
             if password1 != password2:
                 console_print("Passwords do not match. Please try again.")
@@ -673,7 +709,6 @@ System:
         options = [
             {'label': 'Check Balance', 'action': 'balance'},
             {'label': 'Vault Status', 'action': 'vault-status'},
-            {'label': 'Help', 'action': 'help'},
             {'label': 'Clear Screen', 'action': 'clear'},
             {'label': 'Exit', 'action': 'exit'}
         ]
@@ -755,8 +790,6 @@ System:
                     response = self.handle_command("/balance")
                 elif action == 'vault-status':
                     response = self.handle_command("/vault-status")
-                elif action == 'help':
-                    response = self.handle_command("/help")
                 elif action == 'clear':
                     response = self.handle_command("/clear")
                     continue  # Don't print response for clear
