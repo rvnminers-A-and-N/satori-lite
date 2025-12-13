@@ -81,7 +81,8 @@ case "$1" in
                 # Note: engine-lite contains db subdirectory
                 docker run -d --name $CONTAINER_NAME \
                     --restart unless-stopped \
-                    -p 5001:5000 \
+                    -p 5001:5001 \
+                    -e SATORI_UI_PORT=5001 \
                     -v "$(pwd)/lib-lite:/Satori/Lib" \
                     -v "$(pwd)/neuron-lite:/Satori/Neuron" \
                     -v "$(pwd)/engine-lite:/Satori/Engine" \

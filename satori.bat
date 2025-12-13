@@ -139,7 +139,8 @@ docker pull %IMAGE%
 :: Create and run container
 docker run -d --name %CONTAINER_NAME% ^
     --restart unless-stopped ^
-    -p %PORT%:5000 ^
+    -p %PORT%:%PORT% ^
+    -e SATORI_UI_PORT=%PORT% ^
     -v "%DATA_DIR%\config:/Satori/Neuron/config" ^
     -v "%DATA_DIR%\wallet:/Satori/Neuron/wallet" ^
     -v "%DATA_DIR%\models:/Satori/models" ^

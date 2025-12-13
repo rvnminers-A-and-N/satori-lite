@@ -33,7 +33,7 @@ ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori"
 WORKDIR /Satori
 
 # Expose web UI port
-EXPOSE 5000
+EXPOSE 24601
 
-# Default command - starts neuron + web UI on port 5000
+# Default command - starts neuron + web UI on port 24601
 CMD ["python", "/Satori/Neuron/start.py"]

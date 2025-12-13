@@ -75,6 +75,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.env = env
         self.runMode = RunMode.choose(runMode or config.get().get('mode', None))
         logging.debug(f'mode: {self.runMode.name}', print=True)
+        # Read UI port from environment and save to config
+        self.uiPort = int(os.environ.get('SATORI_UI_PORT', '24601'))
+        config.add(data={'uiport': self.uiPort})
         self.userInteraction = time.time()
         self.walletManager: WalletManager
         self.isDebug: bool = isDebug
@@ -357,6 +360,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     def startWorker(self):
         """start the satori engine."""
         logging.info("running in worker mode", color="blue")
+        if self.env == 'prod' and self.serverConnectedRecently():
+            last_checkin = config.get().get('server checkin')
+            elapsed_minutes = (time.time() - last_checkin) / 60
+            wait_minutes = max(0, 10 - elapsed_minutes)
+            if wait_minutes > 0:
+                logging.info(f"Server connected recently, waiting {wait_minutes:.1f} minutes")
+                time.sleep(wait_minutes * 60)
         self.recordServerConnection()
         self.setMiningMode()
         self.createServerConn()
@@ -611,7 +621,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         return self.details.stakeRequired or constants.stakeRequired
 
 
-def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 5000):
+def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601):
     """Start the Flask web UI in a background thread."""
     try:
         from web.app import create_app
@@ -648,7 +658,7 @@ if __name__ == "__main__":
         time.sleep(2)  # Wait for StartupDag to be created
         try:
             startup = getStart()
-            startWebUI(startup)
+            startWebUI(startup, port=startup.uiPort)
         except Exception as e:
             logging.warning(f"Early web UI start failed: {e}")
 
