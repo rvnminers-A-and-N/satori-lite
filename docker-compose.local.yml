@@ -19,6 +19,8 @@ services:
       # Flask config
       SECRET_KEY: local-dev-secret-key-change-in-production
       WEB_PORT: 24601
+      # P2P Networking Mode: central (default), hybrid, or p2p
+      # SATORI_NETWORKING_MODE: central
     volumes:
       # Persist wallet data
       - ./data:/data
@@ -27,6 +29,7 @@ services:
       # - ./neuron-lite:/Satori/Neuron
     ports:
       - "24601:24601"
+      - "24600:24600"  # P2P port (when networking mode is hybrid or p2p)
     depends_on:
       api:
         condition: service_started

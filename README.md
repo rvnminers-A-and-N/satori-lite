@@ -26,10 +26,35 @@ Minimal version of satorilib containing only:
 
 ### Excluded Features
 To keep the system simple and lightweight, the following are NOT included:
-- P2P networking
 - Data relay engines
 - IPFS integration
 - Complex data management systems
+
+### P2P Networking (Optional)
+
+Satori-lite now supports P2P networking via the `satorip2p` module. When enabled, nodes can communicate directly with each other instead of routing all traffic through central servers.
+
+**Networking Modes:**
+
+| Mode | Description |
+|------|-------------|
+| `central` | All traffic through central servers (default, most stable) |
+| `hybrid` | P2P with central fallback (recommended for testing P2P) |
+| `p2p` | Pure P2P, no central server dependency |
+
+**Enable P2P:**
+
+Set the environment variable:
+```bash
+export SATORI_NETWORKING_MODE=hybrid
+```
+
+Or add to your config.yaml:
+```yaml
+networking mode: hybrid
+```
+
+See the [satorip2p documentation](https://github.com/SatoriNetwork/satorip2p) for more details.
 
 ## Installation
 

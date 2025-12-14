@@ -41,8 +41,9 @@ RUN chmod +x /Satori/Neuron/satorineuron/web/start.sh
 # Working directory
 WORKDIR /Satori
 
-# Expose web UI port
+# Expose web UI port and P2P port
 EXPOSE 24601
+EXPOSE 24600
 
 # Default command - starts neuron + web UI on port 24601
 CMD ["python", "/Satori/Neuron/start.py"]

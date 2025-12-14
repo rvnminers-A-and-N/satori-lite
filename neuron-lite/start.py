@@ -7,7 +7,6 @@ from satorilib.concepts.structs import StreamId, Stream
 from satorilib.concepts import constants
 from satorilib.wallet import EvrmoreWallet
 from satorilib.wallet.evrmore.identity import EvrmoreIdentity
-from satorilib.server import SatoriServerClient
 from satorilib.server.api import CheckinDetails
 from satorineuron import VERSION
 from satorineuron import logging
@@ -17,6 +16,41 @@ from satorineuron.init.wallet import WalletManager
 from satorineuron.structs.start import RunMode, StartupDagStruct
 # from satorilib.utils.ip import getPublicIpv4UsingCurl  # Removed - not needed
 from satoriengine.veda.engine import Engine
+
+
+def _get_server_client_class():
+    """Get appropriate SatoriServerClient based on networking mode.
+
+    Supports P2P networking via satorip2p when configured.
+    Falls back to central server client if P2P not available.
+    """
+    # Check environment variable first, then config
+    networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+    if networking_mode is None:
+        try:
+            networking_mode = config.get().get('networking mode', 'central')
+        except Exception:
+            networking_mode = 'central'
+
+    networking_mode = networking_mode.lower().strip()
+
+    if networking_mode in ('hybrid', 'p2p', 'p2p_only'):
+        try:
+            from satorip2p.integration import P2PSatoriServerClient
+            logging.info(f"Using P2P networking mode: {networking_mode}", color="cyan")
+            return P2PSatoriServerClient
+        except ImportError:
+            logging.warning(
+                "satorip2p not installed, falling back to central server",
+                color="yellow"
+            )
+
+    from satorilib.server import SatoriServerClient
+    return SatoriServerClient
+
+
+# Get the appropriate client class based on config
+SatoriServerClient = _get_server_client_class()
 
 
 def getStart():

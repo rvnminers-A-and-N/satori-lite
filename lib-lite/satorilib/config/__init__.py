@@ -113,3 +113,28 @@ def get_api_url() -> str:
     Checks SATORI_API_URL first, then SATORI_CENTRAL_URL, falls back to default.
     """
     return os.environ.get('SATORI_API_URL', get_central_url())
+
+
+def get_networking_mode() -> str:
+    """
+    Get the P2P networking mode.
+
+    Checks SATORI_NETWORKING_MODE env var first, then config file.
+    Returns: 'central', 'hybrid', or 'p2p'
+
+    Modes:
+    - central: All traffic through central servers (default, most stable)
+    - hybrid: P2P with central fallback (recommended for testing P2P)
+    - p2p: Pure P2P, no central server dependency
+    """
+    # Check environment variable first
+    mode = os.environ.get('SATORI_NETWORKING_MODE')
+    if mode:
+        return mode.lower().strip()
+
+    # Check config file
+    try:
+        mode = get().get('networking mode', 'central')
+        return mode.lower().strip() if mode else 'central'
+    except Exception:
+        return 'central'
