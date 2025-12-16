@@ -53,6 +53,128 @@ def _get_server_client_class():
 SatoriServerClient = _get_server_client_class()
 
 
+def _get_networking_mode() -> str:
+    """Get the current networking mode from environment or config."""
+    mode = os.environ.get('SATORI_NETWORKING_MODE')
+    if mode is None:
+        try:
+            mode = config.get().get('networking mode', 'central')
+        except Exception:
+            mode = 'central'
+    return mode.lower().strip()
+
+
+# P2P Module Imports (lazy-loaded for optional dependency)
+def _get_p2p_modules():
+    """
+    Get all available P2P modules from satorip2p.
+    Returns a dict of module references, or empty dict if satorip2p not installed.
+
+    Available modules:
+    - Peers: Core P2P networking
+    - EvrmoreIdentityBridge: Wallet-to-P2P identity
+    - UptimeTracker, Heartbeat: Node uptime and relay bonus tracking
+    - ConsensusManager, ConsensusVote: Stake-weighted voting
+    - SignerNode: Multi-sig signing (3-of-5)
+    - DistributionTrigger: Reward distribution coordination
+    - SatoriScorer, RewardCalculator: Local reward calculation
+    - OracleNetwork: P2P observation publishing
+    - PredictionProtocol: Commit-reveal predictions
+    - PeerRegistry, StreamRegistry: P2P discovery
+    """
+    try:
+        from satorip2p import (
+            Peers,
+            EvrmoreIdentityBridge,
+            SatoriScorer,
+            RewardCalculator,
+            RoundDataStore,
+            PredictionInput,
+            ScoreBreakdown,
+            NetworkingMode,
+            get_networking_mode as p2p_get_networking_mode,
+        )
+        from satorip2p.protocol.uptime import (
+            UptimeTracker,
+            Heartbeat,
+            RELAY_UPTIME_THRESHOLD,
+            HEARTBEAT_INTERVAL,
+        )
+        from satorip2p.protocol.consensus import (
+            ConsensusManager,
+            ConsensusVote,
+            ConsensusPhase,
+        )
+        from satorip2p.protocol.signer import (
+            SignerNode,
+            MULTISIG_THRESHOLD,
+            AUTHORIZED_SIGNERS,
+        )
+        from satorip2p.protocol.distribution_trigger import (
+            DistributionTrigger,
+        )
+        from satorip2p.protocol.peer_registry import PeerRegistry
+        from satorip2p.protocol.stream_registry import StreamRegistry
+        from satorip2p.protocol.oracle_network import OracleNetwork
+        from satorip2p.protocol.prediction_protocol import PredictionProtocol
+        from satorip2p.signing import (
+            EvrmoreWallet as P2PEvrmoreWallet,
+            sign_message,
+            verify_message,
+        )
+        return {
+            'available': True,
+            'Peers': Peers,
+            'EvrmoreIdentityBridge': EvrmoreIdentityBridge,
+            'UptimeTracker': UptimeTracker,
+            'Heartbeat': Heartbeat,
+            'RELAY_UPTIME_THRESHOLD': RELAY_UPTIME_THRESHOLD,
+            'HEARTBEAT_INTERVAL': HEARTBEAT_INTERVAL,
+            'ConsensusManager': ConsensusManager,
+            'ConsensusVote': ConsensusVote,
+            'ConsensusPhase': ConsensusPhase,
+            'SignerNode': SignerNode,
+            'MULTISIG_THRESHOLD': MULTISIG_THRESHOLD,
+            'AUTHORIZED_SIGNERS': AUTHORIZED_SIGNERS,
+            'DistributionTrigger': DistributionTrigger,
+            'SatoriScorer': SatoriScorer,
+            'RewardCalculator': RewardCalculator,
+            'RoundDataStore': RoundDataStore,
+            'PredictionInput': PredictionInput,
+            'ScoreBreakdown': ScoreBreakdown,
+            'PeerRegistry': PeerRegistry,
+            'StreamRegistry': StreamRegistry,
+            'OracleNetwork': OracleNetwork,
+            'PredictionProtocol': PredictionProtocol,
+            'P2PEvrmoreWallet': P2PEvrmoreWallet,
+            'sign_message': sign_message,
+            'verify_message': verify_message,
+            'NetworkingMode': NetworkingMode,
+        }
+    except ImportError:
+        return {'available': False}
+
+
+# Cache the P2P modules (lazy loaded on first access)
+_p2p_modules_cache = None
+
+
+def get_p2p_module(name: str):
+    """Get a specific P2P module by name, or None if not available."""
+    global _p2p_modules_cache
+    if _p2p_modules_cache is None:
+        _p2p_modules_cache = _get_p2p_modules()
+    return _p2p_modules_cache.get(name)
+
+
+def is_p2p_available() -> bool:
+    """Check if satorip2p is installed and available."""
+    global _p2p_modules_cache
+    if _p2p_modules_cache is None:
+        _p2p_modules_cache = _get_p2p_modules()
+    return _p2p_modules_cache.get('available', False)
+
+
 def getStart():
     """returns StartupDag singleton"""
     return StartupDag()
@@ -406,14 +528,21 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 logging.info(f"Server connected recently, waiting {wait_minutes:.1f} minutes")
                 time.sleep(wait_minutes * 60)
         self.recordServerConnection()
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE', config.get().get('networking mode', 'central')).lower().strip()
         if self.walletOnlyMode:
             self.createServerConn()
-            self.authWithCentral()
+            if networking_mode != 'p2p':
+                self.authWithCentral()  # Skip in pure P2P mode
+            self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
+            self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
             logging.info("in WALLETONLYMODE")
             return
         self.setMiningMode()
         self.createServerConn()
-        self.authWithCentral()
+        if networking_mode != 'p2p':
+            self.authWithCentral()  # Skip in pure P2P mode
+        self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
+        self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
         self.setupDefaultStream()
         self.spawnEngine()
 
@@ -437,6 +566,8 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.setMiningMode()
         self.createServerConn()
         self.authWithCentral()
+        self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
+        self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
         self.setupDefaultStream()
         self.spawnEngine()
         threading.Event().wait()
@@ -501,6 +632,1079 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             x = x * 1.5 if x < 60 * 60 * 6 else 60 * 60 * 6
             logging.warning(f"trying again in {x}")
             time.sleep(x)
+
+    def announceToNetwork(self, capabilities: list = None):
+        """
+        Announce our presence to the P2P network.
+
+        Called alongside authWithCentral() in hybrid mode.
+        In central mode, this does nothing.
+
+        Args:
+            capabilities: List of capabilities (e.g., ["predictor", "oracle"])
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+
+        networking_mode = networking_mode.lower().strip()
+
+        # Skip in central mode
+        if networking_mode == 'central':
+            return
+
+        async def _announce():
+            try:
+                from satorip2p.protocol.peer_registry import PeerRegistry
+                from satorip2p import Peers
+
+                # Get or create P2P peers instance
+                if not hasattr(self, '_p2p_peers') or self._p2p_peers is None:
+                    self._p2p_peers = Peers(
+                        identity=self.identity,
+                        listen_port=config.get().get('p2p port', 24600),
+                    )
+                    await self._p2p_peers.start()
+
+                # Create registry and announce
+                if not hasattr(self, '_peer_registry') or self._peer_registry is None:
+                    self._peer_registry = PeerRegistry(self._p2p_peers)
+                    await self._peer_registry.start()
+
+                # Announce with capabilities
+                caps = capabilities or ["predictor"]
+                announcement = await self._peer_registry.announce(capabilities=caps)
+
+                if announcement:
+                    logging.info(
+                        f"Announced to P2P network: {announcement.evrmore_address[:16]}...",
+                        color="cyan"
+                    )
+                else:
+                    logging.warning("Failed to announce to P2P network")
+
+            except ImportError:
+                logging.debug("satorip2p not available, skipping P2P announcement")
+            except Exception as e:
+                logging.warning(f"P2P announcement failed: {e}")
+
+        # Run async announcement
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_announce())
+            else:
+                loop.run_until_complete(_announce())
+        except RuntimeError:
+            # No event loop, create one
+            asyncio.run(_announce())
+
+    def initializeP2PComponents(self):
+        """
+        Initialize all P2P components for consensus, rewards, and distribution.
+
+        Called after announceToNetwork() has created the _p2p_peers instance.
+        Only runs in hybrid/p2p mode.
+
+        Components initialized:
+        - _uptime_tracker: Heartbeat-based uptime tracking for relay bonus
+        - _reward_calculator: Local reward calculation and tracking
+        - _consensus_manager: Stake-weighted voting coordination
+        - _distribution_trigger: Automatic distribution on consensus
+        - _signer_node: Multi-sig signing (if this node is an authorized signer)
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+
+        networking_mode = networking_mode.lower().strip()
+
+        # Skip in central mode
+        if networking_mode == 'central':
+            return
+
+        # Need P2P peers to be initialized first
+        if not hasattr(self, '_p2p_peers') or self._p2p_peers is None:
+            logging.debug("P2P peers not available, skipping component initialization")
+            return
+
+        async def _initialize():
+            try:
+                # Import P2P modules
+                from satorip2p.protocol.uptime import UptimeTracker
+                from satorip2p.protocol.rewards import RewardCalculator
+                from satorip2p.protocol.consensus import ConsensusManager
+                from satorip2p.protocol.distribution_trigger import DistributionTrigger
+                from satorip2p.protocol.signer import SignerNode, AUTHORIZED_SIGNERS
+
+                # 1. Initialize Uptime Tracker
+                if not hasattr(self, '_uptime_tracker') or self._uptime_tracker is None:
+                    try:
+                        self._uptime_tracker = UptimeTracker(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._uptime_tracker.start()
+                        logging.info("P2P uptime tracker initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize uptime tracker: {e}")
+
+                # 2. Initialize Reward Calculator
+                if not hasattr(self, '_reward_calculator') or self._reward_calculator is None:
+                    try:
+                        self._reward_calculator = RewardCalculator()
+                        logging.info("P2P reward calculator initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize reward calculator: {e}")
+
+                # 3. Initialize Consensus Manager
+                if not hasattr(self, '_consensus_manager') or self._consensus_manager is None:
+                    try:
+                        self._consensus_manager = ConsensusManager(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._consensus_manager.start()
+                        logging.info("P2P consensus manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize consensus manager: {e}")
+
+                # 4. Initialize Distribution Trigger
+                if not hasattr(self, '_distribution_trigger') or self._distribution_trigger is None:
+                    try:
+                        self._distribution_trigger = DistributionTrigger(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                            consensus_manager=getattr(self, '_consensus_manager', None),
+                        )
+                        await self._distribution_trigger.start()
+                        logging.info("P2P distribution trigger initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize distribution trigger: {e}")
+
+                # 5. Initialize Signer Node (only if authorized)
+                my_address = self.identity.address if hasattr(self.identity, 'address') else None
+                is_authorized_signer = my_address and my_address in AUTHORIZED_SIGNERS
+
+                if is_authorized_signer and (not hasattr(self, '_signer_node') or self._signer_node is None):
+                    try:
+                        self._signer_node = SignerNode(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._signer_node.start()
+                        logging.info("P2P signer node initialized (authorized signer)", color="green")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize signer node: {e}")
+
+                logging.info("P2P components initialization complete", color="cyan")
+
+            except ImportError as e:
+                logging.debug(f"satorip2p not available: {e}")
+            except Exception as e:
+                logging.warning(f"P2P component initialization failed: {e}")
+
+        # Run async initialization
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_initialize())
+            else:
+                loop.run_until_complete(_initialize())
+        except RuntimeError:
+            asyncio.run(_initialize())
+
+    def discoverStreams(
+        self,
+        source: str = None,
+        datatype: str = None,
+        use_p2p: bool = True,
+        use_central: bool = True
+    ) -> list:
+        """
+        Discover available streams from P2P network and/or central server.
+
+        In hybrid mode, queries both and merges results.
+        In P2P mode, only queries P2P network.
+        In central mode, only queries central server.
+
+        Args:
+            source: Filter by source (e.g., "exchange/binance")
+            datatype: Filter by datatype (e.g., "price")
+            use_p2p: Whether to query P2P network
+            use_central: Whether to query central server
+
+        Returns:
+            List of stream definitions
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        streams = []
+
+        async def _discover_p2p():
+            """Async P2P discovery."""
+            try:
+                from satorip2p.protocol.stream_registry import StreamRegistry
+
+                # Ensure P2P peers and registry are initialized
+                if not hasattr(self, '_stream_registry') or self._stream_registry is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._stream_registry = StreamRegistry(self._p2p_peers)
+                        await self._stream_registry.start()
+
+                if hasattr(self, '_stream_registry') and self._stream_registry is not None:
+                    p2p_streams = await self._stream_registry.discover_streams(
+                        source=source,
+                        datatype=datatype
+                    )
+                    # Convert to common format
+                    result = []
+                    for s in p2p_streams:
+                        result.append({
+                            'stream_id': s.stream_id,
+                            'source': s.source,
+                            'stream': s.stream,
+                            'target': s.target,
+                            'datatype': s.datatype,
+                            'cadence': s.cadence,
+                            'from_p2p': True,
+                        })
+                    logging.debug(f"Discovered {len(p2p_streams)} streams from P2P network")
+                    return result
+
+            except ImportError:
+                logging.debug("satorip2p not available for stream discovery")
+            except Exception as e:
+                logging.warning(f"P2P stream discovery failed: {e}")
+            return []
+
+        # Query P2P network if enabled
+        if use_p2p and networking_mode in ('hybrid', 'p2p'):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Can't await in sync context with running loop
+                    pass
+                else:
+                    p2p_streams = loop.run_until_complete(_discover_p2p())
+                    streams.extend(p2p_streams)
+            except RuntimeError:
+                p2p_streams = asyncio.run(_discover_p2p())
+                streams.extend(p2p_streams)
+
+        # Query central server if enabled
+        if use_central and networking_mode in ('central', 'hybrid'):
+            try:
+                if hasattr(self, 'server') and self.server is not None:
+                    # Central-lite has simpler stream queries
+                    if hasattr(self.server, 'getStreams'):
+                        central_streams = self.server.getStreams(source=source)
+                        for s in central_streams:
+                            stream_id = s.get('uuid', s.get('stream_id', ''))
+                            if not any(existing.get('stream_id') == stream_id for existing in streams):
+                                streams.append({
+                                    **s,
+                                    'from_p2p': False,
+                                })
+                        logging.debug(f"Discovered {len(central_streams)} streams from central server")
+            except Exception as e:
+                logging.warning(f"Central server stream discovery failed: {e}")
+
+        return streams
+
+    def claimStream(self, stream_id: str, slot_index: int = None) -> bool:
+        """
+        Claim a predictor slot on a stream (P2P mode).
+
+        Args:
+            stream_id: Stream to claim
+            slot_index: Specific slot (None = first available)
+
+        Returns:
+            True if claimed successfully
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        if networking_mode == 'central':
+            logging.debug("Stream claiming not available in central mode")
+            return False
+
+        async def _claim():
+            try:
+                from satorip2p.protocol.stream_registry import StreamRegistry
+
+                # Ensure stream registry is initialized
+                if not hasattr(self, '_stream_registry') or self._stream_registry is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._stream_registry = StreamRegistry(self._p2p_peers)
+                        await self._stream_registry.start()
+
+                if hasattr(self, '_stream_registry') and self._stream_registry is not None:
+                    claim = await self._stream_registry.claim_stream(
+                        stream_id=stream_id,
+                        slot_index=slot_index
+                    )
+                    if claim:
+                        logging.info(f"Claimed stream {stream_id[:16]}... slot {claim.slot_index}")
+                        return True
+
+            except ImportError:
+                logging.debug("satorip2p not available for stream claiming")
+            except Exception as e:
+                logging.warning(f"Stream claiming failed: {e}")
+            return False
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return False  # Can't await in sync context
+            else:
+                return loop.run_until_complete(_claim())
+        except RuntimeError:
+            return asyncio.run(_claim())
+
+    def getMyClaimedStreams(self) -> list:
+        """
+        Get list of streams we've claimed in P2P mode.
+
+        Returns:
+            List of StreamClaim objects
+        """
+        import asyncio
+
+        async def _get_claims():
+            if hasattr(self, '_stream_registry') and self._stream_registry is not None:
+                try:
+                    return await self._stream_registry.get_my_streams()
+                except Exception as e:
+                    logging.warning(f"Failed to get claimed streams: {e}")
+            return []
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return []
+            else:
+                return loop.run_until_complete(_get_claims())
+        except RuntimeError:
+            return asyncio.run(_get_claims())
+
+    def subscribeToP2PData(self, stream_id: str, callback: callable) -> bool:
+        """
+        Subscribe to stream data via P2P network.
+
+        Args:
+            stream_id: Stream to subscribe to
+            callback: Function called with each observation
+
+        Returns:
+            True if subscribed successfully
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        if networking_mode == 'central':
+            logging.debug("P2P data subscription not available in central mode")
+            return False
+
+        async def _subscribe():
+            try:
+                from satorip2p.protocol.oracle_network import OracleNetwork
+
+                # Ensure oracle network is initialized
+                if not hasattr(self, '_oracle_network') or self._oracle_network is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._oracle_network = OracleNetwork(self._p2p_peers)
+                        await self._oracle_network.start()
+
+                if hasattr(self, '_oracle_network') and self._oracle_network is not None:
+                    success = await self._oracle_network.subscribe_to_stream(
+                        stream_id=stream_id,
+                        callback=callback
+                    )
+                    if success:
+                        logging.info(f"Subscribed to P2P data for stream {stream_id[:16]}...")
+                    return success
+
+            except ImportError:
+                logging.debug("satorip2p not available for P2P data subscription")
+            except Exception as e:
+                logging.warning(f"P2P data subscription failed: {e}")
+            return False
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return False
+            else:
+                return loop.run_until_complete(_subscribe())
+        except RuntimeError:
+            return asyncio.run(_subscribe())
+
+    def publishObservation(
+        self,
+        stream_id: str,
+        value: float,
+        timestamp: int = None,
+        to_p2p: bool = True,
+        to_central: bool = True
+    ) -> bool:
+        """
+        Publish an observation to the network.
+
+        Args:
+            stream_id: Stream to publish to
+            value: Observed value
+            timestamp: Observation timestamp (default: now)
+            to_p2p: Whether to publish to P2P network
+            to_central: Whether to publish to central server
+
+        Returns:
+            True if published successfully
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        timestamp = timestamp or int(time.time())
+        success = False
+
+        async def _publish_p2p():
+            try:
+                from satorip2p.protocol.oracle_network import OracleNetwork
+
+                # Ensure oracle network is initialized
+                if not hasattr(self, '_oracle_network') or self._oracle_network is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._oracle_network = OracleNetwork(self._p2p_peers)
+                        await self._oracle_network.start()
+
+                if hasattr(self, '_oracle_network') and self._oracle_network is not None:
+                    observation = await self._oracle_network.publish_observation(
+                        stream_id=stream_id,
+                        value=value,
+                        timestamp=timestamp
+                    )
+                    if observation:
+                        logging.debug(f"Published observation to P2P: {stream_id[:16]}... = {value}")
+                        return True
+
+            except ImportError:
+                logging.debug("satorip2p not available for P2P observation publishing")
+            except Exception as e:
+                logging.warning(f"P2P observation publishing failed: {e}")
+            return False
+
+        # Publish to P2P network
+        if to_p2p and networking_mode in ('hybrid', 'p2p'):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    pass  # Can't await in sync context
+                else:
+                    if loop.run_until_complete(_publish_p2p()):
+                        success = True
+            except RuntimeError:
+                if asyncio.run(_publish_p2p()):
+                    success = True
+
+        # Publish to central server
+        if to_central and networking_mode in ('central', 'hybrid'):
+            try:
+                if hasattr(self, 'server') and self.server is not None:
+                    self.server.publish(
+                        topic=stream_id,
+                        data=str(value),
+                        observationTime=str(timestamp),
+                        observationHash="",
+                        isPrediction=False
+                    )
+                    logging.debug(f"Published observation to central: {stream_id[:16]}... = {value}")
+                    success = True
+            except Exception as e:
+                logging.warning(f"Central server observation publishing failed: {e}")
+
+        return success
+
+    def getP2PObservations(self, stream_id: str, limit: int = 100) -> list:
+        """
+        Get cached P2P observations for a stream.
+
+        Args:
+            stream_id: Stream to get observations for
+            limit: Maximum observations to return
+
+        Returns:
+            List of Observation objects
+        """
+        if hasattr(self, '_oracle_network') and self._oracle_network is not None:
+            try:
+                return self._oracle_network.get_cached_observations(stream_id, limit)
+            except Exception as e:
+                logging.warning(f"Failed to get P2P observations: {e}")
+        return []
+
+    def publishP2PPrediction(
+        self,
+        stream_id: str,
+        value: float,
+        target_time: int,
+        confidence: float = 0.0,
+        to_p2p: bool = True,
+        to_central: bool = True
+    ) -> bool:
+        """
+        Publish a prediction to the network.
+
+        Args:
+            stream_id: Stream to predict
+            value: Predicted value
+            target_time: When this prediction is for
+            confidence: Confidence level (0-1)
+            to_p2p: Whether to publish to P2P network
+            to_central: Whether to publish to central server
+
+        Returns:
+            True if published successfully
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        success = False
+
+        async def _publish_p2p():
+            try:
+                from satorip2p.protocol.prediction_protocol import PredictionProtocol
+
+                # Ensure prediction protocol is initialized
+                if not hasattr(self, '_prediction_protocol') or self._prediction_protocol is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._prediction_protocol = PredictionProtocol(self._p2p_peers)
+                        await self._prediction_protocol.start()
+
+                if hasattr(self, '_prediction_protocol') and self._prediction_protocol is not None:
+                    prediction = await self._prediction_protocol.publish_prediction(
+                        stream_id=stream_id,
+                        value=value,
+                        target_time=target_time,
+                        confidence=confidence
+                    )
+                    if prediction:
+                        logging.debug(f"Published prediction to P2P: {stream_id[:16]}... = {value}")
+                        return True
+
+            except ImportError:
+                logging.debug("satorip2p not available for P2P prediction publishing")
+            except Exception as e:
+                logging.warning(f"P2P prediction publishing failed: {e}")
+            return False
+
+        # Publish to P2P network
+        if to_p2p and networking_mode in ('hybrid', 'p2p'):
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    pass  # Can't await in sync context
+                else:
+                    if loop.run_until_complete(_publish_p2p()):
+                        success = True
+            except RuntimeError:
+                if asyncio.run(_publish_p2p()):
+                    success = True
+
+        return success
+
+    def subscribeToP2PPredictions(self, stream_id: str, callback: callable) -> bool:
+        """
+        Subscribe to predictions from other predictors via P2P.
+
+        Args:
+            stream_id: Stream to subscribe to
+            callback: Function called with each prediction
+
+        Returns:
+            True if subscribed successfully
+        """
+        import asyncio
+
+        networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
+        if networking_mode is None:
+            try:
+                networking_mode = config.get().get('networking mode', 'central')
+            except Exception:
+                networking_mode = 'central'
+        networking_mode = networking_mode.lower().strip()
+
+        if networking_mode == 'central':
+            logging.debug("P2P prediction subscription not available in central mode")
+            return False
+
+        async def _subscribe():
+            try:
+                from satorip2p.protocol.prediction_protocol import PredictionProtocol
+
+                # Ensure prediction protocol is initialized
+                if not hasattr(self, '_prediction_protocol') or self._prediction_protocol is None:
+                    if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                        self._prediction_protocol = PredictionProtocol(self._p2p_peers)
+                        await self._prediction_protocol.start()
+
+                if hasattr(self, '_prediction_protocol') and self._prediction_protocol is not None:
+                    success = await self._prediction_protocol.subscribe_to_predictions(
+                        stream_id=stream_id,
+                        callback=callback
+                    )
+                    if success:
+                        logging.info(f"Subscribed to P2P predictions for {stream_id[:16]}...")
+                    return success
+
+            except ImportError:
+                logging.debug("satorip2p not available for P2P prediction subscription")
+            except Exception as e:
+                logging.warning(f"P2P prediction subscription failed: {e}")
+            return False
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                return False
+            else:
+                return loop.run_until_complete(_subscribe())
+        except RuntimeError:
+            return asyncio.run(_subscribe())
+
+    def getP2PPredictions(self, stream_id: str, limit: int = 100) -> list:
+        """
+        Get cached P2P predictions for a stream.
+
+        Args:
+            stream_id: Stream to get predictions for
+            limit: Maximum predictions to return
+
+        Returns:
+            List of Prediction objects
+        """
+        if hasattr(self, '_prediction_protocol') and self._prediction_protocol is not None:
+            try:
+                return self._prediction_protocol.get_cached_predictions(stream_id, limit)
+            except Exception as e:
+                logging.warning(f"Failed to get P2P predictions: {e}")
+        return []
+
+    def getPredictorScore(self, predictor: str, stream_id: str = None) -> float:
+        """
+        Get average prediction score for a predictor.
+
+        Args:
+            predictor: Evrmore address of predictor
+            stream_id: Optional stream filter
+
+        Returns:
+            Average score (0-1)
+        """
+        if hasattr(self, '_prediction_protocol') and self._prediction_protocol is not None:
+            try:
+                return self._prediction_protocol.get_predictor_average_score(predictor, stream_id)
+            except Exception as e:
+                logging.warning(f"Failed to get predictor score: {e}")
+        return 0.0
+
+    # ========== P2P Rewards (Phase 5/6) ==========
+
+    def getPendingRewards(self, stream_id: str = None) -> dict:
+        """
+        Get pending (unclaimed) rewards for this predictor.
+
+        Works in hybrid/p2p mode by querying the reward data store.
+        In central mode, queries the central server.
+
+        Args:
+            stream_id: Optional stream filter
+
+        Returns:
+            Dict with pending rewards info:
+            {
+                'total_pending': float,
+                'rounds': [
+                    {'round_id': str, 'stream_id': str, 'amount': float, 'score': float},
+                    ...
+                ]
+            }
+        """
+        mode = _get_networking_mode()
+
+        if mode in ('hybrid', 'p2p', 'p2p_only'):
+            # P2P mode: Query reward data store
+            try:
+                from satorip2p.protocol.rewards import RoundDataStore
+                if hasattr(self, '_peers') and self._peers is not None:
+                    store = RoundDataStore(self._peers)
+                    # Get our address
+                    our_address = ""
+                    if hasattr(self, 'wallet') and self.wallet:
+                        our_address = self.wallet.address
+                    elif hasattr(self, '_peers') and self._peers._identity_bridge:
+                        our_address = self._peers._identity_bridge.evrmore_address
+
+                    # Query recent rounds from local cache
+                    pending = {'total_pending': 0.0, 'rounds': []}
+
+                    # Check local cache for recent round data
+                    for key, summary in store._local_cache.items():
+                        if stream_id and summary.stream_id != stream_id:
+                            continue
+                        # Find our reward in this round
+                        for reward in summary.rewards:
+                            if reward.address == our_address and reward.amount > 0:
+                                pending['rounds'].append({
+                                    'round_id': summary.round_id,
+                                    'stream_id': summary.stream_id,
+                                    'amount': reward.amount,
+                                    'score': reward.score,
+                                    'rank': reward.rank,
+                                })
+                                pending['total_pending'] += reward.amount
+
+                    return pending
+            except Exception as e:
+                logging.warning(f"Failed to get pending rewards from P2P: {e}")
+
+        # Central mode or fallback: Query server
+        try:
+            if hasattr(self, 'server') and self.server:
+                success, data = self.server.getPendingRewards(stream_id=stream_id)
+                if success:
+                    return data
+        except Exception as e:
+            logging.warning(f"Failed to get pending rewards from server: {e}")
+
+        return {'total_pending': 0.0, 'rounds': []}
+
+    def getRewardHistory(
+        self,
+        stream_id: str = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> list:
+        """
+        Get historical reward claims for this predictor.
+
+        Args:
+            stream_id: Optional stream filter
+            limit: Max records to return
+            offset: Pagination offset
+
+        Returns:
+            List of reward history entries:
+            [
+                {
+                    'round_id': str,
+                    'stream_id': str,
+                    'amount': float,
+                    'score': float,
+                    'rank': int,
+                    'tx_hash': str,
+                    'claimed_at': int,
+                },
+                ...
+            ]
+        """
+        mode = _get_networking_mode()
+
+        if mode in ('hybrid', 'p2p', 'p2p_only'):
+            # P2P mode: Query DHT for historical round data
+            try:
+                from satorip2p.protocol.rewards import RoundDataStore
+                if hasattr(self, '_peers') and self._peers is not None:
+                    store = RoundDataStore(self._peers)
+                    our_address = ""
+                    if hasattr(self, 'wallet') and self.wallet:
+                        our_address = self.wallet.address
+                    elif hasattr(self, '_peers') and self._peers._identity_bridge:
+                        our_address = self._peers._identity_bridge.evrmore_address
+
+                    history = []
+                    # Note: In production, would query DHT for historical rounds
+                    # For now, return from local cache
+                    for key, summary in list(store._local_cache.items())[:limit]:
+                        if stream_id and summary.stream_id != stream_id:
+                            continue
+                        for reward in summary.rewards:
+                            if reward.address == our_address:
+                                history.append({
+                                    'round_id': summary.round_id,
+                                    'stream_id': summary.stream_id,
+                                    'amount': reward.amount,
+                                    'score': reward.score,
+                                    'rank': reward.rank,
+                                    'tx_hash': summary.evrmore_tx_hash,
+                                    'claimed_at': summary.created_at,
+                                })
+                    return history[offset:offset + limit]
+            except Exception as e:
+                logging.warning(f"Failed to get reward history from P2P: {e}")
+
+        # Central mode or fallback: Query server
+        try:
+            if hasattr(self, 'server') and self.server:
+                success, data = self.server.getRewardHistory(
+                    stream_id=stream_id,
+                    limit=limit,
+                    offset=offset
+                )
+                if success:
+                    return data
+        except Exception as e:
+            logging.warning(f"Failed to get reward history from server: {e}")
+
+        return []
+
+    def claimRewards(
+        self,
+        round_ids: list = None,
+        stream_id: str = None,
+        claim_address: str = None
+    ) -> dict:
+        """
+        Claim pending rewards.
+
+        In P2P mode, rewards are distributed automatically at round end.
+        This method is primarily for:
+        - Querying claim status
+        - Overriding claim address
+        - Manual claiming in transition phase
+
+        Args:
+            round_ids: Specific rounds to claim (None = all pending)
+            stream_id: Filter by stream
+            claim_address: Override default reward address
+
+        Returns:
+            Dict with claim result:
+            {
+                'success': bool,
+                'claimed_amount': float,
+                'tx_hash': str or None,
+                'message': str,
+            }
+        """
+        mode = _get_networking_mode()
+
+        # Determine claim address
+        if not claim_address:
+            # Try config reward address first
+            claim_address = getattr(self, 'configRewardAddress', None)
+            if not claim_address and hasattr(self, 'wallet') and self.wallet:
+                claim_address = self.wallet.address
+
+        if not claim_address:
+            return {
+                'success': False,
+                'claimed_amount': 0.0,
+                'tx_hash': None,
+                'message': 'No claim address available'
+            }
+
+        if mode in ('hybrid', 'p2p', 'p2p_only'):
+            # P2P mode: Rewards are auto-distributed
+            # This queries status and can request manual claim if needed
+            try:
+                pending = self.getPendingRewards(stream_id=stream_id)
+
+                if pending['total_pending'] == 0:
+                    return {
+                        'success': True,
+                        'claimed_amount': 0.0,
+                        'tx_hash': None,
+                        'message': 'No pending rewards to claim'
+                    }
+
+                # In fully decentralized mode, rewards are auto-distributed
+                # This is informational - rewards will arrive at claim_address
+                return {
+                    'success': True,
+                    'claimed_amount': pending['total_pending'],
+                    'tx_hash': None,
+                    'message': f"Rewards ({pending['total_pending']:.8f} SATORI) will be distributed to {claim_address}"
+                }
+            except Exception as e:
+                logging.warning(f"Failed to claim rewards via P2P: {e}")
+
+        # Central mode or fallback: Request claim from server
+        try:
+            if hasattr(self, 'server') and self.server:
+                success, data = self.server.claimRewards(
+                    round_ids=round_ids,
+                    stream_id=stream_id,
+                    claim_address=claim_address,
+                )
+                if success:
+                    return data
+                return {
+                    'success': False,
+                    'claimed_amount': 0.0,
+                    'tx_hash': None,
+                    'message': data.get('message', 'Claim failed') if isinstance(data, dict) else 'Claim failed'
+                }
+        except Exception as e:
+            logging.warning(f"Failed to claim rewards from server: {e}")
+
+        return {
+            'success': False,
+            'claimed_amount': 0.0,
+            'tx_hash': None,
+            'message': 'Failed to process claim'
+        }
+
+    def getMyRewardScore(self, stream_id: str = None) -> dict:
+        """
+        Get this predictor's scoring statistics.
+
+        Returns:
+            Dict with scoring stats:
+            {
+                'average_score': float,
+                'total_predictions': int,
+                'total_rewards': float,
+                'rank': int or None,
+            }
+        """
+        our_address = ""
+        if hasattr(self, 'wallet') and self.wallet:
+            our_address = self.wallet.address
+        elif hasattr(self, '_peers') and self._peers and self._peers._identity_bridge:
+            our_address = self._peers._identity_bridge.evrmore_address
+
+        if not our_address:
+            return {
+                'average_score': 0.0,
+                'total_predictions': 0,
+                'total_rewards': 0.0,
+                'rank': None,
+            }
+
+        # Get score from prediction protocol
+        avg_score = self.getPredictorScore(our_address, stream_id)
+
+        # Get reward history for totals
+        history = self.getRewardHistory(stream_id=stream_id, limit=1000)
+        total_rewards = sum(h.get('amount', 0) for h in history)
+
+        return {
+            'average_score': avg_score,
+            'total_predictions': len(history),
+            'total_rewards': total_rewards,
+            'rank': None,  # Would need leaderboard query
+        }
+
+    def subscribeToRewardNotifications(
+        self,
+        stream_id: str,
+        callback: Callable = None
+    ) -> bool:
+        """
+        Subscribe to reward distribution notifications for a stream.
+
+        Receives notifications when rewards are distributed for rounds
+        you participated in.
+
+        Args:
+            stream_id: Stream to subscribe to
+            callback: Function called with notification dict:
+                {
+                    'type': 'round_complete',
+                    'round_id': str,
+                    'merkle_root': str,
+                    'total_rewards': float,
+                    'tx_hash': str,
+                }
+
+        Returns:
+            True if subscribed successfully
+        """
+        mode = _get_networking_mode()
+
+        if mode not in ('hybrid', 'p2p', 'p2p_only'):
+            logging.debug("Reward notifications only available in P2P mode")
+            return False
+
+        try:
+            from satorip2p.protocol.rewards import RoundDataStore
+            if hasattr(self, '_peers') and self._peers is not None:
+                store = RoundDataStore(self._peers)
+
+                def notification_handler(data):
+                    """Handle reward notification."""
+                    if callback:
+                        try:
+                            callback(data)
+                        except Exception as e:
+                            logging.debug(f"Reward notification callback error: {e}")
+
+                    # Log notification
+                    logging.info(
+                        f"Reward notification for {stream_id}: "
+                        f"round={data.get('round_id')}, "
+                        f"total={data.get('total_rewards', 0):.4f} SATORI"
+                    )
+
+                # Use sync wrapper for async subscribe
+                if hasattr(self, '_run_async'):
+                    return self._run_async(store.subscribe_to_rewards(stream_id, notification_handler))
+                else:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    return loop.run_until_complete(store.subscribe_to_rewards(stream_id, notification_handler))
+        except Exception as e:
+            logging.warning(f"Failed to subscribe to reward notifications: {e}")
+
+        return False
 
     def getBalance(self, currency: str = 'currency') -> float:
         return self.balances.get(currency, 0)

@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Optional, Callable
 import os
 import time
 import json
@@ -29,6 +29,97 @@ from satoriengine.veda.storage import EngineStorageManager
 warnings.filterwarnings('ignore')
 setup(level=INFO)
 
+
+def _get_networking_mode() -> str:
+    """Get the current networking mode from environment or config."""
+    mode = os.environ.get('SATORI_NETWORKING_MODE')
+    if mode is None:
+        try:
+            mode = config.get().get('networking mode', 'central')
+        except Exception:
+            mode = 'central'
+    return mode.lower().strip()
+
+
+# P2P Module Imports (lazy-loaded for optional dependency)
+def _get_p2p_modules():
+    """
+    Get all available P2P modules from satorip2p.
+    Returns a dict of module references, or empty dict if satorip2p not installed.
+    """
+    try:
+        from satorip2p import (
+            Peers,
+            EvrmoreIdentityBridge,
+            SatoriScorer,
+            RewardCalculator,
+            RoundDataStore,
+            PredictionInput,
+            ScoreBreakdown,
+            NetworkingMode,
+        )
+        from satorip2p.protocol.uptime import (
+            UptimeTracker,
+            Heartbeat,
+            RELAY_UPTIME_THRESHOLD,
+            HEARTBEAT_INTERVAL,
+        )
+        from satorip2p.protocol.consensus import (
+            ConsensusManager,
+            ConsensusVote,
+            ConsensusPhase,
+        )
+        from satorip2p.protocol.oracle_network import OracleNetwork
+        from satorip2p.protocol.prediction_protocol import PredictionProtocol
+        from satorip2p.signing import (
+            EvrmoreWallet as P2PEvrmoreWallet,
+            sign_message,
+            verify_message,
+        )
+        return {
+            'available': True,
+            'Peers': Peers,
+            'EvrmoreIdentityBridge': EvrmoreIdentityBridge,
+            'UptimeTracker': UptimeTracker,
+            'Heartbeat': Heartbeat,
+            'RELAY_UPTIME_THRESHOLD': RELAY_UPTIME_THRESHOLD,
+            'HEARTBEAT_INTERVAL': HEARTBEAT_INTERVAL,
+            'ConsensusManager': ConsensusManager,
+            'ConsensusVote': ConsensusVote,
+            'ConsensusPhase': ConsensusPhase,
+            'SatoriScorer': SatoriScorer,
+            'RewardCalculator': RewardCalculator,
+            'RoundDataStore': RoundDataStore,
+            'PredictionInput': PredictionInput,
+            'ScoreBreakdown': ScoreBreakdown,
+            'OracleNetwork': OracleNetwork,
+            'PredictionProtocol': PredictionProtocol,
+            'P2PEvrmoreWallet': P2PEvrmoreWallet,
+            'sign_message': sign_message,
+            'verify_message': verify_message,
+            'NetworkingMode': NetworkingMode,
+        }
+    except ImportError:
+        return {'available': False}
+
+
+_p2p_modules_cache = None
+
+
+def get_p2p_module(name: str):
+    """Get a specific P2P module by name, or None if not available."""
+    global _p2p_modules_cache
+    if _p2p_modules_cache is None:
+        _p2p_modules_cache = _get_p2p_modules()
+    return _p2p_modules_cache.get(name)
+
+
+def is_p2p_available() -> bool:
+    """Check if satorip2p is installed and available."""
+    global _p2p_modules_cache
+    if _p2p_modules_cache is None:
+        _p2p_modules_cache = _get_p2p_modules()
+    return _p2p_modules_cache.get('available', False)
 
 
 class Engine:
@@ -85,6 +176,11 @@ class Engine:
         self.transferProtocol: Union[str, None] = None
         # SQLite storage manager for local data persistence
         self.storage: EngineStorageManager = EngineStorageManager.getInstance()
+        # P2P Integration
+        self._p2p_peers = None
+        self._oracle_network = None
+        self._prediction_protocol = None
+        self._p2p_observation_subscriptions: dict[str, bool] = {}
         # TODO: Commented out for engine-neuron integration
         # self.centrifugo = None
         # self.centrifugoSubscriptions: list = []
@@ -150,12 +246,103 @@ class Engine:
         self.connectToDataServer()
         threading.Thread(target=self.stayConnectedForever, daemon=True).start()
         self.startService()
+        # Initialize P2P if in hybrid/p2p mode
+        networking_mode = _get_networking_mode()
+        if networking_mode in ('hybrid', 'p2p'):
+            self.initializeP2P()
+
+    def initializeP2P(self):
+        """Initialize P2P oracle network and prediction protocol."""
+        try:
+            from satorip2p.peers import Peers
+            from satorip2p.protocol.oracle_network import OracleNetwork
+            from satorip2p.protocol.prediction_protocol import PredictionProtocol
+
+            # Initialize P2P peers if not already done
+            if self._p2p_peers is None:
+                self._p2p_peers = Peers()
+                asyncio.run(self._p2p_peers.start())
+                info("P2P peers initialized for Engine", color="green")
+
+            # Initialize Oracle Network for receiving observations
+            if self._oracle_network is None:
+                self._oracle_network = OracleNetwork(self._p2p_peers)
+                asyncio.run(self._oracle_network.start())
+                info("P2P Oracle Network initialized", color="green")
+
+            # Initialize Prediction Protocol for commit-reveal
+            if self._prediction_protocol is None:
+                self._prediction_protocol = PredictionProtocol(self._p2p_peers)
+                asyncio.run(self._prediction_protocol.start())
+                info("P2P Prediction Protocol initialized", color="green")
+
+        except ImportError as e:
+            debug(f"satorip2p not available for Engine P2P: {e}")
+        except Exception as e:
+            warning(f"Failed to initialize P2P for Engine: {e}")
+
+    def subscribeToP2PObservations(self, streamUuid: str) -> bool:
+        """Subscribe to P2P observations for a stream."""
+        if self._oracle_network is None:
+            return False
+
+        if streamUuid in self._p2p_observation_subscriptions:
+            return True  # Already subscribed
+
+        try:
+            def on_p2p_observation(observation):
+                """Handle P2P observation and pass to stream model."""
+                self._handleP2PObservation(streamUuid, observation)
+
+            success = asyncio.run(self._oracle_network.subscribe_to_stream(
+                stream_id=streamUuid,
+                callback=on_p2p_observation
+            ))
+
+            if success:
+                self._p2p_observation_subscriptions[streamUuid] = True
+                info(f"Subscribed to P2P observations for {streamUuid[:16]}...")
+                return True
+
+        except Exception as e:
+            warning(f"Failed to subscribe to P2P observations for {streamUuid}: {e}")
+
+        return False
+
+    def _handleP2PObservation(self, streamUuid: str, observation):
+        """Handle a P2P observation and pass it to the stream model."""
+        try:
+            streamModel = self.streamModels.get(streamUuid)
+            if streamModel is None:
+                return
+
+            # Convert P2P Observation to DataFrame format for onDataReceived
+            data = pd.DataFrame({
+                'date_time': [observation.timestamp],
+                'value': [float(observation.value)],
+                'id': [observation.hash]
+            })
+
+            # Pass to stream model for processing
+            streamModel.onDataReceived(data)
+
+            debug(f"P2P observation received for {streamUuid[:16]}... value={observation.value}")
+
+        except Exception as e:
+            error(f"Error handling P2P observation: {e}")
 
     def initializeFromNeuron(self):
         """Initialize engine when spawned from Neuron (no DataServer needed)"""
         info("Engine initializing from Neuron...", color='blue')
         self.initializeModelsFromNeuron()
-        # info("Engine initialized successfully", color='green')
+        # Initialize P2P if in hybrid/p2p mode
+        networking_mode = _get_networking_mode()
+        if networking_mode in ('hybrid', 'p2p'):
+            self.initializeP2P()
+            # Subscribe to P2P observations for all streams
+            for streamUuid in self.streamModels.keys():
+                self.subscribeToP2PObservations(streamUuid)
+        info("Engine initialized successfully", color='green')
 
     def startService(self):
         self.getPubSubInfo()
@@ -430,6 +617,10 @@ class StreamModel:
         streamModel.identity = None
         # SQLite storage manager for local persistence
         streamModel.storage = storage or EngineStorageManager.getInstance()
+        # P2P commit-reveal support
+        streamModel._prediction_protocol = None
+        streamModel._current_round_id: int = 0
+        streamModel._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
         streamModel.initializeFromServer()
         return streamModel
 
@@ -463,6 +654,10 @@ class StreamModel:
         self.usePubSub: bool = False
         self.internal: bool = False
         self.useServer: bool = False  # Default: use DataClient
+        # P2P commit-reveal support
+        self._prediction_protocol = None
+        self._current_round_id: int = 0
+        self._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
 
     def initialize(self):
         self.data: pd.DataFrame = self.loadData()
@@ -893,6 +1088,7 @@ class StreamModel:
         triggered by
             - model replaced with a better one
             - new observation on the stream
+        Supports P2P commit-reveal in hybrid/p2p mode.
         """
         try:
             model = updatedModel or self.stable
@@ -902,15 +1098,75 @@ class StreamModel:
                     predictionDf = pd.DataFrame({ 'value': [StreamForecast.firstPredictionOf(forecast)]
                                     }, index=[datetimeToTimestamp(now())])
                     debug(predictionDf, print=True)
-                    if updatedModel is not None:
-                        self.passPredictionData(predictionDf)
-                    else:
-                        self.passPredictionData(predictionDf, True)
+
+                    # Check if we should use P2P commit-reveal
+                    networking_mode = _get_networking_mode()
+                    if networking_mode in ('hybrid', 'p2p'):
+                        # Commit prediction to P2P network
+                        predicted_value = float(predictionDf['value'].iloc[0])
+                        self._commitP2PPrediction(predicted_value)
+
+                    # Also publish to central server if in hybrid or central mode
+                    if networking_mode in ('central', 'hybrid'):
+                        if updatedModel is not None:
+                            self.passPredictionData(predictionDf)
+                        else:
+                            self.passPredictionData(predictionDf, True)
                 else:
                     raise Exception('Forecast not in dataframe format')
         except Exception as e:
             error(e)
             self.fallback_prediction()
+
+    def _commitP2PPrediction(self, predicted_value: float):
+        """Commit prediction to P2P network using commit-reveal protocol."""
+        try:
+            # Calculate target time (e.g., next observation period)
+            target_time = int(time.time()) + 3600  # 1 hour ahead (configurable)
+
+            # Increment round ID
+            self._current_round_id += 1
+
+            # Store for potential reveal later
+            self._pending_commits[self._current_round_id] = predicted_value
+
+            debug(f"P2P prediction committed for {self.streamUuid[:16]}... round={self._current_round_id} value={predicted_value}")
+
+            # If we have a prediction protocol instance, publish the prediction
+            if self._prediction_protocol is not None:
+                try:
+                    asyncio.run(self._prediction_protocol.publish_prediction(
+                        stream_id=self.streamUuid,
+                        value=predicted_value,
+                        target_time=target_time,
+                        confidence=0.5
+                    ))
+                except Exception as e:
+                    debug(f"Failed to publish P2P prediction: {e}")
+
+        except ImportError:
+            debug("satorip2p not available for P2P prediction commit")
+        except Exception as e:
+            warning(f"Failed to commit P2P prediction: {e}")
+
+    def revealP2PPrediction(self, round_id: int):
+        """Reveal a previously committed prediction (called after observation arrives)."""
+        if round_id not in self._pending_commits:
+            return
+
+        try:
+            if self._prediction_protocol is not None:
+                asyncio.run(self._prediction_protocol.reveal_prediction(
+                    stream_id=self.streamUuid,
+                    round_id=round_id
+                ))
+                debug(f"P2P prediction revealed for round {round_id}")
+
+            # Clean up
+            del self._pending_commits[round_id]
+
+        except Exception as e:
+            warning(f"Failed to reveal P2P prediction: {e}")
 
     def fallback_prediction(self):
         if os.path.isfile(self.modelPath()):
