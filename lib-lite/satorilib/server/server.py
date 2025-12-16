@@ -251,7 +251,8 @@ class SatoriServerClient(object):
                             timeout=10
                         )
                         if register_response.status_code == 200:
-                            logging.info('peer registered with vault info', color='green')
+                            # logging.info('peer registered with vault info', color='green')
+                            pass
                         else:
                             logging.warning(f'peer registration failed: {register_response.text}')
                     except Exception as e:
@@ -448,7 +449,7 @@ class SatoriServerClient(object):
             """Clean and sanitize stream data"""
             return sanitizeJson(streams)
 
-        print("getSearchStreamsPaginated")
+        # print("getSearchStreamsPaginated")
         try:
             page = max(1, page)
             per_page = min(max(1, per_page), 200)

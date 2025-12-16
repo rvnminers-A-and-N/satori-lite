@@ -15,7 +15,7 @@ from satorineuron import config
 from satorineuron.init.tag import LatestTag, Version
 from satorineuron.init.wallet import WalletManager
 from satorineuron.structs.start import RunMode, StartupDagStruct
-from satorilib.utils.ip import getPublicIpv4UsingCurl
+# from satorilib.utils.ip import getPublicIpv4UsingCurl  # Removed - not needed
 from satoriengine.veda.engine import Engine
 
 
@@ -74,7 +74,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.version = Version(VERSION)
         self.env = env
         self.runMode = RunMode.choose(runMode or config.get().get('mode', None))
-        logging.debug(f'mode: {self.runMode.name}', print=True)
+        # logging.debug(f'mode: {self.runMode.name}', print=True)
         # Read UI port from environment and save to config
         self.uiPort = int(os.environ.get('SATORI_UI_PORT', '24601'))
         config.add(data={'uiport': self.uiPort})
@@ -96,7 +96,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.configRewardAddress: str = None
         self.setRewardAddress()
         self.setupWalletManager()
-        self.ip = getPublicIpv4UsingCurl()
+        self.ip = None  # Not used by server, no need to detect
         self.checkinCheckThread = threading.Thread(
             target=self.checkinCheck,
             daemon=True)
@@ -420,7 +420,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         config.add(data={'server checkin': time.time()})
 
     def createServerConn(self):
-        logging.debug(self.urlServer, color="teal")
+        # logging.debug(self.urlServer, color="teal")
         self.server = SatoriServerClient(
             self.wallet, url=self.urlServer, sendingUrl=self.urlMundo
         )
@@ -556,7 +556,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             logging.warning("No stream assignments available, skipping Engine spawn")
             return
 
-        logging.info("Spawning AI Engine...", color="blue")
+        # logging.info("Spawning AI Engine...", color="blue")
         try:
             self.aiengine = Engine.createFromNeuron(
                 subscriptions=self.subscriptions,
@@ -672,6 +672,10 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
         set_vault(startupDag.walletManager)
 
         def run_flask():
+            # Suppress Flask/werkzeug logging
+            import logging as stdlib_logging
+            werkzeug_logger = stdlib_logging.getLogger('werkzeug')
+            werkzeug_logger.setLevel(stdlib_logging.ERROR)
             # Use werkzeug server (not for production, but fine for local use)
             app.run(host=host, port=port, debug=False, use_reloader=False)
 
