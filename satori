@@ -37,6 +37,31 @@ create_data_dirs() {
     mkdir -p "${DATA_DIR}/data"
 }
 
+# Function to create and start container
+create_container() {
+    # Create data directories
+    create_data_dirs
+
+    # Always pull latest image
+    echo "Pulling latest image..."
+    docker pull $IMAGE
+
+    # Production mode: mount data only
+    docker run -d --name $CONTAINER_NAME \
+        --restart unless-stopped \
+        -p ${PORT}:${PORT} \
+        -e SATORI_ENV=prod \
+        -e SATORI_UI_PORT=${PORT} \
+        -v "${DATA_DIR}/config:/Satori/Neuron/config" \
+        -v "${DATA_DIR}/wallet:/Satori/Neuron/wallet" \
+        -v "${DATA_DIR}/models:/Satori/models" \
+        -v "${DATA_DIR}/data:/Satori/Engine/db" \
+        $IMAGE || {
+        echo "Error: Failed to create container. Is Docker running?"
+        exit 1
+    }
+}
+
 # Help
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Satori Neuron"
@@ -77,8 +102,13 @@ case "$1" in
         echo "Satori neuron ${INSTANCE} stopped and removed"
         ;;
     restart)
-        docker restart $CONTAINER_NAME
-        echo "Satori neuron ${INSTANCE} restarted"
+        echo "Restarting Satori neuron ${INSTANCE}..."
+        # Stop and remove container
+        docker stop $CONTAINER_NAME 2>/dev/null
+        docker rm $CONTAINER_NAME 2>/dev/null
+        # Create fresh container with latest image
+        create_container
+        echo "Satori neuron ${INSTANCE} restarted with latest image (port ${PORT})"
         ;;
     logs)
         docker logs $CONTAINER_NAME --tail 100 -f
@@ -98,27 +128,7 @@ case "$1" in
             # Try to start existing container, or create new one
             if ! docker start $CONTAINER_NAME 2>/dev/null; then
                 echo "Container not found. Creating..."
-                # Create data directories
-                create_data_dirs
-
-                # Always pull latest image
-                echo "Pulling latest image..."
-                docker pull $IMAGE
-
-                # Production mode: mount data only
-                docker run -d --name $CONTAINER_NAME \
-                    --restart unless-stopped \
-                    -p ${PORT}:${PORT} \
-                    -e SATORI_ENV=prod \
-                    -e SATORI_UI_PORT=${PORT} \
-                    -v "${DATA_DIR}/config:/Satori/Neuron/config" \
-                    -v "${DATA_DIR}/wallet:/Satori/Neuron/wallet" \
-                    -v "${DATA_DIR}/models:/Satori/models" \
-                    -v "${DATA_DIR}/data:/Satori/Engine/db" \
-                    $IMAGE || {
-                    echo "Error: Failed to create container. Is Docker running?"
-                    exit 1
-                }
+                create_container
             fi
             sleep 2
         fi

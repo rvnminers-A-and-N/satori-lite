@@ -16,6 +16,33 @@ create_data_dirs() {
     mkdir -p "$(pwd)/engine-lite/db"
 }
 
+# Function to create and start container
+create_container() {
+    # Create data directories
+    create_data_dirs
+
+    # Dev mode: mount code + data (data stored within source directories)
+    # Note: neuron-lite contains config, wallet, models subdirectories
+    # Note: engine-lite contains db subdirectory
+    docker run -d --name $CONTAINER_NAME \
+        --restart unless-stopped \
+        -p 5001:5001 \
+        -e SATORI_UI_PORT=5001 \
+        -v "$(pwd)/lib-lite:/Satori/Lib" \
+        -v "$(pwd)/neuron-lite:/Satori/Neuron" \
+        -v "$(pwd)/engine-lite:/Satori/Engine" \
+        -v "$(pwd)/web:/Satori/web" \
+        -v "$(pwd)/neuron-lite/models:/Satori/models" \
+        -e SATORI_ENV=dev \
+        -e SATORI_CENTRAL_URL=$CENTRAL_URL \
+        -e SATORI_API_URL=$API_URL \
+        -e PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori" \
+        $IMAGE python /Satori/Neuron/start.py || {
+        echo "Error: Failed to create container. Is Docker running?"
+        exit 1
+    }
+}
+
 # Help
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Satori Lite CLI - Development Mode"
@@ -52,7 +79,12 @@ case "$1" in
         echo "Satori neuron stopped and removed"
         ;;
     restart)
-        docker restart $CONTAINER_NAME
+        echo "Restarting Satori neuron..."
+        # Stop and remove container
+        docker stop $CONTAINER_NAME 2>/dev/null
+        docker rm $CONTAINER_NAME 2>/dev/null
+        # Create fresh container
+        create_container
         echo "Satori neuron restarted"
         ;;
     logs)
@@ -73,29 +105,7 @@ case "$1" in
             # Try to start existing container, or create new one
             if ! docker start $CONTAINER_NAME 2>/dev/null; then
                 echo "Container not found. Creating..."
-                # Create data directories
-                create_data_dirs
-
-                # Dev mode: mount code + data (data stored within source directories)
-                # Note: neuron-lite contains config, wallet, models subdirectories
-                # Note: engine-lite contains db subdirectory
-                docker run -d --name $CONTAINER_NAME \
-                    --restart unless-stopped \
-                    -p 5001:5001 \
-                    -e SATORI_UI_PORT=5001 \
-                    -v "$(pwd)/lib-lite:/Satori/Lib" \
-                    -v "$(pwd)/neuron-lite:/Satori/Neuron" \
-                    -v "$(pwd)/engine-lite:/Satori/Engine" \
-                    -v "$(pwd)/web:/Satori/web" \
-                    -v "$(pwd)/neuron-lite/models:/Satori/models" \
-                    -e SATORI_ENV=dev \
-                    -e SATORI_CENTRAL_URL=$CENTRAL_URL \
-                    -e SATORI_API_URL=$API_URL \
-                    -e PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori" \
-                    $IMAGE python /Satori/Neuron/start.py || {
-                    echo "Error: Failed to create container. Is Docker running?"
-                    exit 1
-                }
+                create_container
             fi
             sleep 2
         fi
