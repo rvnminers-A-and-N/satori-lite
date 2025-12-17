@@ -616,6 +616,12 @@ def register_routes(app):
         """Get list of workers for authenticated user's pool."""
         return proxy_api('/pool/workers', 'GET')
 
+    @app.route('/api/pool/lenders', methods=['GET'])
+    @login_required
+    def api_pool_lenders():
+        """Get list of lenders for authenticated user's pool."""
+        return proxy_api('/pool/lenders', 'GET')
+
     @app.route('/api/wallet/address')
     @login_required
     def api_wallet_address():

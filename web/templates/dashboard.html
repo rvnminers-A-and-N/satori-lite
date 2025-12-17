@@ -286,6 +286,12 @@
                             </div>
                         </span>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">Lenders</label>
+                        <div id="lenderList" class="mb-3">
+                            <p class="text-muted">No lenders</p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -643,6 +649,29 @@
         updateMutualExclusionUI();
     }
 
+    async function loadLenders() {
+        const lenderListEl = document.getElementById('lenderList');
+        const result = await apiCall('/pool/lenders');
+
+        if (result && result.lenders && result.lenders.length > 0) {
+            lenderListEl.innerHTML = '';
+            result.lenders.forEach(lender => {
+                const lenderItem = document.createElement('div');
+                lenderItem.className = 'd-flex justify-content-between align-items-center mb-2 p-2 border rounded';
+                lenderItem.innerHTML = `
+                    <div>
+                        <small class="text-muted">Address:</small><br>
+                        <code class="small">${lender.address}</code>
+                        ${lender.alias ? `<br><span class="badge bg-secondary">${lender.alias}</span>` : ''}
+                    </div>
+                `;
+                lenderListEl.appendChild(lenderItem);
+            });
+        } else {
+            lenderListEl.innerHTML = '<p class="text-muted">No lenders</p>';
+        }
+    }
+
     function isValidAddress(address) {
         return address && address.length === 34 && address.startsWith('E');
     }
@@ -923,6 +952,7 @@
         loadRewardAddress();
         loadStakingStatus();
         loadWorkers();
+        loadLenders();
         loadAvailablePools();
         loadPoolCommission();
 
