@@ -292,6 +292,22 @@
                             <p class="text-muted">No lenders</p>
                         </div>
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pool Audits</label>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-primary btn-sm" onclick="downloadWorkersAudit()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">download</i>
+                                Download Workers Audit
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" onclick="downloadLendersAudit()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">download</i>
+                                Download Lenders Audit
+                            </button>
+                        </div>
+                        <small class="form-text text-muted">
+                            Download the latest audit files showing worker distributions and lender commissions.
+                        </small>
+                    </div>
                 </div>
             </div>
         </div>
@@ -669,6 +685,94 @@
             });
         } else {
             lenderListEl.innerHTML = '<p class="text-muted">No lenders</p>';
+        }
+    }
+
+    // Get central-lite API URL
+    function getCentralApiUrl() {
+        // For development: assume central-lite runs on port 8000
+        // For production: this should be configured properly
+        const protocol = window.location.protocol;
+        const hostname = window.location.hostname;
+
+        // If we're on localhost, use localhost:8000
+        // Otherwise, use the same hostname (assumes central-lite on same domain)
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return `${protocol}//${hostname}:8000`;
+        }
+        return `${protocol}//${hostname}`;
+    }
+
+    // Helper function to download JSON data as a file
+    function downloadJSON(data, filename) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+            type: 'application/json'
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // Download workers audit
+    async function downloadWorkersAudit() {
+        try {
+            const centralApiUrl = getCentralApiUrl();
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/workers/latest`);
+
+            if (!response.ok) {
+                if (response.status === 404) {
+                    showToast('No workers audit available yet', 'warning');
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            // Generate filename with timestamp
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `workers_audit_${timestamp}.json`;
+
+            downloadJSON(data, filename);
+            showToast('Workers audit downloaded');
+        } catch (error) {
+            console.error('Error downloading workers audit:', error);
+            showToast('Failed to download workers audit', 'error');
+        }
+    }
+
+    // Download lenders audit
+    async function downloadLendersAudit() {
+        try {
+            const centralApiUrl = getCentralApiUrl();
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/lenders/latest`);
+
+            if (!response.ok) {
+                if (response.status === 404) {
+                    showToast('No lenders audit available yet', 'warning');
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            // Generate filename with timestamp
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `lenders_audit_${timestamp}.json`;
+
+            downloadJSON(data, filename);
+            showToast('Lenders audit downloaded');
+        } catch (error) {
+            console.error('Error downloading lenders audit:', error);
+            showToast('Failed to download lenders audit', 'error');
         }
     }
 
