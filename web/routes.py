@@ -979,3 +979,500 @@ def register_routes(app):
             logger.error(f"Failed to get direct balance: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
             return jsonify({'error': str(e)}), 500
+
+    # =========================================================================
+    # P2P NETWORK HEALTH ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/health')
+    @login_required
+    def api_p2p_health():
+        """Get P2P network health status."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'mode': 'unknown',
+                'peer_count': 0,
+                'uptime_pct': 0.0,
+                'last_heartbeat_ago': None,
+                'relay_eligible': False,
+                'connected': False,
+            }
+
+            # Get networking mode
+            if hasattr(start, '_get_networking_mode'):
+                result['mode'] = start._get_networking_mode()
+
+            # Get P2P peers info
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+                result['connected'] = True
+                peers = startup._p2p_peers
+                if hasattr(peers, 'get_peer_count'):
+                    result['peer_count'] = peers.get_peer_count()
+
+            # Get uptime tracker info
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+                if hasattr(tracker, 'get_uptime_percentage'):
+                    result['uptime_pct'] = tracker.get_uptime_percentage()
+                if hasattr(tracker, '_last_heartbeat') and tracker._last_heartbeat:
+                    result['last_heartbeat_ago'] = int(time.time() - tracker._last_heartbeat)
+                result['relay_eligible'] = result['uptime_pct'] >= 95.0
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"P2P health check failed: {e}")
+            return jsonify({
+                'mode': 'central',
+                'peer_count': 0,
+                'connected': False,
+                'error': str(e)
+            })
+
+    @app.route('/api/p2p/heartbeats')
+    @login_required
+    def api_p2p_heartbeats():
+        """Get recent heartbeats from the network."""
+        try:
+            from satorineuron.init import start
+
+            heartbeats = []
+            limit = request.args.get('limit', 20, type=int)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+                if hasattr(tracker, 'get_recent_heartbeats'):
+                    raw = tracker.get_recent_heartbeats(limit=limit)
+                    for hb in raw:
+                        heartbeats.append({
+                            'node_id': hb.node_id[:12] + '...' if len(hb.node_id) > 12 else hb.node_id,
+                            'address': getattr(hb, 'evrmore_address', '')[:12] + '...',
+                            'timestamp': hb.timestamp,
+                            'roles': getattr(hb, 'roles', []),
+                        })
+
+            return jsonify({'heartbeats': heartbeats})
+        except Exception as e:
+            logger.warning(f"Failed to get heartbeats: {e}")
+            return jsonify({'heartbeats': [], 'error': str(e)})
+
+    @app.route('/api/p2p/delegations')
+    @login_required
+    def api_p2p_delegations():
+        """Get delegation info for current user."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            result = {'my_delegate': None, 'my_children': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                manager = startup._delegation_manager
+
+                # Run async methods
+                async def get_delegation_data():
+                    data = {'my_delegate': None, 'my_children': []}
+                    if hasattr(manager, 'get_my_delegate'):
+                        delegate = await manager.get_my_delegate()
+                        if delegate:
+                            data['my_delegate'] = {
+                                'parent_address': delegate.parent_address,
+                                'amount': delegate.amount,
+                                'charity': delegate.charity,
+                            }
+                    if hasattr(manager, 'get_proxy_children'):
+                        children = await manager.get_proxy_children()
+                        for child in children:
+                            data['my_children'].append({
+                                'child_address': child.child_address,
+                                'amount': child.amount,
+                                'charity': child.charity,
+                            })
+                    return data
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    result = loop.run_until_complete(get_delegation_data())
+                finally:
+                    loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get delegations: {e}")
+            return jsonify({'my_delegate': None, 'my_children': [], 'error': str(e)})
+
+    @app.route('/api/p2p/pools')
+    @login_required
+    def api_p2p_pools():
+        """Get P2P pool information."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            result = {'my_pool': None, 'lending_to': None, 'available_pools': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                manager = startup._lending_manager
+
+                # Get my pool config
+                if hasattr(manager, '_my_pool_config') and manager._my_pool_config:
+                    config = manager._my_pool_config
+                    result['my_pool'] = {
+                        'vault_address': config.vault_address,
+                        'pool_size_limit': config.pool_size_limit,
+                        'accepting': config.accepting,
+                    }
+
+                # Get lending target
+                async def get_lend_addr():
+                    if hasattr(manager, 'get_current_lend_address'):
+                        return await manager.get_current_lend_address()
+                    return None
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    result['lending_to'] = loop.run_until_complete(get_lend_addr())
+                finally:
+                    loop.close()
+
+                # Get available pools
+                if hasattr(manager, '_pool_configs'):
+                    for addr, cfg in list(manager._pool_configs.items())[:10]:
+                        if cfg.accepting:
+                            result['available_pools'].append({
+                                'address': addr,
+                                'pool_size_limit': cfg.pool_size_limit,
+                            })
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get P2P pools: {e}")
+            return jsonify({'my_pool': None, 'lending_to': None, 'available_pools': [], 'error': str(e)})
+
+    # =========================================================================
+    # NETWORK DASHBOARD PAGE & API ENDPOINTS
+    # =========================================================================
+
+    @app.route('/network')
+    @login_required
+    def network():
+        """Render the P2P Network Dashboard page."""
+        return render_template('network.html')
+
+    @app.route('/api/p2p-status')
+    @login_required
+    def api_p2p_status():
+        """Get comprehensive P2P status for network dashboard."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'peer_count': 0,
+                'peer_id': None,
+                'nat_type': 'Unknown',
+                'networking_mode': 'central',
+                'uptime_pct': 0.0,
+                'consensus_phase': 'Idle',
+                'peers': [],
+            }
+
+            # Get networking mode
+            if hasattr(start, '_get_networking_mode'):
+                result['networking_mode'] = start._get_networking_mode()
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Get P2P peers info
+                if hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+                    peers = startup._p2p_peers
+                    if hasattr(peers, 'get_peer_count'):
+                        result['peer_count'] = peers.get_peer_count()
+                    if hasattr(peers, 'node_id'):
+                        result['peer_id'] = peers.node_id
+                    if hasattr(peers, 'get_connected_peers'):
+                        connected = peers.get_connected_peers()
+                        for p in connected[:20]:  # Limit to 20
+                            result['peers'].append({
+                                'id': getattr(p, 'peer_id', str(p))[:16] + '...',
+                                'latency': getattr(p, 'latency', None),
+                                'location': getattr(p, 'location', None),
+                                'streams': getattr(p, 'stream_count', 0),
+                                'role': getattr(p, 'role', 'Predictor'),
+                            })
+
+                # Get uptime tracker info
+                if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                    tracker = startup._uptime_tracker
+                    if hasattr(tracker, 'get_uptime_percentage'):
+                        result['uptime_pct'] = tracker.get_uptime_percentage()
+
+                # Get NAT info
+                if hasattr(startup, '_nat_type'):
+                    result['nat_type'] = startup._nat_type or 'Unknown'
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"P2P status failed: {e}")
+            return jsonify({
+                'peer_count': 0,
+                'networking_mode': 'central',
+                'error': str(e)
+            })
+
+    @app.route('/api/network/stats')
+    @login_required
+    def api_network_stats():
+        """Get network statistics for dashboard charts."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'active_streams': 0,
+                'message_rate': 0,
+                'avg_latency': 0,
+                'consensus_rate': 0,
+                'predictions_count': 0,
+                'observations_count': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Get stream registry info
+                if hasattr(startup, '_stream_registry') and startup._stream_registry:
+                    registry = startup._stream_registry
+                    if hasattr(registry, 'get_active_count'):
+                        result['active_streams'] = registry.get_active_count()
+
+                # Get prediction protocol info
+                if hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                    proto = startup._prediction_protocol
+                    if hasattr(proto, 'get_recent_prediction_count'):
+                        result['predictions_count'] = proto.get_recent_prediction_count()
+
+                # Get oracle network info
+                if hasattr(startup, '_oracle_network') and startup._oracle_network:
+                    oracle = startup._oracle_network
+                    if hasattr(oracle, 'get_recent_observation_count'):
+                        result['observations_count'] = oracle.get_recent_observation_count()
+
+                # Estimate message rate from heartbeats
+                if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                    tracker = startup._uptime_tracker
+                    if hasattr(tracker, 'get_message_rate'):
+                        result['message_rate'] = tracker.get_message_rate()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Network stats failed: {e}")
+            return jsonify(result)
+
+    @app.route('/api/peers/list')
+    @login_required
+    def api_peers_list():
+        """Get list of connected peers."""
+        try:
+            from satorineuron.init import start
+
+            peers = []
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            if startup and hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+                p2p = startup._p2p_peers
+                if hasattr(p2p, 'get_connected_peers'):
+                    connected = p2p.get_connected_peers()
+                    for p in connected:
+                        peers.append({
+                            'id': getattr(p, 'peer_id', str(p)),
+                            'latency': getattr(p, 'latency', None),
+                            'location': getattr(p, 'location', None),
+                            'streams': getattr(p, 'stream_count', 0),
+                            'role': getattr(p, 'role', 'Predictor'),
+                        })
+
+            return jsonify({'peers': peers})
+        except Exception as e:
+            logger.warning(f"Peers list failed: {e}")
+            return jsonify({'peers': [], 'error': str(e)})
+
+    @app.route('/api/rewards/pending')
+    @login_required
+    def api_rewards_pending():
+        """Get pending rewards for claiming."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            rewards = []
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Try P2P rewards first
+            if startup and hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                proto = startup._prediction_protocol
+                if hasattr(proto, 'get_pending_rewards'):
+                    async def get_rewards():
+                        return await proto.get_pending_rewards()
+                    try:
+                        loop = asyncio.new_event_loop()
+                        pending = loop.run_until_complete(get_rewards())
+                        for r in pending:
+                            rewards.append({
+                                'round_id': r.round_id,
+                                'stream_id': getattr(r, 'stream_id', None),
+                                'amount': r.amount,
+                                'score': getattr(r, 'score', None),
+                                'multiplier': getattr(r, 'multiplier', 1.0),
+                            })
+                    finally:
+                        loop.close()
+
+            return jsonify({'rewards': rewards})
+        except Exception as e:
+            logger.warning(f"Pending rewards failed: {e}")
+            return jsonify({'rewards': [], 'error': str(e)})
+
+    @app.route('/api/rewards/history')
+    @login_required
+    def api_rewards_history():
+        """Get reward history."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            limit = request.args.get('limit', 20, type=int)
+            history = []
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            if startup and hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                proto = startup._prediction_protocol
+                if hasattr(proto, 'get_reward_history'):
+                    async def get_history():
+                        return await proto.get_reward_history(limit=limit)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        hist = loop.run_until_complete(get_history())
+                        for h in hist:
+                            history.append({
+                                'date': h.date if hasattr(h, 'date') else '',
+                                'round_id': h.round_id,
+                                'amount': h.amount,
+                                'txid': getattr(h, 'txid', None),
+                            })
+                    finally:
+                        loop.close()
+
+            return jsonify({'history': history})
+        except Exception as e:
+            logger.warning(f"Reward history failed: {e}")
+            return jsonify({'history': [], 'error': str(e)})
+
+    @app.route('/api/rewards/claim', methods=['POST'])
+    @login_required
+    def api_rewards_claim():
+        """Claim specific rewards."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            round_ids = data.get('round_ids', [])
+
+            if not round_ids:
+                return jsonify({'success': False, 'error': 'No round_ids provided'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                proto = startup._prediction_protocol
+                if hasattr(proto, 'claim_rewards'):
+                    async def do_claim():
+                        return await proto.claim_rewards(round_ids)
+                    try:
+                        loop = asyncio.new_event_loop()
+                        result = loop.run_until_complete(do_claim())
+                        return jsonify({
+                            'success': True,
+                            'txid': getattr(result, 'txid', None),
+                        })
+                    finally:
+                        loop.close()
+
+            return jsonify({'success': False, 'error': 'P2P prediction protocol not available'})
+        except Exception as e:
+            logger.error(f"Claim rewards failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/rewards/claim-all', methods=['POST'])
+    @login_required
+    def api_rewards_claim_all():
+        """Claim all pending rewards."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                proto = startup._prediction_protocol
+                if hasattr(proto, 'claim_all_rewards'):
+                    async def do_claim_all():
+                        return await proto.claim_all_rewards()
+                    try:
+                        loop = asyncio.new_event_loop()
+                        result = loop.run_until_complete(do_claim_all())
+                        return jsonify({
+                            'success': True,
+                            'txid': getattr(result, 'txid', None),
+                        })
+                    finally:
+                        loop.close()
+
+            return jsonify({'success': False, 'error': 'P2P prediction protocol not available'})
+        except Exception as e:
+            logger.error(f"Claim all rewards failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/networking-mode', methods=['GET', 'POST'])
+    @login_required
+    def api_networking_mode():
+        """Get or set the networking mode."""
+        try:
+            from satorineuron.init import start
+
+            if request.method == 'GET':
+                mode = 'central'
+                if hasattr(start, '_get_networking_mode'):
+                    mode = start._get_networking_mode()
+                return jsonify({'mode': mode})
+
+            # POST - set mode
+            data = request.get_json() or {}
+            new_mode = data.get('mode')
+
+            if new_mode not in ('central', 'hybrid', 'p2p'):
+                return jsonify({'success': False, 'error': 'Invalid mode. Must be central, hybrid, or p2p'})
+
+            # Save to config
+            if hasattr(start, '_set_networking_mode'):
+                start._set_networking_mode(new_mode)
+                return jsonify({'success': True, 'mode': new_mode})
+            else:
+                # Fallback: try to save to config file
+                import os
+                import json
+                config_path = os.path.expanduser('~/.satori/config.json')
+                config = {}
+                if os.path.exists(config_path):
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                config['networking_mode'] = new_mode
+                os.makedirs(os.path.dirname(config_path), exist_ok=True)
+                with open(config_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+                return jsonify({'success': True, 'mode': new_mode})
+
+        except Exception as e:
+            logger.error(f"Networking mode failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})

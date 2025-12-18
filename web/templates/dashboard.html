@@ -14,6 +14,10 @@
             <span class="status-indicator status-online" id="statusIndicator"></span>
             <span id="statusText">Connected</span>
         </span>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-secondary btn-sm me-2" title="P2P Network Dashboard">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
         <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
         <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
             <i class="material-icons" id="themeIcon">light_mode</i>
@@ -221,6 +225,62 @@
             </div>
         </div>
 
+        <!-- P2P Network Health Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">hub</i>
+                        P2P Network
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadP2PHealth()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <div class="text-center">
+                                <div class="h4 mb-0" id="p2pPeerCount">--</div>
+                                <small class="text-muted">Peers</small>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="text-center">
+                                <div class="h4 mb-0" id="p2pUptimePct">--%</div>
+                                <small class="text-muted">Uptime</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mode</label>
+                        <div id="p2pMode" class="alert alert-secondary py-2 mb-0">
+                            <span id="p2pModeText">Loading...</span>
+                            <span id="p2pRelayBadge" class="badge bg-success ms-2" style="display: none;">Relay Eligible</span>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Recent Heartbeats</label>
+                        <div id="heartbeatFeed" class="list-group" style="max-height: 150px; overflow-y: auto; font-size: 0.85em;">
+                            <div class="text-muted small p-2">Loading heartbeats...</div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">My Delegation</label>
+                        <div id="delegationInfo" class="small">
+                            <p class="text-muted mb-1">Not delegating to anyone</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label">Proxy Children</label>
+                        <div id="proxyChildren" class="small">
+                            <p class="text-muted mb-0">No children delegating to me</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Pool Staking Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
@@ -409,6 +469,109 @@
             return null;
         }
     }
+
+    // =========================================================================
+    // P2P NETWORK HEALTH FUNCTIONS
+    // =========================================================================
+
+    async function loadP2PHealth() {
+        try {
+            const health = await apiCall('/p2p/health');
+            if (health) {
+                document.getElementById('p2pPeerCount').textContent = health.peer_count || 0;
+                document.getElementById('p2pUptimePct').textContent =
+                    (health.uptime_pct ? health.uptime_pct.toFixed(1) : '0') + '%';
+
+                const modeText = document.getElementById('p2pModeText');
+                const modeAlert = document.getElementById('p2pMode');
+                const relayBadge = document.getElementById('p2pRelayBadge');
+
+                modeText.textContent = health.mode.toUpperCase();
+
+                if (health.connected) {
+                    modeAlert.className = 'alert alert-success py-2 mb-0';
+                } else if (health.mode === 'central') {
+                    modeAlert.className = 'alert alert-secondary py-2 mb-0';
+                } else {
+                    modeAlert.className = 'alert alert-warning py-2 mb-0';
+                }
+
+                relayBadge.style.display = health.relay_eligible ? 'inline' : 'none';
+            }
+        } catch (e) {
+            console.error('Failed to load P2P health:', e);
+        }
+    }
+
+    async function loadHeartbeats() {
+        try {
+            const data = await apiCall('/p2p/heartbeats?limit=10');
+            const feed = document.getElementById('heartbeatFeed');
+
+            if (data && data.heartbeats && data.heartbeats.length > 0) {
+                feed.innerHTML = data.heartbeats.map(hb => {
+                    const ago = Math.floor((Date.now()/1000) - hb.timestamp);
+                    const roles = hb.roles ? hb.roles.join(', ') : '';
+                    return `<div class="list-group-item py-1 px-2">
+                        <span class="text-success">❤️</span>
+                        <span class="text-muted">${hb.address}</span>
+                        <span class="badge bg-secondary ms-1">${roles || 'predictor'}</span>
+                        <small class="text-muted float-end">${ago}s ago</small>
+                    </div>`;
+                }).join('');
+            } else {
+                feed.innerHTML = '<div class="text-muted small p-2">No heartbeats yet</div>';
+            }
+        } catch (e) {
+            console.error('Failed to load heartbeats:', e);
+        }
+    }
+
+    async function loadDelegations() {
+        try {
+            const data = await apiCall('/p2p/delegations');
+
+            // My delegation
+            const delegationInfo = document.getElementById('delegationInfo');
+            if (data && data.my_delegate) {
+                const d = data.my_delegate;
+                delegationInfo.innerHTML = `
+                    <p class="mb-1">Delegating to: <code>${d.parent_address}</code></p>
+                    <p class="mb-0">Amount: ${d.amount} ${d.charity ? '<span class="badge bg-info">Charity</span>' : ''}</p>
+                `;
+            } else {
+                delegationInfo.innerHTML = '<p class="text-muted mb-0">Not delegating to anyone</p>';
+            }
+
+            // Proxy children
+            const proxyChildren = document.getElementById('proxyChildren');
+            if (data && data.my_children && data.my_children.length > 0) {
+                proxyChildren.innerHTML = data.my_children.map(c => `
+                    <div class="mb-1">
+                        <code>${c.child_address}</code>: ${c.amount}
+                        ${c.charity ? '<span class="badge bg-info">Charity</span>' : ''}
+                    </div>
+                `).join('');
+            } else {
+                proxyChildren.innerHTML = '<p class="text-muted mb-0">No children delegating to me</p>';
+            }
+        } catch (e) {
+            console.error('Failed to load delegations:', e);
+        }
+    }
+
+    // Load all P2P data
+    async function loadAllP2PData() {
+        await Promise.all([
+            loadP2PHealth(),
+            loadHeartbeats(),
+            loadDelegations()
+        ]);
+    }
+
+    // =========================================================================
+    // MUTUAL EXCLUSION FUNCTIONS
+    // =========================================================================
 
     // Update UI based on mutual exclusion rules
     function updateMutualExclusionUI() {
@@ -1216,9 +1379,11 @@
         loadLenders();
         loadAvailablePools();
         loadPoolCommission();
+        loadAllP2PData();  // Load P2P network health, heartbeats, delegations
 
-        // Periodic health check - Disabled to reduce unnecessary load
-        // setInterval(checkHealth, 30000);
+        // Periodic refresh of P2P data (every 30s)
+        setInterval(loadP2PHealth, 30000);
+        setInterval(loadHeartbeats, 15000);
     });
 </script>
 {% endblock %}

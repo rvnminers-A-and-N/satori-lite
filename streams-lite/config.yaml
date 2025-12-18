@@ -1,0 +1,92 @@
+# Streams-Lite Configuration
+#
+# Configure data oracle streams that fetch external data and publish
+# observations to the Satori network.
+#
+# Each oracle fetches data from an external source (API, website, etc.)
+# and publishes it as an observation that other nodes can predict on.
+
+# Master enable/disable for all streams
+enabled: true
+
+# Oracle configurations
+oracles:
+  # =========================================================================
+  # FRED (Federal Reserve Economic Data) - Economic indicators
+  # Get your own API key at: https://fred.stlouisfed.org/docs/api/api_key.html
+  # =========================================================================
+
+  - type: fred
+    name: 10-Year Treasury Rate
+    stream_id: fred|satori|DGS10|rate
+    enabled: false  # Enable when ready
+    poll_interval: 3600  # 1 hour
+    # api_key: YOUR_FRED_API_KEY  # Or set FRED_API_KEY env var
+    extra:
+      series_id: DGS10
+
+  - type: fred
+    name: Federal Funds Rate
+    stream_id: fred|satori|FEDFUNDS|rate
+    enabled: false
+    poll_interval: 3600
+    extra:
+      series_id: FEDFUNDS
+
+  # =========================================================================
+  # Cryptocurrency Prices - No API key needed
+  # =========================================================================
+
+  - type: crypto
+    name: Bitcoin Price USD
+    stream_id: crypto|satori|BTC|USD
+    enabled: false  # Enable when ready
+    poll_interval: 300  # 5 minutes
+    extra:
+      coin: bitcoin
+      currency: usd
+      source: coingecko  # or 'binance'
+
+  - type: crypto
+    name: Ethereum Price USD
+    stream_id: crypto|satori|ETH|USD
+    enabled: false
+    poll_interval: 300
+    extra:
+      coin: ethereum
+      currency: usd
+
+  - type: crypto
+    name: Evrmore Price USD
+    stream_id: crypto|satori|EVR|USD
+    enabled: false
+    poll_interval: 600  # 10 minutes
+    extra:
+      coin: evrmore
+      currency: usd
+
+  # =========================================================================
+  # Custom HTTP Endpoints - For any JSON API
+  # =========================================================================
+
+  # Example: Weather API
+  # - type: http
+  #   name: NYC Temperature
+  #   stream_id: weather|satori|NYC|temperature
+  #   enabled: false
+  #   poll_interval: 1800  # 30 minutes
+  #   extra:
+  #     url: https://api.weather.gov/gridpoints/OKX/33,37/forecast
+  #     json_path: properties.periods.0.temperature
+  #     headers:
+  #       User-Agent: SatoriOracle/1.0
+
+  # Example: Your own API
+  # - type: http
+  #   name: My Sensor Data
+  #   stream_id: sensors|myname|temperature|sensor1
+  #   enabled: false
+  #   poll_interval: 60
+  #   extra:
+  #     url: http://my-sensor-api.local/reading
+  #     json_path: data.temperature

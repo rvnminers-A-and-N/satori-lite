@@ -1,49 +1,148 @@
-# Satori Lite - Lightweight Neuron Container
+# =============================================================================
+# Satori Lite - Lightweight Self-Contained Neuron
+# =============================================================================
+#
+# This container runs a complete Satori neuron including:
+# - Lib (core library)
+# - Engine (AI/ML predictions)
+# - Neuron (coordinator + web UI)
+# - Streams (oracle data sources)
+# - P2P networking (satorip2p)
+#
+# NETWORKING MODES:
+#   Set SATORI_NETWORKING_MODE environment variable:
+#   - central: Legacy mode, connects to central server (default)
+#   - hybrid:  P2P with central fallback (recommended)
+#   - p2p:     Pure P2P, fully decentralized
+#
+# PORTS:
+#   - 24601: Web UI
+#   - 24600: P2P networking
+#
+# USAGE:
+#   # Build
+#   docker build -t satori-lite .
+#
+#   # Run in hybrid mode (recommended)
+#   docker run -p 24601:24601 -p 24600:24600 \
+#       -e SATORI_NETWORKING_MODE=hybrid \
+#       -v ~/.satori:/root/.satori \
+#       satori-lite
+#
+# =============================================================================
+
 FROM python:3.10-slim
 
-# System dependencies
+LABEL maintainer="Satori Network"
+LABEL description="Satori Lite - Self-contained lightweight neuron"
+LABEL version="1.0.0"
+
+# =============================================================================
+# System Dependencies
+# =============================================================================
+
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
-        libleveldb-dev && \
+        libleveldb-dev \
+        git \
+        curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Create directory structure
-RUN mkdir -p /Satori/Lib /Satori/Engine /Satori/Neuron /Satori/Neuron/satorineuron/web
+# =============================================================================
+# Directory Structure
+# =============================================================================
 
-# Copy satori-lite code
+RUN mkdir -p /Satori/Lib \
+             /Satori/Engine \
+             /Satori/Neuron \
+             /Satori/Streams \
+             /Satori/web \
+             /root/.satori/wallet \
+             /root/.satori/data \
+             /root/.satori/models
+
+# =============================================================================
+# Copy Application Code
+# =============================================================================
+
+# Core components
 COPY lib-lite /Satori/Lib
-COPY neuron-lite /Satori/Neuron
 COPY engine-lite /Satori/Engine
+COPY neuron-lite /Satori/Neuron
 COPY web /Satori/web
+
+# Streams (oracle data sources)
+COPY streams-lite /Satori/Streams
+
+# Tests
 COPY tests /Satori/tests
 
-# Copy requirements and install
+# =============================================================================
+# Python Dependencies
+# =============================================================================
+
 COPY requirements.txt /Satori/requirements.txt
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r /Satori/requirements.txt && \
     pip install pytest
 
-# Set Python path - include /Satori so 'from web.app' imports work
-ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori"
+# =============================================================================
+# Environment Configuration
+# =============================================================================
 
-# Create symbolic links for docker-compose.yaml compatibility
-# Remove existing directories first, then create symlinks
+# Python path - include all components
+ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori/Streams:/Satori"
+
+# Default networking mode (can be overridden at runtime)
+# Options: central, hybrid, p2p
+ENV SATORI_NETWORKING_MODE="central"
+
+# Wallet path
+ENV SATORI_WALLET_PATH="/root/.satori/wallet"
+
+# Data paths
+ENV SATORI_DATA_PATH="/root/.satori/data"
+ENV SATORI_MODELS_PATH="/root/.satori/models"
+
+# =============================================================================
+# Symbolic Links for Compatibility
+# =============================================================================
+
 RUN rm -rf /Satori/Neuron/data /Satori/Neuron/models && \
     ln -s /Satori/Engine/db /Satori/Neuron/data && \
-    ln -s /Satori/models /Satori/Neuron/models
+    ln -s /root/.satori/models /Satori/Neuron/models
 
-# Make start.sh executable (entrypoint for docker-compose compatibility)
-RUN chmod +x /Satori/Neuron/satorineuron/web/start.sh
+# =============================================================================
+# Make Scripts Executable
+# =============================================================================
 
-# Working directory
+RUN chmod +x /Satori/Neuron/satorineuron/web/start.sh 2>/dev/null || true
+
+# =============================================================================
+# Working Directory & Ports
+# =============================================================================
+
 WORKDIR /Satori
 
-# Expose web UI port and P2P port
+# Web UI
 EXPOSE 24601
+
+# P2P networking
 EXPOSE 24600
 
-# Default command - starts neuron + web UI on port 24601
+# =============================================================================
+# Health Check
+# =============================================================================
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:24601/health || exit 1
+
+# =============================================================================
+# Default Command
+# =============================================================================
+
+# Start the neuron (includes web UI, P2P, and streams)
 CMD ["python", "/Satori/Neuron/start.py"]

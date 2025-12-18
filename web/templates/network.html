@@ -1,0 +1,2135 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Network{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* ============================================ */
+    /* BASE STYLES */
+    /* ============================================ */
+    .network-graph {
+        background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+    }
+    .network-graph svg {
+        width: 100%;
+        height: 500px;
+    }
+    .metric-card {
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-3px);
+        box-shadow: var(--shadow);
+    }
+    .stats-number {
+        font-size: 2rem;
+        font-weight: 700;
+        background: var(--accent-gradient);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* ============================================ */
+    /* NODE TYPE COLORS */
+    /* ============================================ */
+    .node-you { fill: url(#myNodeGradient) !important; }
+    .node-oracle { fill: #00aaff !important; }
+    .node-signer { fill: #ffd700 !important; }
+    .node-pool-operator { fill: #aa44ff !important; }
+    .node-delegate { fill: #00d4aa !important; }
+    .node-charity { fill: #ffcc00 !important; }
+    .node-predictor { fill: #00ff88 !important; }
+
+    /* ============================================ */
+    /* EDGE TYPE STYLES */
+    /* ============================================ */
+    .edge-p2p {
+        stroke: rgba(0, 255, 136, 0.4);
+        stroke-width: 1.5;
+    }
+    .edge-lending {
+        stroke: #aa44ff;
+        stroke-width: 2;
+        stroke-dasharray: 8, 4;
+    }
+    .edge-delegation {
+        stroke: #00d4aa;
+        stroke-width: 2;
+        stroke-dasharray: 4, 4;
+    }
+    .edge-charity {
+        stroke: #ffcc00;
+        stroke-width: 2;
+        stroke-dasharray: 2, 2;
+    }
+
+    /* ============================================ */
+    /* NODE INTERACTIONS */
+    /* ============================================ */
+    .node-circle {
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .node-circle:hover {
+        filter: brightness(1.3) drop-shadow(0 0 8px currentColor);
+    }
+    .node-label {
+        font-size: 9px;
+        fill: white;
+        pointer-events: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    }
+    .node-role-badge {
+        font-size: 7px;
+        fill: rgba(255,255,255,0.7);
+        pointer-events: none;
+    }
+
+    /* ============================================ */
+    /* PULSE & ANIMATION EFFECTS */
+    /* ============================================ */
+    @keyframes heartbeatPulse {
+        0% { r: 12; opacity: 1; stroke-width: 3; }
+        100% { r: 40; opacity: 0; stroke-width: 1; }
+    }
+    @keyframes predictionPulse {
+        0% { r: 12; opacity: 1; stroke-width: 2; }
+        100% { r: 35; opacity: 0; stroke-width: 1; }
+    }
+    @keyframes signerFlash {
+        0% { opacity: 1; }
+        50% { opacity: 0.3; }
+        100% { opacity: 1; }
+    }
+    @keyframes livePulse {
+        0%, 100% { opacity: 1; box-shadow: 0 0 5px currentColor; }
+        50% { opacity: 0.5; box-shadow: 0 0 15px currentColor; }
+    }
+    .heartbeat-ring {
+        fill: none;
+        stroke: #ff6b6b;
+        pointer-events: none;
+    }
+    .prediction-ring {
+        fill: none;
+        stroke: #00ff88;
+        pointer-events: none;
+    }
+    .observation-ring {
+        fill: none;
+        stroke: #00aaff;
+        pointer-events: none;
+    }
+    .signer-flash {
+        animation: signerFlash 0.5s ease-in-out;
+    }
+
+    /* Data packets */
+    .data-packet {
+        filter: drop-shadow(0 0 4px currentColor);
+    }
+    .packet-prediction { fill: #00ff88; }
+    .packet-observation { fill: #00aaff; }
+    .packet-heartbeat { fill: #ff6b6b; }
+    .packet-consensus { fill: #ffd700; }
+
+    /* ============================================ */
+    /* LEGEND STYLES */
+    /* ============================================ */
+    .network-legend {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        background: rgba(0,0,0,0.7);
+        border-radius: 10px;
+        padding: 12px;
+        font-size: 11px;
+        color: white;
+        z-index: 100;
+        max-width: 200px;
+        backdrop-filter: blur(5px);
+    }
+    .legend-title {
+        font-weight: bold;
+        margin-bottom: 8px;
+        border-bottom: 1px solid rgba(255,255,255,0.2);
+        padding-bottom: 5px;
+    }
+    .legend-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 4px;
+        cursor: pointer;
+        opacity: 1;
+        transition: opacity 0.3s;
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
+    .legend-item.hidden {
+        opacity: 0.3;
+    }
+    .legend-item:hover {
+        background: rgba(255,255,255,0.1);
+    }
+    .legend-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+        flex-shrink: 0;
+    }
+    .legend-line {
+        width: 20px;
+        height: 3px;
+        margin-right: 8px;
+        flex-shrink: 0;
+    }
+    .legend-section {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255,255,255,0.1);
+    }
+
+    /* ============================================ */
+    /* COLLAPSIBLE PANEL STYLES */
+    /* ============================================ */
+    .management-panel {
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        margin-bottom: 15px;
+        overflow: hidden;
+    }
+    .panel-header {
+        background: var(--bg-card-header);
+        padding: 12px 15px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: background 0.3s;
+    }
+    .panel-header:hover {
+        background: var(--bg-input);
+    }
+    .panel-header h6 {
+        margin: 0;
+        display: flex;
+        align-items: center;
+    }
+    .panel-header .toggle-icon {
+        transition: transform 0.3s;
+    }
+    .panel-header.collapsed .toggle-icon {
+        transform: rotate(-90deg);
+    }
+    .panel-body {
+        padding: 15px;
+        display: none;
+    }
+    .panel-body.show {
+        display: block;
+    }
+
+    /* ============================================ */
+    /* EVENT FEED STYLES */
+    /* ============================================ */
+    .event-feed {
+        max-height: 250px;
+        overflow-y: auto;
+        font-size: 11px;
+    }
+    .event-item {
+        padding: 6px 10px;
+        border-left: 3px solid transparent;
+        margin-bottom: 4px;
+        background: var(--bg-input);
+        border-radius: 0 5px 5px 0;
+        animation: fadeInSlide 0.3s ease-out;
+    }
+    @keyframes fadeInSlide {
+        from { opacity: 0; transform: translateX(-10px); }
+        to { opacity: 1; transform: translateX(0); }
+    }
+    .event-prediction { border-left-color: #00ff88; }
+    .event-observation { border-left-color: #00aaff; }
+    .event-heartbeat { border-left-color: #ff6b6b; }
+    .event-consensus { border-left-color: #ffd700; }
+    .event-pool { border-left-color: #aa44ff; }
+    .event-delegation { border-left-color: #00d4aa; }
+    .event-system { border-left-color: var(--accent-primary); }
+    .event-time {
+        color: var(--text-muted);
+        font-size: 10px;
+    }
+
+    /* ============================================ */
+    /* STREAM VISUALIZATION */
+    /* ============================================ */
+    .stream-lane-label {
+        font-size: 10px;
+        fill: rgba(255,255,255,0.6);
+    }
+
+    /* ============================================ */
+    /* LIVE INDICATOR */
+    /* ============================================ */
+    .live-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        animation: livePulse 2s ease-in-out infinite;
+    }
+    .live-indicator.connected { background: #00ff88; }
+    .live-indicator.disconnected { background: #ff6b6b; animation: none; }
+
+    /* ============================================ */
+    /* WEBSOCKET STATUS */
+    /* ============================================ */
+    .ws-status {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: rgba(0,0,0,0.7);
+        padding: 5px 10px;
+        border-radius: 15px;
+        font-size: 10px;
+        color: white;
+        z-index: 100;
+    }
+    .ws-status.connected { border: 1px solid #00ff88; }
+    .ws-status.disconnected { border: 1px solid #ff6b6b; }
+
+    /* ============================================ */
+    /* TIMELINE STYLES */
+    /* ============================================ */
+    .timeline {
+        position: relative;
+        padding-left: 0;
+        list-style: none;
+    }
+    .timeline-block {
+        position: relative;
+        padding-left: 50px;
+        margin-bottom: 1.25rem;
+    }
+    .timeline-step {
+        position: absolute;
+        left: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        color: white;
+    }
+    .timeline-block:not(:last-child)::before {
+        content: '';
+        position: absolute;
+        left: 15px;
+        top: 32px;
+        width: 2px;
+        height: calc(100% + 4px);
+        background: var(--border-color);
+    }
+    .timeline-content {
+        padding-top: 2px;
+    }
+
+    /* Gradient backgrounds */
+    .bg-gradient-primary { background: var(--accent-gradient); }
+    .bg-gradient-success { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); }
+    .bg-gradient-info { background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); }
+    .bg-gradient-warning { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); }
+    .bg-gradient-danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+    .bg-gradient-secondary { background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); }
+
+    /* Badge adjustments */
+    .badge-sm {
+        font-size: 0.65rem;
+        padding: 0.25em 0.5em;
+    }
+
+    /* Icon shape */
+    .icon-shape {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    /* Mode modal */
+    .mode-modal {
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0,0,0,0.7);
+    }
+    .mode-modal-content {
+        margin: 10% auto;
+        padding: 1.5rem;
+        width: 450px;
+        max-width: 90%;
+    }
+    .mode-option {
+        padding: 1rem;
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .mode-option:hover {
+        border-color: var(--accent-primary);
+        background: var(--bg-input);
+    }
+    .mode-option.recommended {
+        border-color: var(--accent-primary);
+    }
+
+    /* Form controls */
+    .form-switch .form-check-input {
+        width: 2.5em;
+        height: 1.25em;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <a href="{{ url_for('dashboard') }}" class="navbar-brand">
+        Satori
+    </a>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<!-- Include D3.js, Chart.js, and Socket.IO -->
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+
+<div class="container-fluid py-4">
+    <!-- Header -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h4 class="mb-0">
+                        <span id="wsIndicator" class="live-indicator connected"></span>
+                        P2P Network Dashboard
+                    </h4>
+                    <p class="text-muted small mb-0">Real-time network visualization with live updates</p>
+                </div>
+                <div>
+                    <button onclick="refreshAllData();" class="btn btn-outline-secondary btn-sm me-2">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i> Refresh
+                    </button>
+                    <button onclick="toggleFullscreen();" class="btn btn-outline-secondary btn-sm">
+                        <i class="material-icons align-middle" style="font-size: 16px;">fullscreen</i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Stats Row -->
+    <div class="row g-3 mb-4">
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Peers</p>
+                    <h4 id="totalPeers" class="stats-number mb-0">0</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Oracles</p>
+                    <h4 id="oracleCount" class="mb-0" style="font-size: 2rem; font-weight: 700; background: linear-gradient(135deg, #00aaff 0%, #0066cc 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">0</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Signers</p>
+                    <h4 id="signerCount" class="mb-0" style="font-size: 2rem; font-weight: 700; background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">0</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Pools</p>
+                    <h4 id="poolCount" class="mb-0" style="font-size: 2rem; font-weight: 700; background: linear-gradient(135deg, #aa44ff 0%, #6622cc 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;">0</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Latency</p>
+                    <h4 id="avgLatency" class="stats-number mb-0">--</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-2 col-sm-4 col-6">
+            <div class="card metric-card h-100">
+                <div class="card-body p-3 text-center">
+                    <p class="text-muted small mb-1 text-uppercase">Mode</p>
+                    <h6 id="networkMode" class="mb-0"><span class="badge bg-gradient-info">Central</span></h6>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Network Visualization -->
+    <div class="row g-4 mb-4">
+        <!-- Network Graph -->
+        <div class="col-xl-9 col-12">
+            <div class="card network-graph">
+                <!-- Legend -->
+                <div class="network-legend" id="networkLegend">
+                    <div class="legend-title">
+                        <i class="material-icons" style="font-size: 14px; vertical-align: middle;">help_outline</i>
+                        Network Key
+                    </div>
+                    <div class="legend-section" style="margin-top: 0; padding-top: 0; border-top: none;">
+                        <small style="color: rgba(255,255,255,0.6);">Node Types (click to toggle)</small>
+                    </div>
+                    <div class="legend-item" data-type="you" onclick="toggleNodeType('you')">
+                        <div class="legend-dot" style="background: linear-gradient(135deg, #5a5aff 0%, #3a3acc 100%);"></div>
+                        <span>Your Node</span>
+                    </div>
+                    <div class="legend-item" data-type="oracle" onclick="toggleNodeType('oracle')">
+                        <div class="legend-dot" style="background: #00aaff;"></div>
+                        <span>Oracle</span>
+                    </div>
+                    <div class="legend-item" data-type="signer" onclick="toggleNodeType('signer')">
+                        <div class="legend-dot" style="background: #ffd700;"></div>
+                        <span>Signer</span>
+                    </div>
+                    <div class="legend-item" data-type="pool-operator" onclick="toggleNodeType('pool-operator')">
+                        <div class="legend-dot" style="background: #aa44ff;"></div>
+                        <span>Pool Operator</span>
+                    </div>
+                    <div class="legend-item" data-type="delegate" onclick="toggleNodeType('delegate')">
+                        <div class="legend-dot" style="background: #00d4aa;"></div>
+                        <span>Delegate</span>
+                    </div>
+                    <div class="legend-item" data-type="charity" onclick="toggleNodeType('charity')">
+                        <div class="legend-dot" style="background: #ffcc00; border: 2px dashed #996600;"></div>
+                        <span>Charity Node</span>
+                    </div>
+                    <div class="legend-item" data-type="predictor" onclick="toggleNodeType('predictor')">
+                        <div class="legend-dot" style="background: #00ff88;"></div>
+                        <span>Predictor</span>
+                    </div>
+                    <div class="legend-section">
+                        <small style="color: rgba(255,255,255,0.6);">Relationship Types</small>
+                    </div>
+                    <div class="legend-item" data-edge="p2p" onclick="toggleEdgeType('p2p')">
+                        <div class="legend-line" style="background: rgba(0, 255, 136, 0.6);"></div>
+                        <span>P2P Connection</span>
+                    </div>
+                    <div class="legend-item" data-edge="lending" onclick="toggleEdgeType('lending')">
+                        <div class="legend-line" style="background: repeating-linear-gradient(90deg, #aa44ff 0px, #aa44ff 8px, transparent 8px, transparent 12px);"></div>
+                        <span>Lending</span>
+                    </div>
+                    <div class="legend-item" data-edge="delegation" onclick="toggleEdgeType('delegation')">
+                        <div class="legend-line" style="background: repeating-linear-gradient(90deg, #00d4aa 0px, #00d4aa 4px, transparent 4px, transparent 8px);"></div>
+                        <span>Delegation</span>
+                    </div>
+                </div>
+
+                <!-- WebSocket Status -->
+                <div class="ws-status disconnected" id="wsStatus">
+                    <span id="wsStatusDot" class="live-indicator disconnected"></span>
+                    <span id="wsStatusText">Connecting...</span>
+                </div>
+
+                <div class="card-body p-0">
+                    <div id="networkGraph"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Your Node + Event Feed -->
+        <div class="col-xl-3 col-12">
+            <!-- Your Node Status -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <h6 class="mb-0">
+                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: var(--accent-primary);">computer</i>
+                        Your Node
+                    </h6>
+                </div>
+                <div class="card-body pt-2">
+                    <div class="mb-2">
+                        <p class="text-muted small mb-0">Peer ID</p>
+                        <code id="myPeerId" style="font-size: 10px; word-break: break-all;">Loading...</code>
+                    </div>
+                    <div class="row">
+                        <div class="col-6">
+                            <p class="text-muted small mb-0">NAT</p>
+                            <span id="myNatStatus" class="badge bg-gradient-warning badge-sm">--</span>
+                        </div>
+                        <div class="col-6">
+                            <p class="text-muted small mb-0">Role</p>
+                            <span id="myRole" class="badge bg-gradient-success badge-sm">Predictor</span>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <button onclick="showModeSelector();" class="btn btn-outline-secondary btn-sm w-100">
+                            <i class="material-icons align-middle" style="font-size: 14px;">settings</i> Change Mode
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Real-time Event Feed -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #06b6d4;">rss_feed</i>
+                            Live Events
+                        </h6>
+                        <button class="btn btn-link btn-sm p-0" onclick="clearEventFeed();" title="Clear">
+                            <i class="material-icons" style="font-size: 18px;">clear_all</i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body pt-2">
+                    <div class="event-feed" id="eventFeed">
+                        <div class="text-muted text-center py-3">
+                            <i class="material-icons" style="font-size: 24px;">hourglass_empty</i>
+                            <p class="mb-0 mt-1">Waiting for events...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Streams Visualization -->
+    <div class="row g-4 mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                        <div>
+                            <h6 class="mb-0">Live Data Streams</h6>
+                            <p class="text-muted small mb-0">Real-time data flowing through the network</p>
+                        </div>
+                        <div id="streamStats">
+                            <span class="badge bg-gradient-success me-1"><span id="predictionsCount">0</span> predictions</span>
+                            <span class="badge bg-gradient-info me-1"><span id="observationsCount">0</span> observations</span>
+                            <span class="badge bg-gradient-danger me-1"><span id="heartbeatsCount">0</span> heartbeats</span>
+                            <span class="badge bg-gradient-warning"><span id="consensusCount">0</span> consensus</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-0" style="height: 100px; overflow: hidden;">
+                    <svg id="streamVisualization" width="100%" height="100"></svg>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Management Panels Row -->
+    <div class="row g-4 mb-4">
+        <!-- Pool Management Panel -->
+        <div class="col-xl-6 col-12">
+            <div class="card">
+                <div class="management-panel">
+                    <div class="panel-header" onclick="togglePanel('poolPanel')">
+                        <h6>
+                            <i class="material-icons me-2" style="font-size: 20px; vertical-align: middle; color: #06b6d4;">pool</i>
+                            Pool Management
+                        </h6>
+                        <i class="material-icons toggle-icon">expand_more</i>
+                    </div>
+                    <div class="panel-body" id="poolPanel">
+                        <!-- My Pool Status -->
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <p class="text-muted small mb-1">My Pool Status</p>
+                                <div id="myPoolStatus">
+                                    <span class="badge bg-gradient-secondary">Not Operating</span>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <p class="text-muted small mb-1">Pool Size Limit</p>
+                                <p id="myPoolSize" class="mb-0">--</p>
+                            </div>
+                        </div>
+
+                        <!-- Pool Toggle -->
+                        <div class="mb-3 p-2 border rounded">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="poolOpenToggle" onchange="togglePoolOpen();">
+                                <label class="form-check-label" for="poolOpenToggle">
+                                    Accept Pool Contributions
+                                </label>
+                            </div>
+                        </div>
+
+                        <hr>
+
+                        <!-- Join a Pool -->
+                        <p class="text-muted small mb-2">Join a Pool</p>
+                        <div class="input-group input-group-sm mb-3">
+                            <input type="text" id="joinPoolAddress" class="form-control" placeholder="Pool address (34 chars)" maxlength="34">
+                            <button class="btn btn-outline-primary" onclick="joinPool();">Join</button>
+                        </div>
+
+                        <!-- Current Lending -->
+                        <div class="row">
+                            <div class="col-6">
+                                <p class="text-muted small mb-1">Currently Lending To</p>
+                                <p id="lendingTo" class="mb-0" style="font-family: monospace; font-size: 10px;">--</p>
+                            </div>
+                            <div class="col-6 text-end">
+                                <button class="btn btn-outline-danger btn-sm" onclick="leavePool();" id="leavePoolBtn" disabled>
+                                    <i class="material-icons align-middle" style="font-size: 14px;">exit_to_app</i> Leave Pool
+                                </button>
+                            </div>
+                        </div>
+
+                        <hr>
+
+                        <!-- Pool Contributors (if operating) -->
+                        <p class="text-muted small mb-2">Pool Contributors (<span id="poolContributorCount">0</span>)</p>
+                        <div id="poolContributorsList" style="max-height: 150px; overflow-y: auto; font-size: 11px;">
+                            <span class="text-muted">No contributors</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delegation Management Panel -->
+        <div class="col-xl-6 col-12">
+            <div class="card">
+                <div class="management-panel">
+                    <div class="panel-header" onclick="togglePanel('delegationPanel')">
+                        <h6>
+                            <i class="material-icons me-2" style="font-size: 20px; vertical-align: middle; color: #f59e0b;">people</i>
+                            Delegation Management
+                        </h6>
+                        <i class="material-icons toggle-icon">expand_more</i>
+                    </div>
+                    <div class="panel-body" id="delegationPanel">
+                        <!-- Add Worker -->
+                        <p class="text-muted small mb-2">Stake for Address (become delegate)</p>
+                        <div class="input-group input-group-sm mb-3">
+                            <input type="text" id="stakeForAddress" class="form-control" placeholder="Worker address (34 chars)" maxlength="34">
+                            <button class="btn btn-outline-success" onclick="addWorker();">Add Worker</button>
+                        </div>
+
+                        <!-- Worker Reward -->
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <p class="text-muted small mb-1">Worker Reward %</p>
+                                <div class="input-group input-group-sm">
+                                    <input type="number" id="workerRewardPct" class="form-control" placeholder="0-100" min="0" max="100">
+                                    <button class="btn btn-outline-primary" onclick="setWorkerReward();">Set</button>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <p class="text-muted small mb-1">Current Offer</p>
+                                <p id="currentWorkerReward" class="mb-0">--</p>
+                            </div>
+                        </div>
+
+                        <hr>
+
+                        <!-- My Delegate -->
+                        <div class="mb-3">
+                            <p class="text-muted small mb-1">I'm Delegating To</p>
+                            <div id="delegatingTo">
+                                <span>Not delegating</span>
+                            </div>
+                        </div>
+
+                        <hr>
+
+                        <!-- Proxy Children (Workers) -->
+                        <p class="text-muted small mb-2">My Workers / Proxy Children (<span id="proxyChildCount">0</span>)</p>
+                        <div id="proxyChildrenList" style="max-height: 200px; overflow-y: auto; font-size: 11px;">
+                            <span class="text-muted">No workers</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Consensus Timeline & Activity Chart -->
+    <div class="row g-4 mb-4">
+        <div class="col-xl-6 col-12">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0">Consensus Pipeline</h6>
+                </div>
+                <div class="card-body">
+                    <div class="timeline">
+                        <div class="timeline-block">
+                            <span id="phase1Dot" class="timeline-step bg-gradient-secondary">
+                                <i class="material-icons" style="font-size: 16px;">visibility</i>
+                            </span>
+                            <div class="timeline-content">
+                                <h6 class="small mb-0">Observation</h6>
+                                <p class="text-muted small mb-0" id="phase1Status">Waiting</p>
+                            </div>
+                        </div>
+                        <div class="timeline-block">
+                            <span id="phase2Dot" class="timeline-step bg-gradient-secondary">
+                                <i class="material-icons" style="font-size: 16px;">calculate</i>
+                            </span>
+                            <div class="timeline-content">
+                                <h6 class="small mb-0">Score Calculation</h6>
+                                <p class="text-muted small mb-0" id="phase2Status">Pending</p>
+                            </div>
+                        </div>
+                        <div class="timeline-block">
+                            <span id="phase3Dot" class="timeline-step bg-gradient-secondary">
+                                <i class="material-icons" style="font-size: 16px;">how_to_vote</i>
+                            </span>
+                            <div class="timeline-content">
+                                <h6 class="small mb-0">Voting</h6>
+                                <p class="text-muted small mb-0" id="phase3Status">Pending</p>
+                                <div class="progress mt-1" style="height: 4px; width: 150px; background: var(--bg-input);">
+                                    <div id="votingProgress" class="progress-bar bg-gradient-info" style="width: 0%"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="timeline-block">
+                            <span id="phase4Dot" class="timeline-step bg-gradient-secondary">
+                                <i class="material-icons" style="font-size: 16px;">draw</i>
+                            </span>
+                            <div class="timeline-content">
+                                <h6 class="small mb-0">Signing (3/5)</h6>
+                                <p class="text-muted small mb-0" id="phase4Status">Pending</p>
+                                <div id="signatureIndicators" class="mt-1">
+                                    <span class="badge bg-gradient-secondary me-1">1</span>
+                                    <span class="badge bg-gradient-secondary me-1">2</span>
+                                    <span class="badge bg-gradient-secondary me-1">3</span>
+                                    <span class="badge bg-gradient-secondary me-1">4</span>
+                                    <span class="badge bg-gradient-secondary">5</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="timeline-block">
+                            <span id="phase5Dot" class="timeline-step bg-gradient-secondary">
+                                <i class="material-icons" style="font-size: 16px;">send</i>
+                            </span>
+                            <div class="timeline-content">
+                                <h6 class="small mb-0">Distribution</h6>
+                                <p class="text-muted small mb-0" id="phase5Status">Pending</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-6 col-12">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h6 class="mb-0">Network Activity (24h)</h6>
+                </div>
+                <div class="card-body">
+                    <canvas id="activityChart" height="220"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Mode Selector Modal -->
+<div id="modeModal" class="mode-modal">
+    <div class="mode-modal-content card">
+        <h5 class="mb-3">
+            <i class="material-icons align-middle me-2">settings_ethernet</i>
+            Network Mode
+        </h5>
+        <hr style="border-color: var(--border-color);">
+        <div class="mode-option">
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="modeSelect" id="modeCentralSelect" value="central">
+                <label class="form-check-label" for="modeCentralSelect">
+                    <strong>Central</strong>
+                    <br><small class="text-muted">Use central servers only. Most stable.</small>
+                </label>
+            </div>
+        </div>
+        <div class="mode-option recommended">
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="modeSelect" id="modeHybridSelect" value="hybrid">
+                <label class="form-check-label" for="modeHybridSelect">
+                    <strong>Hybrid</strong> <span class="badge bg-gradient-primary ms-2">Recommended</span>
+                    <br><small class="text-muted">P2P with central fallback.</small>
+                </label>
+            </div>
+        </div>
+        <div class="mode-option">
+            <div class="form-check">
+                <input class="form-check-input" type="radio" name="modeSelect" id="modeP2PSelect" value="p2p">
+                <label class="form-check-label" for="modeP2PSelect">
+                    <strong>Pure P2P</strong>
+                    <br><small class="text-muted">Fully decentralized.</small>
+                </label>
+            </div>
+        </div>
+        <p class="text-warning small mt-3 mb-3">
+            <i class="material-icons align-middle" style="font-size: 16px;">warning</i>
+            Requires restart to take effect
+        </p>
+        <div class="text-end">
+            <button onclick="hideModeSelector();" class="btn btn-outline-secondary btn-sm">Cancel</button>
+            <button onclick="saveNetworkMode();" class="btn btn-primary btn-sm ms-2">Save & Restart</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // ============================================
+    // GLOBAL STATE
+    // ============================================
+    let socket = null;
+    let networkGraph = null;
+    let activityChart = null;
+    let graphData = { nodes: [], links: [] };
+    let visibleNodeTypes = new Set(['you', 'oracle', 'signer', 'pool-operator', 'delegate', 'charity', 'predictor']);
+    let visibleEdgeTypes = new Set(['p2p', 'lending', 'delegation']);
+
+    // Counters
+    let counters = {
+        predictions: 0,
+        observations: 0,
+        heartbeats: 0,
+        consensus: 0
+    };
+
+    // Event tracking
+    let lastSeenHeartbeats = {};
+    let eventFeedItems = [];
+    const MAX_EVENTS = 50;
+
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+    document.addEventListener('DOMContentLoaded', function() {
+        // Apply stored theme
+        const storedTheme = localStorage.getItem('satori-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', storedTheme);
+        const icon = document.getElementById('themeIcon');
+        if (icon) {
+            icon.textContent = storedTheme === 'dark' ? 'light_mode' : 'dark_mode';
+        }
+
+        initWebSocket();
+        initNetworkGraph();
+        initStreamVisualization();
+        initActivityChart();
+        refreshAllData();
+
+        // Fallback polling (in case WebSocket fails)
+        setInterval(pollHeartbeats, 5000);
+        setInterval(refreshAllData, 30000);
+    });
+
+    // ============================================
+    // WEBSOCKET CONNECTION
+    // ============================================
+    function initWebSocket() {
+        try {
+            socket = io();
+
+            socket.on('connect', function() {
+                console.log('WebSocket connected');
+                updateWsStatus(true);
+                addEvent('system', 'Connected to server');
+            });
+
+            socket.on('disconnect', function() {
+                console.log('WebSocket disconnected');
+                updateWsStatus(false);
+                addEvent('system', 'Disconnected from server');
+            });
+
+            // Network events
+            socket.on('network.heartbeat', function(data) {
+                handleHeartbeat(data);
+            });
+
+            socket.on('network.prediction', function(data) {
+                handlePrediction(data);
+            });
+
+            socket.on('network.observation', function(data) {
+                handleObservation(data);
+            });
+
+            socket.on('network.consensus.phase', function(data) {
+                handleConsensusPhase(data);
+            });
+
+            socket.on('network.consensus.vote', function(data) {
+                handleConsensusVote(data);
+            });
+
+            socket.on('network.consensus.signature', function(data) {
+                handleSignature(data);
+            });
+
+            // Pool/Delegation events
+            socket.on('pool.join', function(data) {
+                handlePoolJoin(data);
+            });
+
+            socket.on('pool.leave', function(data) {
+                handlePoolLeave(data);
+            });
+
+            socket.on('delegation.add', function(data) {
+                handleDelegationAdd(data);
+            });
+
+            socket.on('delegation.remove', function(data) {
+                handleDelegationRemove(data);
+            });
+
+            // Peer events
+            socket.on('peer.connect', function(data) {
+                handlePeerConnect(data);
+            });
+
+            socket.on('peer.disconnect', function(data) {
+                handlePeerDisconnect(data);
+            });
+
+        } catch (e) {
+            console.warn('WebSocket init failed:', e);
+            updateWsStatus(false);
+        }
+    }
+
+    function updateWsStatus(connected) {
+        const status = document.getElementById('wsStatus');
+        const dot = document.getElementById('wsStatusDot');
+        const text = document.getElementById('wsStatusText');
+        const indicator = document.getElementById('wsIndicator');
+
+        if (connected) {
+            status.className = 'ws-status connected';
+            dot.className = 'live-indicator connected';
+            indicator.className = 'live-indicator connected';
+            text.textContent = 'Live';
+        } else {
+            status.className = 'ws-status disconnected';
+            dot.className = 'live-indicator disconnected';
+            indicator.className = 'live-indicator disconnected';
+            text.textContent = 'Polling';
+        }
+    }
+
+    // ============================================
+    // EVENT HANDLERS
+    // ============================================
+    function handleHeartbeat(data) {
+        const key = data.node_id + '_' + data.timestamp;
+        if (lastSeenHeartbeats[key]) return;
+        lastSeenHeartbeats[key] = true;
+
+        counters.heartbeats++;
+        document.getElementById('heartbeatsCount').textContent = counters.heartbeats;
+
+        triggerNodePulse(data.node_id, 'heartbeat');
+        createStreamParticle('heartbeat');
+        addEvent('heartbeat', `Heartbeat from ${truncateId(data.node_id)}`);
+
+        // Cleanup old entries
+        const keys = Object.keys(lastSeenHeartbeats);
+        if (keys.length > 200) {
+            keys.slice(0, 100).forEach(k => delete lastSeenHeartbeats[k]);
+        }
+    }
+
+    function handlePrediction(data) {
+        counters.predictions++;
+        document.getElementById('predictionsCount').textContent = counters.predictions;
+
+        triggerNodePulse(data.node_id, 'prediction');
+        createStreamParticle('prediction');
+        addEvent('prediction', `Prediction from ${truncateId(data.node_id)}${data.stream ? ' on ' + data.stream : ''}`);
+    }
+
+    function handleObservation(data) {
+        counters.observations++;
+        document.getElementById('observationsCount').textContent = counters.observations;
+
+        triggerNodePulse(data.node_id, 'observation');
+        createStreamParticle('observation');
+        addEvent('observation', `Observation from ${truncateId(data.node_id)}`);
+    }
+
+    function handleConsensusPhase(data) {
+        updateConsensusTimeline(data.phase);
+        addEvent('consensus', `Consensus phase: ${data.phase}`);
+    }
+
+    function handleConsensusVote(data) {
+        counters.consensus++;
+        document.getElementById('consensusCount').textContent = counters.consensus;
+        createStreamParticle('consensus');
+        addEvent('consensus', `Vote from ${truncateId(data.node_id)}`);
+    }
+
+    function handleSignature(data) {
+        addEvent('consensus', `Signature ${data.index}/5 received`);
+        updateSignatureIndicator(data.index, true);
+    }
+
+    function handlePoolJoin(data) {
+        addEvent('pool', `${truncateId(data.address)} joined pool ${truncateId(data.pool)}`);
+        addRelationshipEdge(data.address, data.pool, 'lending');
+        loadPoolStatus();
+    }
+
+    function handlePoolLeave(data) {
+        addEvent('pool', `${truncateId(data.address)} left pool`);
+        removeRelationshipEdge(data.address, data.pool, 'lending');
+        loadPoolStatus();
+    }
+
+    function handleDelegationAdd(data) {
+        addEvent('delegation', `${truncateId(data.parent)} now delegates for ${truncateId(data.child)}`);
+        addRelationshipEdge(data.parent, data.child, 'delegation');
+        loadDelegationStatus();
+    }
+
+    function handleDelegationRemove(data) {
+        addEvent('delegation', `Delegation removed: ${truncateId(data.child)}`);
+        removeRelationshipEdge(data.parent, data.child, 'delegation');
+        loadDelegationStatus();
+    }
+
+    function handlePeerConnect(data) {
+        addEvent('system', `Peer connected: ${truncateId(data.peer_id)}`);
+        addNodeToGraph(data);
+        document.getElementById('totalPeers').textContent =
+            parseInt(document.getElementById('totalPeers').textContent) + 1;
+    }
+
+    function handlePeerDisconnect(data) {
+        addEvent('system', `Peer disconnected: ${truncateId(data.peer_id)}`);
+        removeNodeFromGraph(data.peer_id);
+        document.getElementById('totalPeers').textContent =
+            Math.max(0, parseInt(document.getElementById('totalPeers').textContent) - 1);
+    }
+
+    // ============================================
+    // EVENT FEED
+    // ============================================
+    function addEvent(type, message) {
+        const feed = document.getElementById('eventFeed');
+        const time = new Date().toLocaleTimeString();
+
+        const eventHtml = `
+            <div class="event-item event-${type}">
+                <div class="d-flex justify-content-between">
+                    <span>${message}</span>
+                    <span class="event-time">${time}</span>
+                </div>
+            </div>
+        `;
+
+        // Remove placeholder if exists
+        const placeholder = feed.querySelector('.text-center');
+        if (placeholder) placeholder.remove();
+
+        // Add new event at top
+        feed.insertAdjacentHTML('afterbegin', eventHtml);
+
+        // Limit events
+        eventFeedItems.push({ type, message, time });
+        if (eventFeedItems.length > MAX_EVENTS) {
+            eventFeedItems.shift();
+            const items = feed.querySelectorAll('.event-item');
+            if (items.length > MAX_EVENTS) {
+                items[items.length - 1].remove();
+            }
+        }
+    }
+
+    function clearEventFeed() {
+        const feed = document.getElementById('eventFeed');
+        feed.innerHTML = `
+            <div class="text-muted text-center py-3">
+                <i class="material-icons" style="font-size: 24px;">hourglass_empty</i>
+                <p class="mb-0 mt-1">Waiting for events...</p>
+            </div>
+        `;
+        eventFeedItems = [];
+    }
+
+    // ============================================
+    // NETWORK GRAPH (D3.js)
+    // ============================================
+    function initNetworkGraph() {
+        const container = document.getElementById('networkGraph');
+        const width = container.clientWidth;
+        const height = 500;
+
+        const svg = d3.select('#networkGraph')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+
+        // Gradient definitions
+        const defs = svg.append('defs');
+
+        const myGradient = defs.append('radialGradient')
+            .attr('id', 'myNodeGradient');
+        myGradient.append('stop').attr('offset', '0%').attr('stop-color', '#5a5aff');
+        myGradient.append('stop').attr('offset', '100%').attr('stop-color', '#3a3acc');
+
+        // Arrow markers for directed edges
+        defs.append('marker')
+            .attr('id', 'arrowLending')
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 20)
+            .attr('refY', 0)
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('fill', '#aa44ff');
+
+        defs.append('marker')
+            .attr('id', 'arrowDelegation')
+            .attr('viewBox', '0 -5 10 10')
+            .attr('refX', 20)
+            .attr('refY', 0)
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('orient', 'auto')
+            .append('path')
+            .attr('d', 'M0,-5L10,0L0,5')
+            .attr('fill', '#00d4aa');
+
+        // Create groups
+        svg.append('g').attr('class', 'edges');
+        svg.append('g').attr('class', 'nodes');
+        svg.append('g').attr('class', 'packets');
+
+        // Initialize with placeholder
+        updateNetworkGraph(generatePlaceholderNetwork());
+    }
+
+    function generatePlaceholderNetwork() {
+        const nodes = [
+            { id: 'you', label: 'You', type: 'you', isMe: true },
+        ];
+
+        // Generate some sample nodes
+        const types = ['predictor', 'predictor', 'oracle', 'signer', 'pool-operator', 'predictor'];
+        for (let i = 1; i <= 8; i++) {
+            nodes.push({
+                id: `peer_${i}`,
+                label: `Peer ${i}`,
+                type: types[i % types.length],
+                isMe: false,
+                latency: Math.floor(Math.random() * 150) + 30
+            });
+        }
+
+        const links = [];
+        // Connect you to several peers
+        for (let i = 1; i <= 4; i++) {
+            links.push({ source: 'you', target: `peer_${i}`, type: 'p2p' });
+        }
+
+        // Add some peer-to-peer connections
+        links.push({ source: 'peer_1', target: 'peer_5', type: 'p2p' });
+        links.push({ source: 'peer_2', target: 'peer_6', type: 'p2p' });
+        links.push({ source: 'peer_3', target: 'peer_7', type: 'p2p' });
+
+        // Add relationship edges
+        links.push({ source: 'peer_5', target: 'peer_1', type: 'lending' });
+        links.push({ source: 'you', target: 'peer_3', type: 'delegation' });
+
+        return { nodes, links };
+    }
+
+    function updateNetworkGraph(data) {
+        graphData = data;
+        const svg = d3.select('#networkGraph svg');
+        const width = svg.node().clientWidth;
+        const height = 500;
+
+        // Filter based on visibility
+        const visibleNodes = data.nodes.filter(n => visibleNodeTypes.has(n.type));
+        const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
+        const visibleLinks = data.links.filter(l => {
+            const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+            const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+            return visibleNodeIds.has(sourceId) && visibleNodeIds.has(targetId) && visibleEdgeTypes.has(l.type);
+        });
+
+        // Update counters
+        const oracleCount = visibleNodes.filter(n => n.type === 'oracle').length;
+        const signerCount = visibleNodes.filter(n => n.type === 'signer').length;
+        const poolCount = visibleNodes.filter(n => n.type === 'pool-operator').length;
+
+        document.getElementById('oracleCount').textContent = oracleCount;
+        document.getElementById('signerCount').textContent = signerCount;
+        document.getElementById('poolCount').textContent = poolCount;
+
+        // Simulation
+        const simulation = d3.forceSimulation(visibleNodes)
+            .force('link', d3.forceLink(visibleLinks).id(d => d.id).distance(100))
+            .force('charge', d3.forceManyBody().strength(-300))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(35));
+
+        // Edges
+        const edges = svg.select('.edges')
+            .selectAll('line')
+            .data(visibleLinks, d => `${d.source.id || d.source}-${d.target.id || d.target}-${d.type}`)
+            .join('line')
+            .attr('class', d => `edge-${d.type}`)
+            .attr('marker-end', d => d.type === 'lending' ? 'url(#arrowLending)' : d.type === 'delegation' ? 'url(#arrowDelegation)' : null);
+
+        // Nodes
+        const nodes = svg.select('.nodes')
+            .selectAll('g.node')
+            .data(visibleNodes, d => d.id)
+            .join(
+                enter => {
+                    const g = enter.append('g').attr('class', 'node');
+
+                    g.append('circle')
+                        .attr('class', d => `node-circle node-${d.type}`)
+                        .attr('r', d => d.isMe ? 22 : 14)
+                        .attr('stroke', d => d.isMe ? '#fff' : 'rgba(255,255,255,0.3)')
+                        .attr('stroke-width', d => d.isMe ? 3 : 1);
+
+                    // Charity indicator
+                    g.filter(d => d.type === 'charity')
+                        .append('circle')
+                        .attr('r', 17)
+                        .attr('fill', 'none')
+                        .attr('stroke', '#996600')
+                        .attr('stroke-width', 2)
+                        .attr('stroke-dasharray', '3,3');
+
+                    g.append('text')
+                        .attr('class', 'node-label')
+                        .attr('dy', d => d.isMe ? 38 : 28)
+                        .attr('text-anchor', 'middle')
+                        .text(d => d.label || truncateId(d.id));
+
+                    // Role badge
+                    g.filter(d => d.type !== 'predictor' && !d.isMe)
+                        .append('text')
+                        .attr('class', 'node-role-badge')
+                        .attr('dy', -20)
+                        .attr('text-anchor', 'middle')
+                        .text(d => d.type.toUpperCase());
+
+                    return g;
+                },
+                update => update,
+                exit => exit.remove()
+            )
+            .call(d3.drag()
+                .on('start', dragstarted)
+                .on('drag', dragged)
+                .on('end', dragended));
+
+        simulation.on('tick', () => {
+            edges
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+
+            nodes.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+        function dragstarted(event, d) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            d.fx = d.x;
+            d.fy = d.y;
+        }
+
+        function dragged(event, d) {
+            d.fx = event.x;
+            d.fy = event.y;
+        }
+
+        function dragended(event, d) {
+            if (!event.active) simulation.alphaTarget(0);
+            d.fx = null;
+            d.fy = null;
+        }
+
+        // Animate data packets
+        animateDataPackets(svg, visibleLinks);
+    }
+
+    function triggerNodePulse(nodeId, type) {
+        const svg = d3.select('#networkGraph svg');
+        const nodesGroup = svg.select('.nodes');
+
+        nodesGroup.selectAll('g.node').each(function(d) {
+            if (d && (d.id === nodeId || (d.id && nodeId && d.id.includes(nodeId.substring(0, 8))))) {
+                const nodeGroup = d3.select(this);
+                const colors = {
+                    heartbeat: '#ff6b6b',
+                    prediction: '#00ff88',
+                    observation: '#00aaff'
+                };
+
+                const pulseRing = nodeGroup.append('circle')
+                    .attr('class', `${type}-ring`)
+                    .attr('r', 14)
+                    .attr('fill', 'none')
+                    .attr('stroke', colors[type] || '#fff')
+                    .attr('stroke-width', 3)
+                    .attr('opacity', 1);
+
+                pulseRing.transition()
+                    .duration(1000)
+                    .attr('r', 40)
+                    .attr('opacity', 0)
+                    .remove();
+            }
+        });
+    }
+
+    function addNodeToGraph(data) {
+        const node = {
+            id: data.peer_id,
+            label: truncateId(data.peer_id),
+            type: data.role || 'predictor',
+            isMe: false,
+            latency: data.latency || 0
+        };
+
+        graphData.nodes.push(node);
+        graphData.links.push({ source: 'you', target: data.peer_id, type: 'p2p' });
+
+        updateNetworkGraph(graphData);
+    }
+
+    function removeNodeFromGraph(peerId) {
+        graphData.nodes = graphData.nodes.filter(n => n.id !== peerId);
+        graphData.links = graphData.links.filter(l => {
+            const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+            const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+            return sourceId !== peerId && targetId !== peerId;
+        });
+
+        updateNetworkGraph(graphData);
+    }
+
+    function addRelationshipEdge(source, target, type) {
+        const exists = graphData.links.some(l => {
+            const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+            const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+            return sourceId === source && targetId === target && l.type === type;
+        });
+
+        if (!exists) {
+            graphData.links.push({ source, target, type });
+            updateNetworkGraph(graphData);
+        }
+    }
+
+    function removeRelationshipEdge(source, target, type) {
+        graphData.links = graphData.links.filter(l => {
+            const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+            const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+            return !(sourceId === source && targetId === target && l.type === type);
+        });
+
+        updateNetworkGraph(graphData);
+    }
+
+    function animateDataPackets(svg, links) {
+        const packets = svg.select('.packets');
+
+        function sendPacket() {
+            if (links.length === 0) return;
+
+            const link = links[Math.floor(Math.random() * links.length)];
+            if (!link.source || !link.target || link.source.x === undefined) return;
+
+            const colors = { p2p: '#00ff88', lending: '#aa44ff', delegation: '#00d4aa' };
+
+            const packet = packets.append('circle')
+                .attr('class', 'data-packet')
+                .attr('r', 3)
+                .attr('cx', link.source.x)
+                .attr('cy', link.source.y)
+                .attr('fill', colors[link.type] || '#00ff88');
+
+            packet.transition()
+                .duration(1000)
+                .attr('cx', link.target.x)
+                .attr('cy', link.target.y)
+                .remove();
+        }
+
+        setInterval(sendPacket, 800);
+    }
+
+    // ============================================
+    // LEGEND TOGGLE
+    // ============================================
+    function toggleNodeType(type) {
+        const item = document.querySelector(`.legend-item[data-type="${type}"]`);
+        if (visibleNodeTypes.has(type)) {
+            visibleNodeTypes.delete(type);
+            item.classList.add('hidden');
+        } else {
+            visibleNodeTypes.add(type);
+            item.classList.remove('hidden');
+        }
+        updateNetworkGraph(graphData);
+    }
+
+    function toggleEdgeType(type) {
+        const item = document.querySelector(`.legend-item[data-edge="${type}"]`);
+        if (visibleEdgeTypes.has(type)) {
+            visibleEdgeTypes.delete(type);
+            item.classList.add('hidden');
+        } else {
+            visibleEdgeTypes.add(type);
+            item.classList.remove('hidden');
+        }
+        updateNetworkGraph(graphData);
+    }
+
+    // ============================================
+    // STREAM VISUALIZATION
+    // ============================================
+    function initStreamVisualization() {
+        const svg = d3.select('#streamVisualization');
+        const width = svg.node().clientWidth || 800;
+        const height = 100;
+
+        const lanes = ['Predictions', 'Observations', 'Heartbeats', 'Consensus'];
+        const laneHeight = height / lanes.length;
+
+        lanes.forEach((lane, i) => {
+            svg.append('line')
+                .attr('x1', 80)
+                .attr('y1', (i + 1) * laneHeight)
+                .attr('x2', width)
+                .attr('y2', (i + 1) * laneHeight)
+                .attr('stroke', 'rgba(255,255,255,0.1)')
+                .attr('stroke-dasharray', '5,5');
+
+            svg.append('text')
+                .attr('class', 'stream-lane-label')
+                .attr('x', 5)
+                .attr('y', i * laneHeight + laneHeight / 2 + 4)
+                .text(lane);
+        });
+
+        // Start ambient animation
+        setInterval(() => {
+            const lane = Math.floor(Math.random() * 4);
+            createStreamParticle(['prediction', 'observation', 'heartbeat', 'consensus'][lane]);
+        }, 500);
+    }
+
+    function createStreamParticle(type) {
+        const svg = d3.select('#streamVisualization');
+        const width = svg.node().clientWidth || 800;
+        const height = 100;
+        const laneHeight = height / 4;
+
+        const laneMap = { prediction: 0, observation: 1, heartbeat: 2, consensus: 3 };
+        const colorMap = { prediction: '#00ff88', observation: '#00aaff', heartbeat: '#ff6b6b', consensus: '#ffd700' };
+
+        const lane = laneMap[type] || 0;
+
+        const particle = svg.append('circle')
+            .attr('r', 4)
+            .attr('cx', 80)
+            .attr('cy', lane * laneHeight + laneHeight / 2)
+            .attr('fill', colorMap[type])
+            .style('filter', `drop-shadow(0 0 4px ${colorMap[type]})`);
+
+        particle.transition()
+            .duration(2500)
+            .ease(d3.easeLinear)
+            .attr('cx', width)
+            .remove();
+    }
+
+    // ============================================
+    // ACTIVITY CHART
+    // ============================================
+    function initActivityChart() {
+        const ctx = document.getElementById('activityChart').getContext('2d');
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const textColor = isDark ? '#fff' : '#344767';
+
+        const labels = [];
+        const now = new Date();
+        for (let i = 23; i >= 0; i--) {
+            labels.push((now.getHours() - i + 24) % 24 + ':00');
+        }
+
+        activityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Predictions',
+                        data: Array(24).fill(0).map(() => Math.floor(Math.random() * 80) + 20),
+                        borderColor: '#00ff88',
+                        backgroundColor: 'rgba(0, 255, 136, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Peers',
+                        data: Array(24).fill(0).map(() => Math.floor(Math.random() * 15) + 5),
+                        borderColor: '#5a5aff',
+                        backgroundColor: 'rgba(90, 90, 255, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: { color: textColor, usePointStyle: true }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { color: textColor } },
+                    y: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: textColor } }
+                }
+            }
+        });
+    }
+
+    // ============================================
+    // CONSENSUS TIMELINE
+    // ============================================
+    function updateConsensusTimeline(phase) {
+        const phases = ['observation', 'calculation', 'voting', 'signing', 'distribution'];
+        const dots = ['phase1Dot', 'phase2Dot', 'phase3Dot', 'phase4Dot', 'phase5Dot'];
+        const currentIndex = phases.indexOf(phase.toLowerCase());
+
+        dots.forEach((dotId, index) => {
+            const dot = document.getElementById(dotId);
+            if (index < currentIndex) {
+                dot.className = 'timeline-step bg-gradient-success';
+            } else if (index === currentIndex) {
+                dot.className = 'timeline-step bg-gradient-info';
+            } else {
+                dot.className = 'timeline-step bg-gradient-secondary';
+            }
+        });
+    }
+
+    function updateSignatureIndicator(index, signed) {
+        const indicators = document.querySelectorAll('#signatureIndicators .badge');
+        if (indicators[index - 1]) {
+            indicators[index - 1].className = signed ? 'badge bg-gradient-success me-1' : 'badge bg-gradient-secondary me-1';
+        }
+    }
+
+    // ============================================
+    // DATA FETCHING
+    // ============================================
+    function refreshAllData() {
+        fetchP2PStatus();
+        loadPoolStatus();
+        loadDelegationStatus();
+    }
+
+    function fetchP2PStatus() {
+        fetch('/api/p2p-status', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('totalPeers').textContent = data.peer_count || 0;
+
+                if (data.peer_id) {
+                    document.getElementById('myPeerId').textContent = data.peer_id;
+                }
+
+                const natStatus = data.nat_type || 'Unknown';
+                document.getElementById('myNatStatus').textContent = natStatus;
+                document.getElementById('myNatStatus').className = 'badge badge-sm ' +
+                    (natStatus === 'Public' ? 'bg-gradient-success' : 'bg-gradient-warning');
+
+                const mode = data.networking_mode || 'central';
+                const modeEl = document.getElementById('networkMode');
+                const modeColors = { central: 'secondary', hybrid: 'info', p2p: 'success' };
+                modeEl.innerHTML = `<span class="badge bg-gradient-${modeColors[mode] || 'info'}">${mode.charAt(0).toUpperCase() + mode.slice(1)}</span>`;
+
+                const modeRadio = document.querySelector(`input[name="modeSelect"][value="${mode}"]`);
+                if (modeRadio) modeRadio.checked = true;
+
+                if (data.avg_latency !== undefined) {
+                    document.getElementById('avgLatency').textContent = data.avg_latency + 'ms';
+                }
+
+                // Update graph with real peer data
+                if (data.peers && data.peers.length > 0) {
+                    const newGraphData = {
+                        nodes: [{ id: 'you', label: 'You', type: 'you', isMe: true }],
+                        links: []
+                    };
+
+                    data.peers.forEach(peer => {
+                        newGraphData.nodes.push({
+                            id: peer.id,
+                            label: truncateId(peer.id),
+                            type: peer.role || 'predictor',
+                            isMe: false,
+                            latency: peer.latency
+                        });
+                        newGraphData.links.push({ source: 'you', target: peer.id, type: 'p2p' });
+                    });
+
+                    // Add relationship edges if available
+                    if (data.lending_relationships) {
+                        data.lending_relationships.forEach(rel => {
+                            newGraphData.links.push({ source: rel.lender, target: rel.pool, type: 'lending' });
+                        });
+                    }
+
+                    if (data.delegation_relationships) {
+                        data.delegation_relationships.forEach(rel => {
+                            newGraphData.links.push({ source: rel.parent, target: rel.child, type: 'delegation' });
+                        });
+                    }
+
+                    updateNetworkGraph(newGraphData);
+                }
+            })
+            .catch(error => console.error('Error fetching P2P status:', error));
+    }
+
+    function pollHeartbeats() {
+        fetch('/api/p2p/heartbeats?limit=10', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.heartbeats || data.heartbeats.length === 0) return;
+
+                data.heartbeats.forEach(hb => {
+                    const key = hb.node_id + '_' + hb.timestamp;
+                    if (!lastSeenHeartbeats[key]) {
+                        lastSeenHeartbeats[key] = true;
+                        counters.heartbeats++;
+                        document.getElementById('heartbeatsCount').textContent = counters.heartbeats;
+                        triggerNodePulse(hb.node_id, 'heartbeat');
+                        createStreamParticle('heartbeat');
+                    }
+                });
+            })
+            .catch(() => {});
+    }
+
+    // ============================================
+    // POOL MANAGEMENT
+    // ============================================
+    function loadPoolStatus() {
+        fetch('/api/p2p/pools', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                // My pool status
+                const statusEl = document.getElementById('myPoolStatus');
+                const toggle = document.getElementById('poolOpenToggle');
+
+                if (data.my_pool && data.my_pool.accepting) {
+                    statusEl.innerHTML = '<span class="badge bg-gradient-success">Accepting</span>';
+                    toggle.checked = true;
+                    if (data.my_pool.pool_size_limit) {
+                        document.getElementById('myPoolSize').textContent = data.my_pool.pool_size_limit.toFixed(2) + ' SATORI';
+                    }
+                } else {
+                    statusEl.innerHTML = '<span class="badge bg-gradient-secondary">Not Operating</span>';
+                    toggle.checked = false;
+                }
+
+                // Lending to
+                const lendingEl = document.getElementById('lendingTo');
+                const leaveBtn = document.getElementById('leavePoolBtn');
+
+                if (data.lending_to) {
+                    lendingEl.textContent = truncateId(data.lending_to);
+                    leaveBtn.disabled = false;
+                } else {
+                    lendingEl.textContent = 'Not lending';
+                    leaveBtn.disabled = true;
+                }
+
+                // Pool contributors
+                if (data.pool_contributors) {
+                    renderPoolContributors(data.pool_contributors);
+                }
+            })
+            .catch(error => console.error('Pool status error:', error));
+    }
+
+    function renderPoolContributors(contributors) {
+        const container = document.getElementById('poolContributorsList');
+        const countEl = document.getElementById('poolContributorCount');
+
+        if (!contributors || contributors.length === 0) {
+            container.innerHTML = '<span class="text-muted">No contributors</span>';
+            countEl.textContent = '0';
+            return;
+        }
+
+        countEl.textContent = contributors.length;
+        let html = '<div class="table-responsive"><table class="table table-sm mb-0"><tbody>';
+
+        contributors.forEach(c => {
+            html += `
+                <tr>
+                    <td style="font-family: monospace; font-size: 10px;">${truncateId(c.address)}</td>
+                    <td class="text-end">${c.amount ? c.amount.toFixed(2) : '--'}</td>
+                    <td class="text-end">
+                        <button class="btn btn-link btn-sm p-0 text-danger" onclick="removeContributor('${c.address}');" title="Remove">
+                            <i class="material-icons" style="font-size: 16px;">remove_circle</i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    }
+
+    function togglePoolOpen() {
+        const isOpen = document.getElementById('poolOpenToggle').checked;
+        const endpoint = isOpen ? '/pool/lend/enable' : '/pool/lend/disable';
+
+        fetch(endpoint, { method: 'GET' })
+            .then(response => {
+                if (response.ok) {
+                    addEvent('pool', isOpen ? 'Pool opened' : 'Pool closed');
+                    loadPoolStatus();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function joinPool() {
+        const address = document.getElementById('joinPoolAddress').value.trim();
+        if (address.length !== 34) {
+            alert('Please enter a valid 34-character address');
+            return;
+        }
+
+        fetch('/lend/to/address/' + address, { method: 'GET' })
+            .then(response => response.text())
+            .then(text => {
+                if (text === 'OK') {
+                    addEvent('pool', `Joined pool ${truncateId(address)}`);
+                    document.getElementById('joinPoolAddress').value = '';
+                    loadPoolStatus();
+                } else {
+                    alert('Unable to join pool: ' + text);
+                }
+            })
+            .catch(error => alert('Error: ' + error));
+    }
+
+    function leavePool() {
+        if (!confirm('Leave current pool?')) return;
+
+        fetch('/lend/remove', { method: 'GET' })
+            .then(response => response.text())
+            .then(text => {
+                addEvent('pool', 'Left pool');
+                loadPoolStatus();
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function removeContributor(address) {
+        if (!confirm('Remove contributor ' + truncateId(address) + '?')) return;
+
+        fetch('/pool/addresses/remove', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ address: address })
+        })
+        .then(response => {
+            if (response.ok) {
+                addEvent('pool', `Removed ${truncateId(address)} from pool`);
+                loadPoolStatus();
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    }
+
+    // ============================================
+    // DELEGATION MANAGEMENT
+    // ============================================
+    function loadDelegationStatus() {
+        fetch('/api/p2p/delegations', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                // My delegate
+                const delegateEl = document.getElementById('delegatingTo');
+                if (data.my_delegate) {
+                    const addr = data.my_delegate.parent_address || data.my_delegate;
+                    delegateEl.innerHTML = `
+                        <code style="font-size: 10px;">${truncateId(addr)}</code>
+                        <span class="badge badge-sm ${data.my_delegate.charity ? 'bg-gradient-warning' : 'bg-gradient-info'} ms-1">
+                            ${data.my_delegate.charity ? 'Charity' : 'Standard'}
+                        </span>
+                    `;
+                } else {
+                    delegateEl.innerHTML = '<span>Not delegating</span>';
+                }
+
+                // Worker reward
+                if (data.worker_reward_pct !== undefined) {
+                    document.getElementById('currentWorkerReward').textContent = data.worker_reward_pct + '%';
+                }
+
+                // Proxy children
+                renderProxyChildren(data.my_children);
+            })
+            .catch(error => console.error('Delegation error:', error));
+    }
+
+    function renderProxyChildren(children) {
+        const container = document.getElementById('proxyChildrenList');
+        const countEl = document.getElementById('proxyChildCount');
+
+        if (!children || children.length === 0) {
+            container.innerHTML = '<span class="text-muted">No workers</span>';
+            countEl.textContent = '0';
+            return;
+        }
+
+        countEl.textContent = children.length;
+        let html = '<div class="table-responsive"><table class="table table-sm mb-0"><tbody>';
+
+        children.forEach(child => {
+            const addr = child.child_address || child.address;
+            html += `
+                <tr>
+                    <td style="font-family: monospace; font-size: 10px;">${truncateId(addr)}</td>
+                    <td>${child.pointed ? 'Pointed' : 'No'}</td>
+                    <td>
+                        <span class="badge badge-sm ${child.charity ? 'bg-gradient-warning' : 'bg-gradient-secondary'}">
+                            ${child.charity ? 'Charity' : (child.amount ? child.amount.toFixed(2) : '--')}
+                        </span>
+                    </td>
+                    <td class="text-end">
+                        <button class="btn btn-link btn-sm p-0 ${child.charity ? 'text-warning' : 'text-muted'}"
+                                onclick="toggleCharity('${addr}', ${child.child}, ${child.charity});" title="${child.charity ? 'Remove charity' : 'Mark as charity'}">
+                            <i class="material-icons" style="font-size: 14px;">volunteer_activism</i>
+                        </button>
+                        <button class="btn btn-link btn-sm p-0 text-danger" onclick="removeWorker('${addr}', ${child.child});" title="Remove">
+                            <i class="material-icons" style="font-size: 14px;">remove_circle</i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    }
+
+    function addWorker() {
+        const address = document.getElementById('stakeForAddress').value.trim();
+        if (address.length !== 34) {
+            alert('Please enter a valid 34-character address');
+            return;
+        }
+
+        fetch('/stake/for/address/' + address, { method: 'GET' })
+            .then(response => response.text())
+            .then(text => {
+                if (text === 'OK') {
+                    addEvent('delegation', `Added worker ${truncateId(address)}`);
+                    document.getElementById('stakeForAddress').value = '';
+                    loadDelegationStatus();
+                } else {
+                    alert('Unable to add worker: ' + text);
+                }
+            })
+            .catch(error => alert('Error: ' + error));
+    }
+
+    function setWorkerReward() {
+        const pct = document.getElementById('workerRewardPct').value;
+        if (pct === '' || pct < 0 || pct > 100) {
+            alert('Please enter a value between 0 and 100');
+            return;
+        }
+
+        fetch('/pool/worker/reward/set/' + pct, { method: 'GET' })
+            .then(response => response.text())
+            .then(text => {
+                if (text === 'OK') {
+                    addEvent('delegation', `Worker reward set to ${pct}%`);
+                    document.getElementById('currentWorkerReward').textContent = pct + '%';
+                } else {
+                    alert('Unable to set: ' + text);
+                }
+            })
+            .catch(error => alert('Error: ' + error));
+    }
+
+    function toggleCharity(address, childId, isCharity) {
+        const endpoint = isCharity ? `/proxy/child/no_charity/${address}/${childId}` : `/proxy/child/charity/${address}/${childId}`;
+
+        fetch(endpoint, { method: 'GET' })
+            .then(response => {
+                if (response.ok) {
+                    addEvent('delegation', `${isCharity ? 'Removed charity status' : 'Marked as charity'}: ${truncateId(address)}`);
+                    loadDelegationStatus();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    function removeWorker(address, childId) {
+        if (!confirm('Remove worker ' + truncateId(address) + '?')) return;
+
+        fetch(`/proxy/child/remove/${address}/${childId}`, { method: 'GET' })
+            .then(response => {
+                if (response.ok) {
+                    addEvent('delegation', `Removed worker ${truncateId(address)}`);
+                    loadDelegationStatus();
+                }
+            })
+            .catch(error => console.error('Error:', error));
+    }
+
+    // ============================================
+    // PANEL TOGGLE
+    // ============================================
+    function togglePanel(panelId) {
+        const panel = document.getElementById(panelId);
+        const header = panel.previousElementSibling;
+
+        if (panel.classList.contains('show')) {
+            panel.classList.remove('show');
+            header.classList.add('collapsed');
+        } else {
+            panel.classList.add('show');
+            header.classList.remove('collapsed');
+        }
+    }
+
+    // ============================================
+    // MODE SELECTOR
+    // ============================================
+    function showModeSelector() {
+        document.getElementById('modeModal').style.display = 'block';
+    }
+
+    function hideModeSelector() {
+        document.getElementById('modeModal').style.display = 'none';
+    }
+
+    function saveNetworkMode() {
+        const selected = document.querySelector('input[name="modeSelect"]:checked');
+        if (!selected) {
+            alert('Please select a mode');
+            return;
+        }
+
+        fetch('/api/networking-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: selected.value })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                hideModeSelector();
+                if (confirm('Mode updated. Restart now?')) {
+                    window.location.href = '/restart';
+                }
+            } else {
+                alert('Failed: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(error => alert('Error: ' + error));
+    }
+
+    // ============================================
+    // UTILITIES
+    // ============================================
+    function truncateId(id) {
+        if (!id) return '--';
+        if (id.length <= 12) return id;
+        return id.substring(0, 8) + '...' + id.substring(id.length - 4);
+    }
+
+    function toggleFullscreen() {
+        const elem = document.documentElement;
+        if (!document.fullscreenElement) {
+            elem.requestFullscreen().catch(err => console.log(err));
+        } else {
+            document.exitFullscreen();
+        }
+    }
+
+    // Close modal on outside click
+    window.onclick = function(event) {
+        const modal = document.getElementById('modeModal');
+        if (event.target === modal) {
+            hideModeSelector();
+        }
+    }
+</script>
+{% endblock %}
