@@ -268,7 +268,7 @@
                             </div>
                         </span>
                         <small class="form-text text-muted">
-                            Commission you pay to lenders. Empty or 0 = pool closed. 1-100 = pool open with that commission %.
+                            Commission you pay to pool stakers. Empty or 0 = pool closed. 1-100 = pool open with that commission %.
                         </small>
                     </div>
                     <div class="mb-3">
@@ -287,9 +287,9 @@
                         </span>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Lenders</label>
+                        <label class="form-label">Pool Stakers</label>
                         <div id="lenderList" class="mb-3">
-                            <p class="text-muted">No lenders</p>
+                            <p class="text-muted">No pool stakers</p>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -301,21 +301,21 @@
                             </button>
                             <button class="btn btn-outline-primary btn-sm" onclick="downloadLendersAudit()">
                                 <i class="material-icons align-middle" style="font-size: 16px;">download</i>
-                                Download Lenders Audit
+                                Download Pool Stakers Audit
                             </button>
                         </div>
                         <small class="form-text text-muted">
-                            Download the latest audit files showing worker distributions and lender commissions.
+                            Download the latest audit files showing worker distributions and pool staker commissions.
                         </small>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Lender Payments</label>
+                        <label class="form-label">Pool Staker Payments</label>
                         <button class="btn btn-success btn-sm" onclick="payLenders()">
                             <i class="material-icons align-middle" style="font-size: 16px;">payments</i>
-                            Pay Lenders From Audit
+                            Pay Pool Stakers From Audit
                         </button>
                         <small class="form-text text-muted">
-                            Automatically pay your lenders based on the latest audit file (up to 1000 lenders in one transaction).
+                            Automatically pay your pool stakers based on the latest audit file (up to 1000 pool stakers in one transaction).
                         </small>
                     </div>
                 </div>
@@ -343,7 +343,7 @@
 
     // State tracking for mutual exclusion
     let isStakingToPool = false;
-    let isOpenPool = false;  // True if pool has commission > 0 (accepting lenders)
+    let isOpenPool = false;  // True if pool has commission > 0 (accepting pool stakers)
     let hasWorkers = false;  // True if user has workers (active pool)
 
     function showToast(message, isError = false) {
@@ -694,7 +694,7 @@
                 lenderListEl.appendChild(lenderItem);
             });
         } else {
-            lenderListEl.innerHTML = '<p class="text-muted">No lenders</p>';
+            lenderListEl.innerHTML = '<p class="text-muted">No pool stakers</p>';
         }
     }
 
@@ -765,7 +765,7 @@
 
             if (!response.ok) {
                 if (response.status === 404) {
-                    showToast('No lenders audit available yet', 'warning');
+                    showToast('No pool stakers audit available yet', 'warning');
                     return;
                 }
                 throw new Error(`HTTP ${response.status}`);
@@ -779,10 +779,10 @@
             const filename = `lenders_audit_${timestamp}.json`;
 
             downloadJSON(data, filename);
-            showToast('Lenders audit downloaded');
+            showToast('Pool stakers audit downloaded');
         } catch (error) {
-            console.error('Error downloading lenders audit:', error);
-            showToast('Failed to download lenders audit', 'error');
+            console.error('Error downloading pool stakers audit:', error);
+            showToast('Failed to download pool stakers audit', 'error');
         }
     }
 
@@ -814,7 +814,7 @@
             const myPool = audit.pools.find(p => p.pool_address === myAddress.wallet_address);
 
             if (!myPool || !myPool.lenders || myPool.lenders.length === 0) {
-                showToast('No lenders to pay', 'info');
+                showToast('No pool stakers to pay', 'info');
                 return;
             }
 
@@ -828,7 +828,7 @@
 
             const count = Object.keys(payments).length;
             if (count === 0) {
-                showToast('No lenders with amounts owed', 'info');
+                showToast('No pool stakers with amounts owed', 'info');
                 return;
             }
 
@@ -848,7 +848,7 @@
 
             // 5. Confirm with user
             const confirmMsg =
-                `Pay ${count} lenders a total of ${total.toFixed(8)} SATORI?\n\n` +
+                `Pay ${count} pool stakers a total of ${total.toFixed(8)} SATORI?\n\n` +
                 `Your balance: ${balance.vault_balance.toFixed(8)} SATORI\n` +
                 `EVR for fees: ${balance.vault_evr.toFixed(8)} EVR\n\n` +
                 `⚠️ This action cannot be undone!`;
@@ -858,7 +858,7 @@
             }
 
             // 6. Send payment
-            showToast('Sending payment to lenders...', 'info');
+            showToast('Sending payment to pool stakers...', 'info');
 
             const paymentResponse = await fetch('/api/lender/pay', {
                 method: 'POST',
@@ -871,10 +871,10 @@
             if (data.success) {
                 // 7. Show success
                 const explorerUrl = `https://evr.cryptoscope.io/tx/?hash=${data.txhash}`;
-                showToast(`✓ Paid ${data.lenders_paid} lenders!`, 'success');
+                showToast(`✓ Paid ${data.lenders_paid} pool stakers!`, 'success');
 
                 const resultMsg =
-                    `Successfully paid ${data.lenders_paid} lenders!\n\n` +
+                    `Successfully paid ${data.lenders_paid} pool stakers!\n\n` +
                     `Total: ${data.total_sent.toFixed(8)} SATORI\n\n` +
                     `Transaction: ${data.txhash}\n\n` +
                     `View on blockchain explorer:\n${explorerUrl}`;
@@ -888,8 +888,8 @@
             }
 
         } catch (error) {
-            console.error('Error paying lenders:', error);
-            showToast(`Failed to pay lenders: ${error.message}`, 'error');
+            console.error('Error paying pool stakers:', error);
+            showToast(`Failed to pay pool stakers: ${error.message}`, 'error');
         }
     }
 
