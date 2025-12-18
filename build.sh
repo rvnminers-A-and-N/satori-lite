@@ -10,6 +10,7 @@
 #   ./build.sh push             # Push :latest to Docker Hub
 #   ./build.sh push dev         # Push :dev to Docker Hub
 #   ./build.sh push latest dev  # Push multiple tags
+#   ./build.sh push all         # Push :latest + satorineuron:p2p & :latest
 #
 
 set -e
@@ -39,12 +40,18 @@ fi
 
 # Parse arguments
 PUSH_MODE=false
+PUSH_ALL=false
 TAGS=""
 TAG_LIST=""
 
 if [ "$1" = "push" ]; then
     PUSH_MODE=true
     shift
+    # Check for "all" command
+    if [ "$1" = "all" ]; then
+        PUSH_ALL=true
+        shift
+    fi
 fi
 
 # Get tags from remaining arguments, default to 'latest'
@@ -86,7 +93,37 @@ echo -e "${GREEN}======================================${NC}"
 echo -e "${GREEN}  Build Complete!${NC}"
 echo -e "${GREEN}======================================${NC}"
 echo ""
-if [ "$PUSH_MODE" = true ]; then
+
+# Handle "push all" - create satorineuron tags
+if [ "$PUSH_ALL" = true ]; then
+    echo -e "${BLUE}======================================${NC}"
+    echo -e "${BLUE}  Creating satorineuron tags${NC}"
+    echo -e "${BLUE}======================================${NC}"
+    echo ""
+
+    SOURCE_IMAGE="${IMAGE_NAME}:latest"
+    NEURON_IMAGE="satorinet/satorineuron"
+
+    echo -e "${GREEN}[INFO]${NC} Creating ${NEURON_IMAGE}:p2p from ${SOURCE_IMAGE}..."
+    docker buildx imagetools create -t "${NEURON_IMAGE}:p2p" "${SOURCE_IMAGE}"
+
+    echo -e "${GREEN}[INFO]${NC} Creating ${NEURON_IMAGE}:latest from ${SOURCE_IMAGE}..."
+    docker buildx imagetools create -t "${NEURON_IMAGE}:latest" "${SOURCE_IMAGE}"
+
+    echo ""
+    echo -e "${GREEN}======================================${NC}"
+    echo -e "${GREEN}  All Images Pushed!${NC}"
+    echo -e "${GREEN}======================================${NC}"
+    echo ""
+    echo "Pushed to Docker Hub:"
+    echo "  - ${IMAGE_NAME}:latest"
+    echo "  - ${NEURON_IMAGE}:p2p"
+    echo "  - ${NEURON_IMAGE}:latest"
+    echo ""
+    echo "Supported platforms:"
+    echo "  - linux/amd64 (Windows, Intel Macs, Linux)"
+    echo "  - linux/arm64 (Apple Silicon, ARM servers)"
+elif [ "$PUSH_MODE" = true ]; then
     echo "Pushed to Docker Hub:"
     for tag in "$@"; do
         echo "  - ${IMAGE_NAME}:$tag"
@@ -103,4 +140,5 @@ else
     echo "  ./build.sh push             # Push :latest"
     echo "  ./build.sh push dev         # Push :dev"
     echo "  ./build.sh push latest dev  # Push multiple tags"
+    echo "  ./build.sh push all         # Push all + satorineuron tags"
 fi

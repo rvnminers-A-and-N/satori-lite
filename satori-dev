@@ -5,8 +5,17 @@ CONTAINER_NAME="satori"
 # Dev mode - always mount local code
 IMAGE_TAG="dev"
 IMAGE="satorinet/satori-lite:${IMAGE_TAG}"
-CENTRAL_URL="http://137.184.38.13:8000"
-API_URL="http://137.184.38.13:8000"
+
+# Check if running in local mode
+if [ "$1" = "local" ] || [ "$2" = "local" ]; then
+    CENTRAL_URL="http://host.docker.internal:8000"
+    API_URL="http://host.docker.internal:8000"
+    echo "Using LOCAL central-lite at $CENTRAL_URL"
+else
+    CENTRAL_URL="http://137.184.38.13:8000"
+    API_URL="http://137.184.38.13:8000"
+    echo "Using REMOTE central-lite at $CENTRAL_URL"
+fi
 
 # Function to create data directories (in source code directories)
 create_data_dirs() {
@@ -47,7 +56,11 @@ create_container() {
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Satori Lite CLI - Development Mode"
     echo ""
-    echo "Usage: satori-dev [command]"
+    echo "Usage: satori-dev [local] [command]"
+    echo ""
+    echo "Flags:"
+    echo "  local       Connect to local central-lite (host.docker.internal:8000)"
+    echo "              Without this flag, connects to remote central-lite"
     echo ""
     echo "Commands:"
     echo "  (none)      Enter interactive CLI"
@@ -58,6 +71,11 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  status      Show container status"
     echo "  --help      Show this help"
     echo ""
+    echo "Examples:"
+    echo "  ./satori-dev local          # Start with local central-lite"
+    echo "  ./satori-dev local restart  # Restart with local central-lite"
+    echo "  ./satori-dev restart        # Restart with remote central-lite"
+    echo ""
     echo "Development mode mounts local code directories:"
     echo "  ./lib-lite, ./neuron-lite, ./engine-lite, ./web"
     echo ""
@@ -67,8 +85,15 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     exit 0
 fi
 
+# Determine the command (handle "local" flag)
+if [ "$1" = "local" ]; then
+    COMMAND="$2"
+else
+    COMMAND="$1"
+fi
+
 # Commands
-case "$1" in
+case "$COMMAND" in
     start)
         docker start $CONTAINER_NAME
         echo "Satori neuron started"
@@ -112,8 +137,8 @@ case "$1" in
         docker exec -it $CONTAINER_NAME python /Satori/Neuron/cli.py
         ;;
     *)
-        echo "Unknown command: $1"
-        echo "Run 'satori --help' for usage"
+        echo "Unknown command: $COMMAND"
+        echo "Run 'satori-dev --help' for usage"
         exit 1
         ;;
 esac

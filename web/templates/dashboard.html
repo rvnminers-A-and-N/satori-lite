@@ -284,15 +284,21 @@
         <!-- Pool Staking Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
-                <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#poolStakingCollapse"
+                     aria-expanded="false"
+                     aria-controls="poolStakingCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">handshake</i>
                         Pool Staking
                     </h5>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="loadAvailablePools()">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadAvailablePools()">
                         <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
                     </button>
                 </div>
+                <div class="collapse" id="poolStakingCollapse">
                 <div class="card-body">
                     <div class="mb-3">
                         <label class="form-label">Status</label>
@@ -322,18 +328,25 @@
                         </span>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
 
         <!-- Pool Management Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
-                <div class="card-header">
+                <div class="card-header"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#poolManagementCollapse"
+                     aria-expanded="false"
+                     aria-controls="poolManagementCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">groups</i>
                         Pool Management
                     </h5>
                 </div>
+                <div class="collapse" id="poolManagementCollapse">
                 <div class="card-body">
                     <div class="mb-3">
                         <label class="form-label">Lender Commission (%)</label>
@@ -348,7 +361,7 @@
                             </div>
                         </span>
                         <small class="form-text text-muted">
-                            Commission you pay to lenders. Empty or 0 = pool closed. 1-100 = pool open with that commission %.
+                            Commission you pay to pool stakers. Empty or 0 = pool closed. 1-100 = pool open with that commission %.
                         </small>
                     </div>
                     <div class="mb-3">
@@ -367,9 +380,9 @@
                         </span>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Lenders</label>
+                        <label class="form-label">Pool Stakers</label>
                         <div id="lenderList" class="mb-3">
-                            <p class="text-muted">No lenders</p>
+                            <p class="text-muted">No pool stakers</p>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -381,27 +394,87 @@
                             </button>
                             <button class="btn btn-outline-primary btn-sm" onclick="downloadLendersAudit()">
                                 <i class="material-icons align-middle" style="font-size: 16px;">download</i>
-                                Download Lenders Audit
+                                Download Pool Stakers Audit
                             </button>
                         </div>
                         <small class="form-text text-muted">
-                            Download the latest audit files showing worker distributions and lender commissions.
+                            Download the latest audit files showing worker distributions and pool staker commissions.
                         </small>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Lender Payments</label>
+                        <label class="form-label">Pool Staker Payments</label>
                         <button class="btn btn-success btn-sm" onclick="payLenders()">
                             <i class="material-icons align-middle" style="font-size: 16px;">payments</i>
-                            Pay Lenders From Audit
+                            Pay Pool Stakers From Audit
                         </button>
                         <small class="form-text text-muted">
-                            Automatically pay your lenders based on the latest audit file (up to 1000 lenders in one transaction).
+                            Automatically pay your pool stakers based on the latest audit file (up to 1000 pool stakers in one transaction).
                         </small>
                     </div>
+                </div>
                 </div>
             </div>
         </div>
 
+    </div>
+</div>
+
+<!-- Disclaimer Footer -->
+<div class="container-fluid py-3">
+    <div class="card">
+        <div class="card-header text-center"
+             style="cursor: pointer;"
+             data-bs-toggle="collapse"
+             data-bs-target="#disclaimerCollapse"
+             aria-expanded="false"
+             aria-controls="disclaimerCollapse">
+            <h6 class="mb-0 text-muted">
+                <i class="material-icons align-middle me-2" style="font-size: 18px;">info</i>
+                Disclaimer of Warranties and Limitation of Liability
+            </h6>
+        </div>
+        <div class="collapse" id="disclaimerCollapse">
+            <div class="card-body">
+                <div class="disclaimer-content" style="font-size: 0.85rem; line-height: 1.6;">
+                    <h6>1. DISCLAIMER OF WARRANTIES</h6>
+                    <p><strong>AS IS:</strong> The Satori Neuron software ("Software") is provided "AS IS" and "AS AVAILABLE" without warranties of any kind, whether express or implied, including but not limited to implied warranties of merchantability, fitness for a particular purpose, title, and non-infringement.</p>
+                    <p><strong>NO GUARANTEE:</strong> We do not guarantee that the Software will be uninterrupted, error-free, secure, or free of viruses or other harmful components.</p>
+                    <p><strong>USER RESPONSIBILITY:</strong> The user is solely responsible for any damage to their device or loss of data that results from the use of the Software.</p>
+
+                    <h6 class="mt-3">2. LIMITATION OF LIABILITY</h6>
+                    <p><strong>NO LIABILITY FOR DAMAGES:</strong> In no event shall The Satori Association or its affiliates, officers, directors, employees, agents, or licensors be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, whether incurred directly or indirectly, or any loss of data, use, goodwill, or other intangible losses, resulting from:</p>
+                    <ul>
+                        <li>Your use or inability to use the Software;</li>
+                        <li>Any unauthorized access to or use of the Software;</li>
+                        <li>Any interruption or cessation of transmission to or from the Software;</li>
+                        <li>Any bugs, viruses, trojan horses, or the like that may be transmitted to or through the Software by any third party;</li>
+                        <li>Any errors or omissions in any content or for any loss or damage incurred as a result of the use of any content posted, emailed, transmitted, or otherwise made available through the Software, whether based on warranty, contract, tort (including negligence), or any other legal theory, whether or not we have been informed of the possibility of such damage.</li>
+                    </ul>
+
+                    <h6 class="mt-3">3. MAXIMUM LIABILITY</h6>
+                    <p><strong>LIMITATION CAP:</strong> Our maximum aggregate liability under or in connection with the Software, whether in contract, tort (including negligence), or otherwise, shall in no circumstances exceed the amount paid by you, if any, for accessing or using the Software.</p>
+
+                    <h6 class="mt-3">4. EXCLUSIONS</h6>
+                    <p><strong>APPLICABLE LAW:</strong> Some jurisdictions do not allow the exclusion of certain warranties or the limitation or exclusion of liability for incidental or consequential damages. Accordingly, some of the above limitations may not apply to you. In such jurisdictions, our liability will be limited to the fullest extent permitted by applicable law.</p>
+
+                    <h6 class="mt-3">5. INDEMNIFICATION</h6>
+                    <p><strong>USER INDEMNITY:</strong> You agree to indemnify, defend, and hold harmless The Satori Association and its affiliates, officers, directors, employees, agents, and licensors from and against any claims, liabilities, damages, losses, and expenses, including, without limitation, reasonable legal and accounting fees, arising out of or in any way connected with your access to or use of the Software, or your violation of these terms.</p>
+
+                    <h6 class="mt-3">6. GOVERNING LAW</h6>
+                    <p><strong>SWISS LAW:</strong> This Disclaimer of Warranties and Limitation of Liability shall be governed by and construed in accordance with the laws of Switzerland, without regard to its conflict of laws principles.</p>
+
+                    <h6 class="mt-3">7. DISPUTE RESOLUTION</h6>
+                    <p><strong>MEDIATION FIRST:</strong> Any disputes arising under or in connection with this Disclaimer of Warranties and Limitation of Liability shall first be attempted to be resolved through mediation. The parties agree to submit the dispute to a mutually agreed-upon mediator in Switzerland. If mediation fails to resolve the dispute, it shall then be resolved in the courts of Switzerland.</p>
+
+                    <h6 class="mt-3">8. CONTACT INFORMATION</h6>
+                    <p>For any inquiries regarding this Disclaimer of Warranties and Limitation of Liability, please contact:</p>
+                    <p class="mb-0">
+                        <strong>The Satori Association</strong><br>
+                        <a href="mailto:disclaimer@satorinet.io">disclaimer@satorinet.io</a>
+                    </p>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -423,7 +496,7 @@
 
     // State tracking for mutual exclusion
     let isStakingToPool = false;
-    let isOpenPool = false;  // True if pool has commission > 0 (accepting lenders)
+    let isOpenPool = false;  // True if pool has commission > 0 (accepting pool stakers)
     let hasWorkers = false;  // True if user has workers (active pool)
 
     function showToast(message, isError = false) {
@@ -459,13 +532,22 @@
 
             // Check for HTTP errors
             if (!response.ok) {
-                throw new Error(result.detail || result.error || `HTTP ${response.status}`);
+                // Handle error properly - could be string or object
+                let errorMsg = `HTTP ${response.status}`;
+                if (result.detail) {
+                    errorMsg = typeof result.detail === 'object' ? JSON.stringify(result.detail) : result.detail;
+                } else if (result.error) {
+                    errorMsg = typeof result.error === 'object' ? JSON.stringify(result.error) : result.error;
+                }
+                throw new Error(errorMsg);
             }
 
             return result;
         } catch (error) {
             console.error('API Error:', error);
-            showToast('API Error: ' + error.message, true);
+            // Ensure error message is always a string
+            const errorMsg = error.message || String(error);
+            showToast('API Error: ' + errorMsg, true);
             return null;
         }
     }
@@ -631,6 +713,32 @@
             newWorkerInput.disabled = false;
             addWorkerBtn.disabled = false;
             addWorkerWrapper.setAttribute('title', '');
+        }
+
+        // Update card collapse states based on usage
+        updateCardCollapseStates();
+    }
+
+    function updateCardCollapseStates() {
+        const poolStakingCollapse = document.getElementById('poolStakingCollapse');
+        const poolManagementCollapse = document.getElementById('poolManagementCollapse');
+
+        if (poolStakingCollapse) {
+            // Show Pool Staking card if user is staking to a pool
+            if (isStakingToPool) {
+                poolStakingCollapse.classList.add('show');
+            } else {
+                poolStakingCollapse.classList.remove('show');
+            }
+        }
+
+        if (poolManagementCollapse) {
+            // Show Pool Management card if user is an open pool or has workers
+            if (isOpenPool || hasWorkers) {
+                poolManagementCollapse.classList.add('show');
+            } else {
+                poolManagementCollapse.classList.remove('show');
+            }
         }
     }
 
@@ -889,7 +997,7 @@
                 lenderListEl.appendChild(lenderItem);
             });
         } else {
-            lenderListEl.innerHTML = '<p class="text-muted">No lenders</p>';
+            lenderListEl.innerHTML = '<p class="text-muted">No pool stakers</p>';
         }
     }
 
@@ -952,15 +1060,15 @@
         }
     }
 
-    // Download lenders audit
+    // Download pool stakers audit
     async function downloadLendersAudit() {
         try {
             const centralApiUrl = getCentralApiUrl();
-            const response = await fetch(`${centralApiUrl}/api/v1/audit/lenders/latest`);
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/stakers/latest`);
 
             if (!response.ok) {
                 if (response.status === 404) {
-                    showToast('No lenders audit available yet', 'warning');
+                    showToast('No pool stakers audit available yet', 'warning');
                     return;
                 }
                 throw new Error(`HTTP ${response.status}`);
@@ -971,13 +1079,13 @@
             // Generate filename with timestamp
             const now = new Date();
             const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
-            const filename = `lenders_audit_${timestamp}.json`;
+            const filename = `stakers_audit_${timestamp}.json`;
 
             downloadJSON(data, filename);
-            showToast('Lenders audit downloaded');
+            showToast('Pool stakers audit downloaded');
         } catch (error) {
-            console.error('Error downloading lenders audit:', error);
-            showToast('Failed to download lenders audit', 'error');
+            console.error('Error downloading pool stakers audit:', error);
+            showToast('Failed to download pool stakers audit', 'error');
         }
     }
 
@@ -987,7 +1095,7 @@
             // 1. Fetch audit
             showToast('Fetching audit...', 'info');
             const centralApiUrl = getCentralApiUrl();
-            const response = await fetch(`${centralApiUrl}/api/v1/audit/lenders/latest`);
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/stakers/latest`);
 
             if (!response.ok) {
                 if (response.status === 404) {
@@ -1009,7 +1117,7 @@
             const myPool = audit.pools.find(p => p.pool_address === myAddress.wallet_address);
 
             if (!myPool || !myPool.lenders || myPool.lenders.length === 0) {
-                showToast('No lenders to pay', 'info');
+                showToast('No pool stakers to pay', 'info');
                 return;
             }
 
@@ -1023,7 +1131,7 @@
 
             const count = Object.keys(payments).length;
             if (count === 0) {
-                showToast('No lenders with amounts owed', 'info');
+                showToast('No pool stakers with amounts owed', 'info');
                 return;
             }
 
@@ -1043,7 +1151,7 @@
 
             // 5. Confirm with user
             const confirmMsg =
-                `Pay ${count} lenders a total of ${total.toFixed(8)} SATORI?\n\n` +
+                `Pay ${count} pool stakers a total of ${total.toFixed(8)} SATORI?\n\n` +
                 `Your balance: ${balance.vault_balance.toFixed(8)} SATORI\n` +
                 `EVR for fees: ${balance.vault_evr.toFixed(8)} EVR\n\n` +
                 `⚠️ This action cannot be undone!`;
@@ -1053,7 +1161,7 @@
             }
 
             // 6. Send payment
-            showToast('Sending payment to lenders...', 'info');
+            showToast('Sending payment to pool stakers...', 'info');
 
             const paymentResponse = await fetch('/api/lender/pay', {
                 method: 'POST',
@@ -1066,10 +1174,10 @@
             if (data.success) {
                 // 7. Show success
                 const explorerUrl = `https://evr.cryptoscope.io/tx/?hash=${data.txhash}`;
-                showToast(`✓ Paid ${data.lenders_paid} lenders!`, 'success');
+                showToast(`✓ Paid ${data.lenders_paid} pool stakers!`, 'success');
 
                 const resultMsg =
-                    `Successfully paid ${data.lenders_paid} lenders!\n\n` +
+                    `Successfully paid ${data.lenders_paid} pool stakers!\n\n` +
                     `Total: ${data.total_sent.toFixed(8)} SATORI\n\n` +
                     `Transaction: ${data.txhash}\n\n` +
                     `View on blockchain explorer:\n${explorerUrl}`;
@@ -1083,8 +1191,8 @@
             }
 
         } catch (error) {
-            console.error('Error paying lenders:', error);
-            showToast(`Failed to pay lenders: ${error.message}`, 'error');
+            console.error('Error paying pool stakers:', error);
+            showToast(`Failed to pay pool stakers: ${error.message}`, 'error');
         }
     }
 
@@ -1369,6 +1477,16 @@
         tooltipTriggerList.map(function (tooltipTriggerEl) {
             return new bootstrap.Tooltip(tooltipTriggerEl);
         });
+
+        // Ensure both pool cards start collapsed (will be expanded by API calls if needed)
+        const poolStakingCollapse = document.getElementById('poolStakingCollapse');
+        const poolManagementCollapse = document.getElementById('poolManagementCollapse');
+        if (poolStakingCollapse) {
+            poolStakingCollapse.classList.remove('show');
+        }
+        if (poolManagementCollapse) {
+            poolManagementCollapse.classList.remove('show');
+        }
 
         checkHealth();
         loadWalletAddresses();
