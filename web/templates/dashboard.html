@@ -1247,6 +1247,16 @@
             return new bootstrap.Tooltip(tooltipTriggerEl);
         });
 
+        // Ensure both pool cards start collapsed (will be expanded by API calls if needed)
+        const poolStakingCollapse = document.getElementById('poolStakingCollapse');
+        const poolManagementCollapse = document.getElementById('poolManagementCollapse');
+        if (poolStakingCollapse) {
+            poolStakingCollapse.classList.remove('show');
+        }
+        if (poolManagementCollapse) {
+            poolManagementCollapse.classList.remove('show');
+        }
+
         checkHealth();
         loadWalletAddresses();
         loadAllBalances();  // Load both stake and live balances from ElectrumX
