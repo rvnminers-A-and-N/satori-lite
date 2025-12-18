@@ -40,12 +40,13 @@ create_container() {
         -v "$(pwd)/lib-lite:/Satori/Lib" \
         -v "$(pwd)/neuron-lite:/Satori/Neuron" \
         -v "$(pwd)/engine-lite:/Satori/Engine" \
+        -v "$(pwd)/streams-lite:/Satori/Streams" \
         -v "$(pwd)/web:/Satori/web" \
         -v "$(pwd)/neuron-lite/models:/Satori/models" \
         -e SATORI_ENV=dev \
         -e SATORI_CENTRAL_URL=$CENTRAL_URL \
         -e SATORI_API_URL=$API_URL \
-        -e PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori" \
+        -e PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori/Streams:/Satori" \
         $IMAGE python /Satori/Neuron/start.py || {
         echo "Error: Failed to create container. Is Docker running?"
         exit 1
@@ -77,7 +78,7 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  ./satori-dev restart        # Restart with remote central-lite"
     echo ""
     echo "Development mode mounts local code directories:"
-    echo "  ./lib-lite, ./neuron-lite, ./engine-lite, ./web"
+    echo "  ./lib-lite, ./neuron-lite, ./engine-lite, ./streams-lite, ./web"
     echo ""
     echo "Data persists in source directories:"
     echo "  ./neuron-lite/config, ./neuron-lite/wallet,"
