@@ -262,12 +262,10 @@ A: You won't qualify for rewards. Join a pool to get boosted, or acquire more to
 
 **For developers and advanced users:**
 
-> **Note:** Technical endpoints use the term "lenders" but these refer to pool stakers.
-
 **Public audit endpoints:**
 ```
 GET https://central.satorinet.io/api/v1/audit/workers/latest
-GET https://central.satorinet.io/api/v1/audit/lenders/latest
+GET https://central.satorinet.io/api/v1/audit/stakers/latest
 ```
 
 **Authenticated endpoints:** (require wallet signature)
