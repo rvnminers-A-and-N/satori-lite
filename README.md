@@ -10,7 +10,9 @@ A simplified, lightweight version of the Satori neuron system with a CLI interfa
 satori-lite/
 ├── lib-lite/          # Minimal satorilib with only essential features
 ├── neuron-lite/       # Lightweight neuron implementation
-├── engine-lite/       # AI engine (to be added)
+├── engine-lite/       # AI engine for predictions
+├── streams-lite/      # Oracle framework for external data fetching
+├── web/               # Web UI templates and routes
 └── requirements.txt   # Python dependencies
 ```
 
@@ -56,6 +58,46 @@ networking mode: hybrid
 
 See the [satorip2p documentation](https://github.com/SatoriNetwork/satorip2p) for more details.
 
+### streams-lite (Oracle Framework)
+
+The `streams-lite` module enables nodes to act as **oracles** - fetching external data and publishing observations to the Satori network.
+
+**Built-in Oracle Types:**
+
+| Type | Description | API Key Required |
+|------|-------------|------------------|
+| `crypto` | Cryptocurrency prices (CoinGecko, Binance) | No |
+| `fred` | Federal Reserve economic data (interest rates, GDP, etc.) | Yes (free) |
+| `http` | Generic JSON API endpoint | Depends on API |
+
+**Example Configuration** (`streams.yaml`):
+```yaml
+enabled: true
+oracles:
+  - type: crypto
+    name: Bitcoin Price USD
+    stream_id: crypto|satori|BTC|USD
+    enabled: true
+    poll_interval: 300  # 5 minutes
+    extra:
+      coin: bitcoin
+      currency: usd
+      source: coingecko
+
+  - type: fred
+    name: 10-Year Treasury Rate
+    stream_id: fred|satori|DGS10|rate
+    enabled: true
+    poll_interval: 3600  # 1 hour
+    extra:
+      series_id: DGS10
+```
+
+**Key Components:**
+- `BaseOracle`: Abstract class for building custom oracles
+- `P2PPublisher`: Publishes observations via P2P or HTTP (respects networking mode)
+- `StreamManager`: Orchestrates multiple oracles with shared publisher
+
 ## Installation
 
 1. **Install lib-lite package:**
@@ -87,15 +129,17 @@ The neuron-lite will have a CLI interface similar to Claude Code for easy intera
 
 ## Testing
 
-Satori-lite has a comprehensive test suite with **155 tests** covering all functionality:
+Satori-lite has a comprehensive test suite with **206 tests** covering all functionality:
 
 ### Test Organization
 
 ```
 tests/
-├── unit/                  (27 tests - fast, mocked)
+├── unit/                  (78 tests - fast, mocked)
 │   ├── test_auth_unit.py
-│   └── test_client_unit.py
+│   ├── test_client_unit.py
+│   ├── test_streams_lite.py        # Oracle framework tests
+│   └── test_streams_sources.py     # FRED, Crypto, HTTP oracle tests
 ├── integration/           (85 tests - requires server)
 │   ├── test_health.py
 │   ├── test_auth.py
@@ -105,9 +149,9 @@ tests/
 │   ├── test_lending.py
 │   ├── test_pool.py
 │   ├── test_workflows.py
-│   ├── test_data_persistence.py    # NEW: Phase 6
-│   ├── test_challenge_lifecycle.py # NEW: Phase 6
-│   └── test_user_journeys.py       # NEW: Phase 6
+│   ├── test_data_persistence.py
+│   ├── test_challenge_lifecycle.py
+│   └── test_user_journeys.py
 └── performance/           (37 tests - load & benchmarks)
     ├── test_performance.py
     ├── test_load.py
@@ -126,13 +170,13 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 &
 ```bash
 cd /app/satori-lite
 pytest tests/ -v
-# 155 tests pass in ~23 seconds
+# 206 tests pass in ~25 seconds
 ```
 
 **Run specific test categories:**
 ```bash
 # Unit tests only (no server required)
-pytest tests/unit/ -v                    # 27 tests in ~2 seconds
+pytest tests/unit/ -v                    # 78 tests in ~2 seconds
 
 # Integration tests (requires server)
 pytest tests/integration/ -v              # 85 tests
