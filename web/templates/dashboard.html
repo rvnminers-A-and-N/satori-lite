@@ -204,15 +204,21 @@
         <!-- Pool Staking Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
-                <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#poolStakingCollapse"
+                     aria-expanded="false"
+                     aria-controls="poolStakingCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">handshake</i>
                         Pool Staking
                     </h5>
-                    <button class="btn btn-sm btn-outline-secondary" onclick="loadAvailablePools()">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadAvailablePools()">
                         <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
                     </button>
                 </div>
+                <div class="collapse" id="poolStakingCollapse">
                 <div class="card-body">
                     <div class="mb-3">
                         <label class="form-label">Status</label>
@@ -242,18 +248,25 @@
                         </span>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
 
         <!-- Pool Management Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
-                <div class="card-header">
+                <div class="card-header"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#poolManagementCollapse"
+                     aria-expanded="false"
+                     aria-controls="poolManagementCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">groups</i>
                         Pool Management
                     </h5>
                 </div>
+                <div class="collapse" id="poolManagementCollapse">
                 <div class="card-body">
                     <div class="mb-3">
                         <label class="form-label">Lender Commission (%)</label>
@@ -318,6 +331,7 @@
                             Automatically pay your pool stakers based on the latest audit file (up to 1000 pool stakers in one transaction).
                         </small>
                     </div>
+                </div>
                 </div>
             </div>
         </div>
@@ -448,6 +462,32 @@
             newWorkerInput.disabled = false;
             addWorkerBtn.disabled = false;
             addWorkerWrapper.setAttribute('title', '');
+        }
+
+        // Update card collapse states based on usage
+        updateCardCollapseStates();
+    }
+
+    function updateCardCollapseStates() {
+        const poolStakingCollapse = document.getElementById('poolStakingCollapse');
+        const poolManagementCollapse = document.getElementById('poolManagementCollapse');
+
+        if (poolStakingCollapse) {
+            // Show Pool Staking card if user is staking to a pool
+            if (isStakingToPool) {
+                poolStakingCollapse.classList.add('show');
+            } else {
+                poolStakingCollapse.classList.remove('show');
+            }
+        }
+
+        if (poolManagementCollapse) {
+            // Show Pool Management card if user is an open pool or has workers
+            if (isOpenPool || hasWorkers) {
+                poolManagementCollapse.classList.add('show');
+            } else {
+                poolManagementCollapse.classList.remove('show');
+            }
         }
     }
 
