@@ -359,6 +359,65 @@
     </div>
 </div>
 
+<!-- Disclaimer Footer -->
+<div class="container-fluid py-3">
+    <div class="card">
+        <div class="card-header text-center"
+             style="cursor: pointer;"
+             data-bs-toggle="collapse"
+             data-bs-target="#disclaimerCollapse"
+             aria-expanded="false"
+             aria-controls="disclaimerCollapse">
+            <h6 class="mb-0 text-muted">
+                <i class="material-icons align-middle me-2" style="font-size: 18px;">info</i>
+                Disclaimer of Warranties and Limitation of Liability
+            </h6>
+        </div>
+        <div class="collapse" id="disclaimerCollapse">
+            <div class="card-body">
+                <div class="disclaimer-content" style="font-size: 0.85rem; line-height: 1.6;">
+                    <h6>1. DISCLAIMER OF WARRANTIES</h6>
+                    <p><strong>AS IS:</strong> The Satori Neuron software ("Software") is provided "AS IS" and "AS AVAILABLE" without warranties of any kind, whether express or implied, including but not limited to implied warranties of merchantability, fitness for a particular purpose, title, and non-infringement.</p>
+                    <p><strong>NO GUARANTEE:</strong> We do not guarantee that the Software will be uninterrupted, error-free, secure, or free of viruses or other harmful components.</p>
+                    <p><strong>USER RESPONSIBILITY:</strong> The user is solely responsible for any damage to their device or loss of data that results from the use of the Software.</p>
+
+                    <h6 class="mt-3">2. LIMITATION OF LIABILITY</h6>
+                    <p><strong>NO LIABILITY FOR DAMAGES:</strong> In no event shall The Satori Association or its affiliates, officers, directors, employees, agents, or licensors be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of profits or revenues, whether incurred directly or indirectly, or any loss of data, use, goodwill, or other intangible losses, resulting from:</p>
+                    <ul>
+                        <li>Your use or inability to use the Software;</li>
+                        <li>Any unauthorized access to or use of the Software;</li>
+                        <li>Any interruption or cessation of transmission to or from the Software;</li>
+                        <li>Any bugs, viruses, trojan horses, or the like that may be transmitted to or through the Software by any third party;</li>
+                        <li>Any errors or omissions in any content or for any loss or damage incurred as a result of the use of any content posted, emailed, transmitted, or otherwise made available through the Software, whether based on warranty, contract, tort (including negligence), or any other legal theory, whether or not we have been informed of the possibility of such damage.</li>
+                    </ul>
+
+                    <h6 class="mt-3">3. MAXIMUM LIABILITY</h6>
+                    <p><strong>LIMITATION CAP:</strong> Our maximum aggregate liability under or in connection with the Software, whether in contract, tort (including negligence), or otherwise, shall in no circumstances exceed the amount paid by you, if any, for accessing or using the Software.</p>
+
+                    <h6 class="mt-3">4. EXCLUSIONS</h6>
+                    <p><strong>APPLICABLE LAW:</strong> Some jurisdictions do not allow the exclusion of certain warranties or the limitation or exclusion of liability for incidental or consequential damages. Accordingly, some of the above limitations may not apply to you. In such jurisdictions, our liability will be limited to the fullest extent permitted by applicable law.</p>
+
+                    <h6 class="mt-3">5. INDEMNIFICATION</h6>
+                    <p><strong>USER INDEMNITY:</strong> You agree to indemnify, defend, and hold harmless The Satori Association and its affiliates, officers, directors, employees, agents, and licensors from and against any claims, liabilities, damages, losses, and expenses, including, without limitation, reasonable legal and accounting fees, arising out of or in any way connected with your access to or use of the Software, or your violation of these terms.</p>
+
+                    <h6 class="mt-3">6. GOVERNING LAW</h6>
+                    <p><strong>SWISS LAW:</strong> This Disclaimer of Warranties and Limitation of Liability shall be governed by and construed in accordance with the laws of Switzerland, without regard to its conflict of laws principles.</p>
+
+                    <h6 class="mt-3">7. DISPUTE RESOLUTION</h6>
+                    <p><strong>MEDIATION FIRST:</strong> Any disputes arising under or in connection with this Disclaimer of Warranties and Limitation of Liability shall first be attempted to be resolved through mediation. The parties agree to submit the dispute to a mutually agreed-upon mediator in Switzerland. If mediation fails to resolve the dispute, it shall then be resolved in the courts of Switzerland.</p>
+
+                    <h6 class="mt-3">8. CONTACT INFORMATION</h6>
+                    <p>For any inquiries regarding this Disclaimer of Warranties and Limitation of Liability, please contact:</p>
+                    <p class="mb-0">
+                        <strong>The Satori Association</strong><br>
+                        <a href="mailto:disclaimer@satorinet.io">disclaimer@satorinet.io</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Status Messages -->
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
     <div id="statusToast" class="toast" role="alert">
@@ -413,13 +472,22 @@
 
             // Check for HTTP errors
             if (!response.ok) {
-                throw new Error(result.detail || result.error || `HTTP ${response.status}`);
+                // Handle error properly - could be string or object
+                let errorMsg = `HTTP ${response.status}`;
+                if (result.detail) {
+                    errorMsg = typeof result.detail === 'object' ? JSON.stringify(result.detail) : result.detail;
+                } else if (result.error) {
+                    errorMsg = typeof result.error === 'object' ? JSON.stringify(result.error) : result.error;
+                }
+                throw new Error(errorMsg);
             }
 
             return result;
         } catch (error) {
             console.error('API Error:', error);
-            showToast('API Error: ' + error.message, true);
+            // Ensure error message is always a string
+            const errorMsg = error.message || String(error);
+            showToast('API Error: ' + errorMsg, true);
             return null;
         }
     }
