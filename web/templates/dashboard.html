@@ -482,6 +482,13 @@
 <script>
     const API_URL = '/api';
 
+    // Helper function to format balance values (removes trailing zeros)
+    function formatBalance(value) {
+        if (value === undefined || value === null) return '--';
+        // Format to 8 decimals then parse to remove trailing zeros
+        return parseFloat(parseFloat(value).toFixed(8)).toString();
+    }
+
     // State tracking for mutual exclusion
     let isStakingToPool = false;
     let isOpenPool = false;  // True if pool has commission > 0 (accepting pool stakers)
@@ -657,15 +664,15 @@
         try {
             const result = await apiCall('/wallet/balance/direct');
             if (result && !result.error) {
-                document.getElementById('tokenBalance').textContent = result.total !== undefined ? result.total.toFixed(8) : '--';
-                document.getElementById('evrBalance').textContent = result.total_evr !== undefined ? result.total_evr.toFixed(8) : '--';
+                document.getElementById('tokenBalance').textContent = result.total !== undefined ? formatBalance(result.total) : '--';
+                document.getElementById('evrBalance').textContent = result.total_evr !== undefined ? formatBalance(result.total_evr) : '--';
 
                 // Update balance labels in send section
                 if (result.vault_balance !== undefined) {
-                    document.getElementById('vaultBalanceLabel').textContent = '(' + result.vault_balance.toFixed(8) + ')';
+                    document.getElementById('vaultBalanceLabel').textContent = '(' + formatBalance(result.vault_balance) + ')';
                 }
                 if (result.wallet_balance !== undefined) {
-                    document.getElementById('walletBalanceLabel').textContent = '(' + result.wallet_balance.toFixed(8) + ')';
+                    document.getElementById('walletBalanceLabel').textContent = '(' + formatBalance(result.wallet_balance) + ')';
                 }
             } else {
                 // If there's an error, show dashes
@@ -1029,15 +1036,15 @@
             }
 
             if (balance.vault_balance < total) {
-                showToast(`Insufficient balance: need ${total.toFixed(8)}, have ${balance.vault_balance.toFixed(8)}`, 'error');
+                showToast(`Insufficient balance: need ${formatBalance(total)}, have ${formatBalance(balance.vault_balance)}`, 'error');
                 return;
             }
 
             // 5. Confirm with user
             const confirmMsg =
-                `Pay ${count} pool stakers a total of ${total.toFixed(8)} SATORI?\n\n` +
-                `Your balance: ${balance.vault_balance.toFixed(8)} SATORI\n` +
-                `EVR for fees: ${balance.vault_evr.toFixed(8)} EVR\n\n` +
+                `Pay ${count} pool stakers a total of ${formatBalance(total)} SATORI?\n\n` +
+                `Your balance: ${formatBalance(balance.vault_balance)} SATORI\n` +
+                `EVR for fees: ${formatBalance(balance.vault_evr)} EVR\n\n` +
                 `⚠️ This action cannot be undone!`;
 
             if (!confirm(confirmMsg)) {
@@ -1062,7 +1069,7 @@
 
                 const resultMsg =
                     `Successfully paid ${data.lenders_paid} pool stakers!\n\n` +
-                    `Total: ${data.total_sent.toFixed(8)} SATORI\n\n` +
+                    `Total: ${formatBalance(data.total_sent)} SATORI\n\n` +
                     `Transaction: ${data.txhash}\n\n` +
                     `View on blockchain explorer:\n${explorerUrl}`;
 
