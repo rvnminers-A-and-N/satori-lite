@@ -493,7 +493,7 @@ class StreamModel:
             int: Delay in seconds (default 600 = 10 minutes)
         """
         try:
-            from satoriengine.veda import config
+            from satorineuron import config
             delay = config.get().get('training_delay', 600)
             return int(delay)
         except Exception as e:
