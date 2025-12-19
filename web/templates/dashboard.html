@@ -287,7 +287,13 @@
                     </h5>
                 </div>
                 <div class="collapse" id="poolManagementCollapse">
-                <div class="card-body">
+                <div class="card-body" id="poolManagementBody">
+                    <!-- Pool Staking Notice (shown when user is staking to another pool) -->
+                    <div class="alert alert-warning pool-staking-notice mb-3" id="poolStakingNotice" style="display: none;">
+                        <i class="material-icons align-middle me-1" style="font-size: 18px;">info</i>
+                        <strong>Note:</strong> Staking to a pool disables this neuron to act as a pool.
+                    </div>
+
                     <div class="mb-3">
                         <label class="form-label">Lender Commission (%)</label>
                         <span class="d-inline-block w-100" id="poolCommissionWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
@@ -496,7 +502,6 @@
     function updateMutualExclusionUI() {
         const poolStakingReasonCommission = 'You cannot stake to a pool while you have commission set (open pool)';
         const poolStakingReasonWorkers = 'You cannot stake to a pool while you have workers (active pool)';
-        const poolManagementReason = 'You cannot manage workers or commission while staking to another pool';
 
         // Pool Staking elements
         const poolAddressInput = document.getElementById('poolAddress');
@@ -513,7 +518,9 @@
         const addWorkerBtn = document.getElementById('addWorkerBtn');
         const addWorkerWrapper = document.getElementById('addWorkerWrapper');
 
-        // If you're an open pool (have commission set) OR have workers, disable Pool Staking
+        // Pool Staking inputs are always enabled
+        // (Commented out: previously disabled when user was a pool operator)
+        /*
         if (isOpenPool || hasWorkers) {
             const reason = isOpenPool ? poolStakingReasonCommission : poolStakingReasonWorkers;
             poolAddressInput.disabled = true;
@@ -523,6 +530,7 @@
             removeStakeBtn.disabled = true;
             removeStakeBtnWrapper.setAttribute('title', reason);
         } else {
+        */
             poolAddressInput.disabled = false;
             poolAddressWrapper.setAttribute('title', '');
             addStakeBtn.disabled = false;
@@ -535,21 +543,18 @@
                 removeStakeBtn.disabled = true;
                 removeStakeBtnWrapper.setAttribute('title', 'You are not currently staking to a pool');
             }
-        }
+        // }
 
-        // If staking to pool, disable Pool Management (both commission AND workers)
+        // If staking to pool, dim Pool Management card and show notice
+        const poolManagementBody = document.getElementById('poolManagementBody');
+        const poolStakingNotice = document.getElementById('poolStakingNotice');
+
         if (isStakingToPool) {
-            poolCommission.disabled = true;
-            poolCommissionWrapper.setAttribute('title', poolManagementReason);
-            newWorkerInput.disabled = true;
-            addWorkerBtn.disabled = true;
-            addWorkerWrapper.setAttribute('title', poolManagementReason);
+            poolManagementBody.classList.add('dimmed');
+            poolStakingNotice.style.display = 'block';
         } else {
-            poolCommission.disabled = false;
-            poolCommissionWrapper.setAttribute('title', '');
-            newWorkerInput.disabled = false;
-            addWorkerBtn.disabled = false;
-            addWorkerWrapper.setAttribute('title', '');
+            poolManagementBody.classList.remove('dimmed');
+            poolStakingNotice.style.display = 'none';
         }
 
         // Update card collapse states based on usage
