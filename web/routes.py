@@ -35,6 +35,9 @@ _startup_vault = None
 _session_vaults = {}
 _vault_lock = Lock()
 
+# JWT authentication lock to prevent concurrent login attempts
+_auth_lock = Lock()
+
 
 def check_vault_file_exists():
     """Check if vault.yaml file exists.
@@ -490,6 +493,13 @@ def register_routes(app):
         from satorineuron import VERSION
         return render_template('dashboard.html', version=VERSION)
 
+    @app.route('/stake')
+    @login_required
+    def stake_management():
+        """Stake management page for pool staking and pool management."""
+        from satorineuron import VERSION
+        return render_template('stake.html', version=VERSION)
+
     @app.route('/health')
     def health():
         """Health check endpoint - checks API server connectivity."""
@@ -504,13 +514,17 @@ def register_routes(app):
 
     # API Proxy Routes
     def get_auth_headers():
-        """Get authentication headers for API requests.
+        """Get authentication headers for API requests using JWT.
 
-        This implements the challenge-response flow:
-        1. Get a new challenge token from the API
-        2. Sign it with the identity wallet
-        3. Return headers with pubkey, message, and signature
+        This implements JWT authentication:
+        1. Check if we have a valid access token in session
+        2. If not or expired, login with wallet signature to get JWT tokens
+        3. If expiring soon, refresh the access token
+        4. Return Authorization header with Bearer token
         """
+        from datetime import datetime, timedelta
+        import time
+
         wallet_manager = get_or_create_session_vault()
         if not wallet_manager or not wallet_manager.wallet:
             return None
@@ -522,34 +536,93 @@ def register_routes(app):
 
         api_url = current_app.config.get('SATORI_API_URL', get_api_url())
 
-        try:
-            # Step 1: Get challenge
-            resp = requests.get(f"{api_url}/api/v1/auth/challenge", timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"Failed to get challenge: {resp.text}")
+        # Use lock to prevent concurrent login attempts
+        with _auth_lock:
+            try:
+                # Check if we have a valid JWT token in session
+                access_token = session.get('access_token')
+                refresh_token = session.get('refresh_token')
+                token_expiry = session.get('token_expiry')
+
+                # Convert token_expiry back to datetime if it exists
+                if token_expiry:
+                    token_expiry = datetime.fromisoformat(token_expiry)
+
+                now = datetime.now()
+
+                # If no token or expired, perform JWT login
+                if not access_token or not token_expiry or now >= token_expiry:
+                    logger.info("JWT token missing or expired, performing login")
+
+                    # Generate challenge (timestamp)
+                    challenge = str(time.time())
+
+                    # Sign with wallet
+                    signature = wallet.sign(message=challenge)
+                    if isinstance(signature, bytes):
+                        signature = signature.decode('utf-8')
+
+                    # Call JWT login endpoint
+                    resp = requests.post(
+                        f"{api_url}/api/v1/auth/login",
+                        headers={
+                            'wallet-pubkey': wallet.pubkey,
+                            'message': challenge,
+                            'signature': signature
+                        },
+                        timeout=10
+                    )
+
+                    if resp.status_code != 200:
+                        logger.warning(f"JWT login failed: {resp.text}")
+                        return None
+
+                    data = resp.json()
+                    access_token = data['access_token']
+                    refresh_token = data['refresh_token']
+                    expires_in = data['expires_in']
+
+                    # Store tokens in session
+                    session['access_token'] = access_token
+                    session['refresh_token'] = refresh_token
+                    session['token_expiry'] = (now + timedelta(seconds=expires_in)).isoformat()
+
+                    logger.info("JWT login successful")
+
+                # Token expiring soon (within 5 minutes)? Refresh it
+                elif now >= (token_expiry - timedelta(minutes=5)) and refresh_token:
+                    logger.info("JWT token expiring soon, refreshing")
+
+                    try:
+                        resp = requests.post(
+                            f"{api_url}/api/v1/auth/refresh",
+                            headers={'Authorization': f'Bearer {refresh_token}'},
+                            timeout=10
+                        )
+
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            access_token = data['access_token']
+                            expires_in = data['expires_in']
+
+                            # Update session with new token
+                            session['access_token'] = access_token
+                            session['token_expiry'] = (now + timedelta(seconds=expires_in)).isoformat()
+
+                            logger.info("JWT token refreshed successfully")
+                        else:
+                            logger.warning(f"JWT refresh failed: {resp.text}")
+                    except Exception as e:
+                        logger.warning(f"JWT refresh failed: {e}")
+
+                # Return JWT Bearer token header
+                return {
+                    'Authorization': f'Bearer {access_token}'
+                }
+
+            except Exception as e:
+                logger.warning(f"JWT auth header generation failed: {e}")
                 return None
-
-            challenge = resp.json().get('challenge')
-            if not challenge:
-                return None
-
-            # Step 2: Sign the challenge
-            signature = wallet.sign(message=challenge)
-
-            # Signature from wallet.sign() is already base64-encoded as bytes
-            # Just decode to string - do NOT base64 encode again
-            if isinstance(signature, bytes):
-                signature = signature.decode('utf-8')
-
-            # Step 3: Return auth headers
-            return {
-                'wallet-pubkey': wallet.pubkey,
-                'message': challenge,
-                'signature': signature
-            }
-        except Exception as e:
-            logger.warning(f"Auth header generation failed: {e}")
-            return None
 
     def proxy_api(endpoint, method='GET', data=None, authenticated=True):
         """Proxy requests to the Satori API server."""

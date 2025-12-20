@@ -19,12 +19,13 @@ it returns a key you use to make a websocket connection with the pubsub server.
 JSON -> EXTRACT DATA -> Python Object -> DTO -> JSON
 {{ proposal.author }}
 '''
-from typing import Union
+from typing import Union, Optional
 from functools import partial
 import base64
 import time
 import json
 import requests
+from datetime import datetime, timedelta
 from satorilib import logging
 from satorilib.utils.time import timeToTimestamp
 from satorilib.wallet import Wallet
@@ -53,6 +54,10 @@ class SatoriServerClient(object):
         self.sendingUrl = sendingUrl or default_url
         self.topicTime: dict[str, float] = {}
         self.lastCheckin: int = 0
+        # JWT token storage
+        self._access_token: Optional[str] = None
+        self._refresh_token: Optional[str] = None
+        self._token_expiry: Optional[datetime] = None
 
     def setTopicTime(self, topic: str):
         self.topicTime[topic] = time.time()
@@ -66,6 +71,87 @@ class SatoriServerClient(object):
         except Exception:
             pass
         return str(time.time())
+
+    def _login_with_jwt(self):
+        """Perform JWT login with wallet signature."""
+        try:
+            # Generate challenge (timestamp)
+            challenge = str(time.time())
+
+            # Sign with wallet
+            signature = self.wallet.sign(challenge)
+            if isinstance(signature, bytes):
+                signature = signature.decode()
+
+            # Call login endpoint
+            response = requests.post(
+                self.url + '/api/v1/auth/login',
+                headers={
+                    'wallet-pubkey': self.wallet.pubkey,
+                    'message': challenge,
+                    'signature': signature
+                }
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self._access_token = data['access_token']
+            self._refresh_token = data['refresh_token']
+            self._token_expiry = datetime.now() + timedelta(seconds=data['expires_in'])
+
+            logging.info('JWT login successful', print=True)
+        except Exception as e:
+            logging.error(f'JWT login failed: {e}', color='red')
+            raise
+
+    def _refresh_jwt_token(self):
+        """Refresh access token using refresh token."""
+        if not self._refresh_token:
+            raise Exception("No refresh token available")
+
+        try:
+            response = requests.post(
+                self.url + '/api/v1/auth/refresh',
+                headers={'Authorization': f'Bearer {self._refresh_token}'}
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            self._access_token = data['access_token']
+            self._token_expiry = datetime.now() + timedelta(seconds=data['expires_in'])
+
+            logging.info('JWT token refreshed', print=True)
+        except Exception as e:
+            logging.error(f'JWT token refresh failed: {e}', color='red')
+            raise
+
+    def _ensure_authenticated(self):
+        """Ensure we have a valid access token."""
+        now = datetime.now()
+
+        # No token? Login
+        if not self._access_token or not self._token_expiry:
+            self._login_with_jwt()
+            return
+
+        # Token expired? Refresh or re-login
+        if now >= self._token_expiry:
+            if self._refresh_token:
+                try:
+                    self._refresh_jwt_token()
+                except Exception:
+                    self._login_with_jwt()
+            else:
+                self._login_with_jwt()
+            return
+
+        # Token expiring soon (within 5 minutes)? Proactive refresh
+        if now >= (self._token_expiry - timedelta(minutes=5)):
+            if self._refresh_token:
+                try:
+                    self._refresh_jwt_token()
+                except Exception:
+                    pass  # Current token still valid
 
     def _makeAuthenticatedCall(
         self,
@@ -87,33 +173,79 @@ class SatoriServerClient(object):
                 payload[0:40], f'{"..." if len(payload) > 40 else ""}',
                 print=True)
 
-        headers = {
-            **(useWallet or self.wallet).authPayload(
-                asDict=True,
-                challenge=challenge or self._getChallenge()),
-            **(extraHeaders or {}),
-        }
+        # Try JWT authentication first
+        try:
+            self._ensure_authenticated()
 
-        # Add Content-Type header if payload is present
-        if payload is not None:
-            headers['Content-Type'] = 'application/json'
+            headers = {
+                'Authorization': f'Bearer {self._access_token}',
+                **(extraHeaders or {}),
+            }
 
-        r = function(
-            (url or self.url) + endpoint,
-            headers=headers,
-            data=payload)
-        if raiseForStatus:
-            try:
-                r.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                logging.error('authenticated server err:',
-                              r.text, e, color='red')
-                r.raise_for_status()
-        logging.info(
-            f'incoming: {endpoint}',
-            r.text[0:40], f'{"..." if len(r.text) > 40 else ""}',
-            print=True)
-        return r
+            # Add Content-Type header if payload is present
+            if payload is not None:
+                headers['Content-Type'] = 'application/json'
+
+            r = function(
+                (url or self.url) + endpoint,
+                headers=headers,
+                data=payload)
+
+            # If 401, token might be expired - retry once with fresh token
+            if r.status_code == 401:
+                logging.warning('JWT auth failed, retrying with fresh token')
+                self._login_with_jwt()
+                headers['Authorization'] = f'Bearer {self._access_token}'
+                r = function(
+                    (url or self.url) + endpoint,
+                    headers=headers,
+                    data=payload)
+
+            if raiseForStatus:
+                try:
+                    r.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    logging.error('authenticated server err:',
+                                  r.text, e, color='red')
+                    r.raise_for_status()
+
+            logging.info(
+                f'incoming: {endpoint}',
+                r.text[0:40], f'{"..." if len(r.text) > 40 else ""}',
+                print=True)
+            return r
+
+        except Exception as e:
+            # Fall back to legacy challenge-response on JWT failure
+            logging.warning(f'JWT auth failed, falling back to legacy: {e}')
+
+            headers = {
+                **(useWallet or self.wallet).authPayload(
+                    asDict=True,
+                    challenge=challenge or self._getChallenge()),
+                **(extraHeaders or {}),
+            }
+
+            # Add Content-Type header if payload is present
+            if payload is not None:
+                headers['Content-Type'] = 'application/json'
+
+            r = function(
+                (url or self.url) + endpoint,
+                headers=headers,
+                data=payload)
+            if raiseForStatus:
+                try:
+                    r.raise_for_status()
+                except requests.exceptions.HTTPError as e:
+                    logging.error('authenticated server err:',
+                                  r.text, e, color='red')
+                    r.raise_for_status()
+            logging.info(
+                f'incoming: {endpoint}',
+                r.text[0:40], f'{"..." if len(r.text) > 40 else ""}',
+                print=True)
+            return r
 
     def _makeUnauthenticatedCall(
         self,
