@@ -2137,6 +2137,206 @@ def register_routes(app):
             return jsonify({'error': str(e), 'current_version': '1.0.0'})
 
     # =========================================================================
+    # PING & IDENTIFY PROTOCOL ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/ping/<peer_id>', methods=['POST'])
+    @login_required
+    def api_p2p_ping(peer_id):
+        """Ping a peer to test connectivity and measure latency."""
+        try:
+            from satorineuron.init import start
+            import trio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            peers = startup._p2p_peers
+            count = request.json.get('count', 3) if request.json else 3
+
+            async def do_ping():
+                return await peers.ping_peer(peer_id, count=count)
+
+            latencies = trio.from_thread.run_sync(lambda: trio.run(do_ping))
+
+            if latencies:
+                return jsonify({
+                    'success': True,
+                    'peer_id': peer_id,
+                    'latencies_ms': [l * 1000 for l in latencies],
+                    'avg_ms': sum(latencies) / len(latencies) * 1000,
+                    'min_ms': min(latencies) * 1000,
+                    'max_ms': max(latencies) * 1000,
+                    'pings_sent': count,
+                    'pings_received': len(latencies),
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'peer_id': peer_id,
+                    'error': 'No response from peer',
+                })
+
+        except Exception as e:
+            logger.warning(f"Ping failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/ping/stats')
+    @login_required
+    def api_p2p_ping_stats():
+        """Get ping protocol statistics."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            peers = startup._p2p_peers
+            if hasattr(peers, '_ping_service') and peers._ping_service:
+                stats = peers._ping_service.get_stats()
+                return jsonify({
+                    'success': True,
+                    'started': stats.get('started', False),
+                    'pending_pings': stats.get('pending_pings', 0),
+                    'version': stats.get('version', '1.0.0'),
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Ping protocol not initialized'})
+
+        except Exception as e:
+            logger.warning(f"Ping stats failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/p2p/identify/peers')
+    @login_required
+    def api_p2p_identify_peers():
+        """Get known peer identities from the Identify protocol."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            peers = startup._p2p_peers
+            identities = peers.get_known_peer_identities()
+
+            peer_list = []
+            for peer_id, identity in identities.items():
+                peer_info = {
+                    'peer_id': peer_id,
+                    'evrmore_address': getattr(identity, 'evrmore_address', ''),
+                    'roles': getattr(identity, 'roles', []),
+                    'protocols': getattr(identity, 'protocols', []),
+                    'agent_version': getattr(identity, 'agent_version', ''),
+                    'timestamp': getattr(identity, 'timestamp', 0),
+                }
+                peer_list.append(peer_info)
+
+            return jsonify({
+                'success': True,
+                'peers': peer_list,
+                'count': len(peer_list),
+            })
+
+        except Exception as e:
+            logger.warning(f"Get peer identities failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/p2p/identify/by-role/<role>')
+    @login_required
+    def api_p2p_identify_by_role(role):
+        """Get peers with a specific role (predictor, relay, oracle, signer)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            peers = startup._p2p_peers
+            role_peers = peers.get_peers_by_role(role)
+
+            peer_list = []
+            for identity in role_peers:
+                peer_info = {
+                    'peer_id': getattr(identity, 'peer_id', ''),
+                    'evrmore_address': getattr(identity, 'evrmore_address', ''),
+                    'roles': getattr(identity, 'roles', []),
+                    'agent_version': getattr(identity, 'agent_version', ''),
+                }
+                peer_list.append(peer_info)
+
+            return jsonify({
+                'success': True,
+                'role': role,
+                'peers': peer_list,
+                'count': len(peer_list),
+            })
+
+        except Exception as e:
+            logger.warning(f"Get peers by role failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/p2p/identify/announce', methods=['POST'])
+    @login_required
+    def api_p2p_identify_announce():
+        """Announce our identity to the network."""
+        try:
+            from satorineuron.init import start
+            import trio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            peers = startup._p2p_peers
+
+            async def do_announce():
+                await peers.announce_identity()
+
+            trio.from_thread.run_sync(lambda: trio.run(do_announce))
+
+            return jsonify({
+                'success': True,
+                'message': 'Identity announced to network',
+            })
+
+        except Exception as e:
+            logger.warning(f"Identity announce failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/stats')
+    @login_required
+    def api_p2p_identify_stats():
+        """Get identify protocol statistics."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            peers = startup._p2p_peers
+            if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                stats = peers._identify_handler.get_stats()
+                return jsonify({
+                    'success': True,
+                    'started': stats.get('started', False),
+                    'known_peers': stats.get('known_peers', 0),
+                    'version': stats.get('version', '1.0.0'),
+                    'roles_seen': stats.get('roles_seen', []),
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Identify protocol not initialized'})
+
+        except Exception as e:
+            logger.warning(f"Identify stats failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    # =========================================================================
     # STORAGE REDUNDANCY ENDPOINTS
     # =========================================================================
 

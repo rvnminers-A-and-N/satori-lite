@@ -405,6 +405,112 @@
         width: 2.5em;
         height: 1.25em;
     }
+
+    /* ============================================ */
+    /* PING/IDENTIFY TOOL STYLES */
+    /* ============================================ */
+    .ping-result {
+        padding: 8px 12px;
+        border-radius: 6px;
+        margin-top: 8px;
+        font-size: 11px;
+    }
+    .ping-result.success {
+        background: rgba(0, 255, 136, 0.1);
+        border: 1px solid rgba(0, 255, 136, 0.3);
+        color: #00ff88;
+    }
+    .ping-result.error {
+        background: rgba(255, 107, 107, 0.1);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        color: #ff6b6b;
+    }
+    .ping-result.pending {
+        background: rgba(255, 170, 0, 0.1);
+        border: 1px solid rgba(255, 170, 0, 0.3);
+        color: #ffaa00;
+    }
+    .identity-card {
+        background: linear-gradient(135deg, rgba(90, 90, 255, 0.1) 0%, rgba(58, 58, 204, 0.1) 100%);
+        border: 1px solid rgba(90, 90, 255, 0.3);
+        border-radius: 10px;
+        padding: 12px;
+    }
+    .identity-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 4px 0;
+        border-bottom: 1px solid var(--border-color);
+    }
+    .identity-item:last-child {
+        border-bottom: none;
+    }
+    .identity-label {
+        font-size: 10px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+    }
+    .identity-value {
+        font-size: 11px;
+        font-family: monospace;
+        color: var(--text-primary);
+        word-break: break-all;
+        text-align: right;
+        max-width: 180px;
+    }
+    .peer-table {
+        font-size: 11px;
+    }
+    .peer-table th {
+        font-size: 10px;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        font-weight: 600;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border-color);
+    }
+    .peer-table td {
+        padding: 8px;
+        border-bottom: 1px solid var(--border-color);
+        vertical-align: middle;
+    }
+    .peer-table tr:hover {
+        background: var(--bg-input);
+    }
+    .peer-role-badge {
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 9px;
+        text-transform: uppercase;
+        font-weight: 600;
+    }
+    .peer-role-oracle { background: rgba(0, 170, 255, 0.2); color: #00aaff; }
+    .peer-role-signer { background: rgba(255, 215, 0, 0.2); color: #ffd700; }
+    .peer-role-pool-operator { background: rgba(170, 68, 255, 0.2); color: #aa44ff; }
+    .peer-role-predictor { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+    .peer-role-unknown { background: rgba(128, 128, 128, 0.2); color: #888; }
+    .rtt-badge {
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+    }
+    .rtt-good { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+    .rtt-medium { background: rgba(255, 170, 0, 0.2); color: #ffaa00; }
+    .rtt-poor { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
+    .btn-ping {
+        padding: 2px 8px;
+        font-size: 10px;
+    }
+    .protocol-tag {
+        display: inline-block;
+        padding: 2px 6px;
+        margin: 1px;
+        border-radius: 3px;
+        font-size: 9px;
+        background: var(--bg-input);
+        color: var(--text-muted);
+    }
 </style>
 {% endblock %}
 
@@ -691,35 +797,92 @@
             </div>
         </div>
 
-        <!-- Right Panel: Your Node + Event Feed -->
+        <!-- Right Panel: Your Node + Ping Tool + Event Feed -->
         <div class="col-xl-3 col-12">
-            <!-- Your Node Status -->
+            <!-- Your Node Identity Card -->
+            <div class="card mb-3">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: var(--accent-primary);">fingerprint</i>
+                            My Identity
+                        </h6>
+                        <button onclick="announceIdentity();" class="btn btn-outline-primary btn-sm" title="Broadcast your identity to the network">
+                            <i class="material-icons align-middle" style="font-size: 14px;">cell_tower</i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body pt-2">
+                    <div class="identity-card">
+                        <div class="identity-item">
+                            <span class="identity-label">Peer ID</span>
+                            <span id="myPeerId" class="identity-value" style="font-size: 9px;">Loading...</span>
+                        </div>
+                        <div class="identity-item">
+                            <span class="identity-label">Evrmore Address</span>
+                            <span id="myEvrmoreAddress" class="identity-value" style="font-size: 9px;">Loading...</span>
+                        </div>
+                        <div class="identity-item">
+                            <span class="identity-label">Role</span>
+                            <span id="myRole" class="badge bg-gradient-success badge-sm">Predictor</span>
+                        </div>
+                        <div class="identity-item">
+                            <span class="identity-label">NAT Status</span>
+                            <span id="myNatStatus" class="badge bg-gradient-warning badge-sm">--</span>
+                        </div>
+                        <div class="identity-item">
+                            <span class="identity-label">Protocols</span>
+                            <div id="myProtocols">
+                                <span class="protocol-tag">gossipsub</span>
+                                <span class="protocol-tag">dht</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-6">
+                            <button onclick="showModeSelector();" class="btn btn-outline-secondary btn-sm w-100">
+                                <i class="material-icons align-middle" style="font-size: 14px;">settings</i> Mode
+                            </button>
+                        </div>
+                        <div class="col-6">
+                            <button onclick="refreshIdentity();" class="btn btn-outline-info btn-sm w-100">
+                                <i class="material-icons align-middle" style="font-size: 14px;">refresh</i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ping Tool -->
             <div class="card mb-3">
                 <div class="card-header">
                     <h6 class="mb-0">
-                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: var(--accent-primary);">computer</i>
-                        Your Node
+                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #00ff88;">network_ping</i>
+                        Ping Tool
                     </h6>
                 </div>
                 <div class="card-body pt-2">
-                    <div class="mb-2">
-                        <p class="text-muted small mb-0">Peer ID</p>
-                        <code id="myPeerId" style="font-size: 10px; word-break: break-all;">Loading...</code>
-                    </div>
-                    <div class="row">
-                        <div class="col-6">
-                            <p class="text-muted small mb-0">NAT</p>
-                            <span id="myNatStatus" class="badge bg-gradient-warning badge-sm">--</span>
-                        </div>
-                        <div class="col-6">
-                            <p class="text-muted small mb-0">Role</p>
-                            <span id="myRole" class="badge bg-gradient-success badge-sm">Predictor</span>
-                        </div>
-                    </div>
-                    <div class="mt-2">
-                        <button onclick="showModeSelector();" class="btn btn-outline-secondary btn-sm w-100">
-                            <i class="material-icons align-middle" style="font-size: 14px;">settings</i> Change Mode
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" id="pingPeerIdInput" class="form-control" placeholder="Enter Peer ID to ping...">
+                        <button class="btn btn-outline-success" onclick="pingPeer();" id="pingBtn">
+                            <i class="material-icons align-middle" style="font-size: 16px;">play_arrow</i>
                         </button>
+                    </div>
+                    <div id="pingResult" style="display: none;"></div>
+                    <div class="d-flex justify-content-between mt-2 small">
+                        <div>
+                            <span class="text-muted">Pings sent:</span>
+                            <span id="pingsSent" class="text-info">0</span>
+                        </div>
+                        <div>
+                            <span class="text-muted">Avg RTT:</span>
+                            <span id="avgRtt" class="text-success">--</span>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <p class="text-muted small mb-1">Quick Ping Connected Peers</p>
+                    <div id="quickPingPeers" style="max-height: 80px; overflow-y: auto; font-size: 10px;">
+                        <span class="text-muted">No peers connected</span>
                     </div>
                 </div>
             </div>
@@ -896,6 +1059,103 @@
                         <p class="text-muted small mb-2">My Workers / Proxy Children (<span id="proxyChildCount">0</span>)</p>
                         <div id="proxyChildrenList" style="max-height: 200px; overflow-y: auto; font-size: 11px;">
                             <span class="text-muted">No workers</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Known Peers / Peer Discovery -->
+    <div class="row g-4 mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="management-panel">
+                    <div class="panel-header" onclick="togglePanel('knownPeersPanel')">
+                        <h6>
+                            <i class="material-icons me-2" style="font-size: 20px; vertical-align: middle; color: #00aaff;">hub</i>
+                            Known Peers
+                            <span id="knownPeersCount" class="badge bg-gradient-info ms-2">0</span>
+                        </h6>
+                        <div class="d-flex align-items-center">
+                            <button onclick="event.stopPropagation(); refreshKnownPeers();" class="btn btn-outline-info btn-sm me-2" title="Refresh peer list">
+                                <i class="material-icons align-middle" style="font-size: 14px;">refresh</i>
+                            </button>
+                            <button onclick="event.stopPropagation(); requestIdentities();" class="btn btn-outline-primary btn-sm me-2" title="Request identities from all peers">
+                                <i class="material-icons align-middle" style="font-size: 14px;">contacts</i>
+                            </button>
+                            <i class="material-icons toggle-icon">expand_more</i>
+                        </div>
+                    </div>
+                    <div class="panel-body show" id="knownPeersPanel">
+                        <!-- Filter by Role -->
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label class="text-muted small">Filter by Role</label>
+                                <select id="peerRoleFilter" class="form-select form-select-sm" onchange="filterPeersByRole();">
+                                    <option value="all">All Roles</option>
+                                    <option value="oracle">Oracles</option>
+                                    <option value="signer">Signers</option>
+                                    <option value="pool-operator">Pool Operators</option>
+                                    <option value="predictor">Predictors</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="text-muted small">Sort by</label>
+                                <select id="peerSortBy" class="form-select form-select-sm" onchange="sortPeers();">
+                                    <option value="latency">Latency (Low→High)</option>
+                                    <option value="role">Role</option>
+                                    <option value="recent">Recently Seen</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="text-muted small">Search</label>
+                                <input type="text" id="peerSearchInput" class="form-control form-control-sm" placeholder="Peer ID or address..." oninput="searchPeers();">
+                            </div>
+                        </div>
+
+                        <!-- Peers Table -->
+                        <div style="max-height: 400px; overflow-y: auto;">
+                            <table class="table peer-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Peer ID</th>
+                                        <th>Evrmore Address</th>
+                                        <th>Role</th>
+                                        <th>RTT</th>
+                                        <th>Protocols</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="knownPeersTableBody">
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted py-4">
+                                            <i class="material-icons" style="font-size: 32px;">search</i>
+                                            <p class="mb-0 mt-2">No peers discovered yet. Click refresh to scan the network.</p>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Peer Stats Summary -->
+                        <div class="row mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
+                            <div class="col-3 text-center">
+                                <small class="text-muted d-block">Total Peers</small>
+                                <span id="statsTotalPeers" class="text-primary">0</span>
+                            </div>
+                            <div class="col-3 text-center">
+                                <small class="text-muted d-block">Oracles</small>
+                                <span id="statsOracleCount" style="color: #00aaff;">0</span>
+                            </div>
+                            <div class="col-3 text-center">
+                                <small class="text-muted d-block">Signers</small>
+                                <span id="statsSignerCount" style="color: #ffd700;">0</span>
+                            </div>
+                            <div class="col-3 text-center">
+                                <small class="text-muted d-block">Avg RTT</small>
+                                <span id="statsAvgRtt" class="text-success">--</span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2350,5 +2610,368 @@
             hideModeSelector();
         }
     }
+
+    // ============================================
+    // PING / IDENTIFY PROTOCOL FUNCTIONS
+    // ============================================
+    let knownPeersData = [];
+    let pingStats = { sent: 0, totalRtt: 0 };
+
+    // Announce my identity to the network
+    function announceIdentity() {
+        const btn = document.querySelector('[onclick="announceIdentity();"]');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="material-icons align-middle spin" style="font-size: 14px;">sync</i>';
+
+        fetch('/api/p2p/identify/announce', { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    addEvent('system', 'Identity announced to network');
+                } else {
+                    addEvent('system', 'Identity announce failed: ' + (data.error || 'Unknown'));
+                }
+            })
+            .catch(error => {
+                console.error('Announce error:', error);
+                addEvent('system', 'Identity announce error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="material-icons align-middle" style="font-size: 14px;">cell_tower</i>';
+            });
+    }
+
+    // Refresh my identity info
+    function refreshIdentity() {
+        fetch('/api/p2p/identify/stats', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.my_identity) {
+                    const id = data.my_identity;
+                    if (id.peer_id) {
+                        document.getElementById('myPeerId').textContent = id.peer_id;
+                    }
+                    if (id.evrmore_address) {
+                        document.getElementById('myEvrmoreAddress').textContent = id.evrmore_address;
+                    }
+                    if (id.role) {
+                        const roleEl = document.getElementById('myRole');
+                        roleEl.textContent = id.role;
+                        roleEl.className = 'badge badge-sm ' + getRoleBadgeClass(id.role);
+                    }
+                    if (id.protocols && id.protocols.length > 0) {
+                        const protocolsEl = document.getElementById('myProtocols');
+                        protocolsEl.innerHTML = id.protocols.map(p =>
+                            `<span class="protocol-tag">${p}</span>`
+                        ).join('');
+                    }
+                }
+                addEvent('system', 'Identity refreshed');
+            })
+            .catch(error => console.error('Refresh identity error:', error));
+    }
+
+    // Ping a specific peer
+    function pingPeer() {
+        const input = document.getElementById('pingPeerIdInput');
+        const peerId = input.value.trim();
+        if (!peerId) {
+            alert('Please enter a Peer ID to ping');
+            return;
+        }
+
+        const btn = document.getElementById('pingBtn');
+        const resultDiv = document.getElementById('pingResult');
+
+        btn.disabled = true;
+        btn.innerHTML = '<i class="material-icons align-middle spin" style="font-size: 16px;">sync</i>';
+        resultDiv.style.display = 'block';
+        resultDiv.className = 'ping-result pending';
+        resultDiv.innerHTML = '<i class="material-icons align-middle" style="font-size: 14px;">hourglass_empty</i> Pinging...';
+
+        fetch('/api/p2p/ping/' + encodeURIComponent(peerId), { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const rtt = data.rtt_ms;
+                    resultDiv.className = 'ping-result success';
+                    resultDiv.innerHTML = `
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span><i class="material-icons align-middle" style="font-size: 14px;">check_circle</i> Pong received!</span>
+                            <span class="rtt-badge ${getRttClass(rtt)}">${rtt.toFixed(1)} ms</span>
+                        </div>
+                    `;
+                    pingStats.sent++;
+                    pingStats.totalRtt += rtt;
+                    updatePingStats();
+                    addEvent('system', `Ping ${truncateId(peerId)}: ${rtt.toFixed(1)}ms`);
+                } else {
+                    resultDiv.className = 'ping-result error';
+                    resultDiv.innerHTML = `
+                        <i class="material-icons align-middle" style="font-size: 14px;">error</i>
+                        ${data.error || 'No response (timeout)'}
+                    `;
+                    addEvent('system', `Ping ${truncateId(peerId)}: timeout`);
+                }
+            })
+            .catch(error => {
+                resultDiv.className = 'ping-result error';
+                resultDiv.innerHTML = `<i class="material-icons align-middle" style="font-size: 14px;">error</i> Error: ${error.message}`;
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="material-icons align-middle" style="font-size: 16px;">play_arrow</i>';
+            });
+    }
+
+    function updatePingStats() {
+        document.getElementById('pingsSent').textContent = pingStats.sent;
+        if (pingStats.sent > 0) {
+            const avg = pingStats.totalRtt / pingStats.sent;
+            document.getElementById('avgRtt').textContent = avg.toFixed(1) + 'ms';
+        }
+    }
+
+    // Quick ping from connected peers list
+    function quickPing(peerId) {
+        document.getElementById('pingPeerIdInput').value = peerId;
+        pingPeer();
+    }
+
+    // Update quick ping peers list
+    function updateQuickPingPeers(peers) {
+        const container = document.getElementById('quickPingPeers');
+        if (!peers || peers.length === 0) {
+            container.innerHTML = '<span class="text-muted">No peers connected</span>';
+            return;
+        }
+
+        let html = '<div class="d-flex flex-wrap gap-1">';
+        peers.slice(0, 8).forEach(peer => {
+            const peerId = peer.id || peer.peer_id || peer;
+            html += `
+                <button class="btn btn-outline-secondary btn-ping" onclick="quickPing('${peerId}');" title="${peerId}">
+                    ${truncateId(peerId)}
+                </button>
+            `;
+        });
+        if (peers.length > 8) {
+            html += `<span class="text-muted small">+${peers.length - 8} more</span>`;
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    // ============================================
+    // KNOWN PEERS MANAGEMENT
+    // ============================================
+    function refreshKnownPeers() {
+        const btn = document.querySelector('[onclick*="refreshKnownPeers"]');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="material-icons align-middle spin" style="font-size: 14px;">sync</i>';
+        }
+
+        fetch('/api/p2p/identify/peers', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                knownPeersData = data.peers || [];
+                renderKnownPeers(knownPeersData);
+                updatePeerStats(knownPeersData);
+                updateQuickPingPeers(knownPeersData);
+                addEvent('system', `Discovered ${knownPeersData.length} peers`);
+            })
+            .catch(error => {
+                console.error('Refresh peers error:', error);
+                addEvent('system', 'Failed to refresh peers');
+            })
+            .finally(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="material-icons align-middle" style="font-size: 14px;">refresh</i>';
+                }
+            });
+    }
+
+    function requestIdentities() {
+        const btn = document.querySelector('[onclick*="requestIdentities"]');
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="material-icons align-middle spin" style="font-size: 14px;">sync</i>';
+        }
+
+        // Request identities from all peers
+        fetch('/api/p2p/identify/announce', { method: 'POST', body: JSON.stringify({ request: true }) })
+            .then(response => response.json())
+            .then(data => {
+                addEvent('system', 'Requested identities from all peers');
+                // Refresh after a delay to allow responses
+                setTimeout(refreshKnownPeers, 2000);
+            })
+            .catch(error => {
+                console.error('Request identities error:', error);
+            })
+            .finally(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="material-icons align-middle" style="font-size: 14px;">contacts</i>';
+                }
+            });
+    }
+
+    function filterPeersByRole() {
+        const role = document.getElementById('peerRoleFilter').value;
+        let filtered = knownPeersData;
+        if (role !== 'all') {
+            filtered = knownPeersData.filter(p => (p.role || 'unknown').toLowerCase() === role);
+        }
+        renderKnownPeers(filtered);
+    }
+
+    function sortPeers() {
+        const sortBy = document.getElementById('peerSortBy').value;
+        let sorted = [...knownPeersData];
+
+        switch (sortBy) {
+            case 'latency':
+                sorted.sort((a, b) => (a.rtt || 9999) - (b.rtt || 9999));
+                break;
+            case 'role':
+                sorted.sort((a, b) => (a.role || 'z').localeCompare(b.role || 'z'));
+                break;
+            case 'recent':
+                sorted.sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+                break;
+        }
+
+        renderKnownPeers(sorted);
+    }
+
+    function searchPeers() {
+        const query = document.getElementById('peerSearchInput').value.toLowerCase().trim();
+        if (!query) {
+            renderKnownPeers(knownPeersData);
+            return;
+        }
+
+        const filtered = knownPeersData.filter(p => {
+            const peerId = (p.peer_id || p.id || '').toLowerCase();
+            const evrmoreAddr = (p.evrmore_address || '').toLowerCase();
+            return peerId.includes(query) || evrmoreAddr.includes(query);
+        });
+
+        renderKnownPeers(filtered);
+    }
+
+    function renderKnownPeers(peers) {
+        const tbody = document.getElementById('knownPeersTableBody');
+        const countEl = document.getElementById('knownPeersCount');
+
+        countEl.textContent = peers.length;
+
+        if (!peers || peers.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" class="text-center text-muted py-4">
+                        <i class="material-icons" style="font-size: 32px;">search</i>
+                        <p class="mb-0 mt-2">No peers discovered yet. Click refresh to scan the network.</p>
+                    </td>
+                </tr>
+            `;
+            return;
+        }
+
+        let html = '';
+        peers.forEach(peer => {
+            const peerId = peer.peer_id || peer.id || '--';
+            const evrmoreAddr = peer.evrmore_address || '--';
+            const role = peer.role || 'unknown';
+            const rtt = peer.rtt;
+            const protocols = peer.protocols || [];
+
+            html += `
+                <tr>
+                    <td>
+                        <code style="font-size: 10px;" title="${peerId}">${truncateId(peerId)}</code>
+                    </td>
+                    <td>
+                        <code style="font-size: 10px;" title="${evrmoreAddr}">${evrmoreAddr !== '--' ? truncateId(evrmoreAddr) : '--'}</code>
+                    </td>
+                    <td>
+                        <span class="peer-role-badge peer-role-${role.toLowerCase().replace(/[^a-z]/g, '-')}">${role}</span>
+                    </td>
+                    <td>
+                        ${rtt !== undefined ? `<span class="rtt-badge ${getRttClass(rtt)}">${rtt.toFixed(0)} ms</span>` : '<span class="text-muted">--</span>'}
+                    </td>
+                    <td>
+                        ${protocols.length > 0 ? protocols.slice(0, 3).map(p => `<span class="protocol-tag">${p}</span>`).join('') : '<span class="text-muted">--</span>'}
+                        ${protocols.length > 3 ? `<span class="text-muted small">+${protocols.length - 3}</span>` : ''}
+                    </td>
+                    <td>
+                        <button class="btn btn-outline-success btn-ping" onclick="quickPing('${peerId}');" title="Ping this peer">
+                            <i class="material-icons" style="font-size: 12px;">network_ping</i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tbody.innerHTML = html;
+    }
+
+    function updatePeerStats(peers) {
+        if (!peers) return;
+
+        document.getElementById('statsTotalPeers').textContent = peers.length;
+
+        const oracles = peers.filter(p => (p.role || '').toLowerCase() === 'oracle').length;
+        const signers = peers.filter(p => (p.role || '').toLowerCase() === 'signer').length;
+        document.getElementById('statsOracleCount').textContent = oracles;
+        document.getElementById('statsSignerCount').textContent = signers;
+
+        const peersWithRtt = peers.filter(p => p.rtt !== undefined);
+        if (peersWithRtt.length > 0) {
+            const avgRtt = peersWithRtt.reduce((sum, p) => sum + p.rtt, 0) / peersWithRtt.length;
+            document.getElementById('statsAvgRtt').textContent = avgRtt.toFixed(0) + ' ms';
+        }
+    }
+
+    // Helper functions
+    function getRttClass(rtt) {
+        if (rtt < 100) return 'rtt-good';
+        if (rtt < 300) return 'rtt-medium';
+        return 'rtt-poor';
+    }
+
+    function getRoleBadgeClass(role) {
+        const roleMap = {
+            'oracle': 'bg-gradient-info',
+            'signer': 'bg-gradient-warning',
+            'pool-operator': 'bg-secondary',
+            'predictor': 'bg-gradient-success',
+            'delegate': 'bg-gradient-primary'
+        };
+        return roleMap[role.toLowerCase()] || 'bg-gradient-secondary';
+    }
+
+    // CSS for spin animation
+    const spinStyle = document.createElement('style');
+    spinStyle.textContent = `
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .spin { animation: spin 1s linear infinite; }
+    `;
+    document.head.appendChild(spinStyle);
+
+    // Enhanced refreshAllData to include Ping/Identify
+    const originalRefreshAllData = refreshAllData;
+    refreshAllData = function() {
+        originalRefreshAllData();
+        refreshIdentity();
+        refreshKnownPeers();
+    };
 </script>
 {% endblock %}

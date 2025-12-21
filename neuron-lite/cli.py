@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-Satori Neuron CLI - Interactive command-line interface for wallet and vault management.
-Provides commands to check balances and manage vault.
+Satori Neuron CLI - Interactive command-line interface for wallet, vault, and P2P management.
+Provides commands to check balances, manage vault, and interact with P2P network.
+
+Features:
+- Wallet & Vault Management
+- P2P Network Operations (Ping, Identify, Peers)
+- Stream Operations (Subscribe, Publish, Discover)
+- Lending/Delegation Management
+- Rewards & Referrals
+- Oracle/Prediction Features
 """
 
 import sys
@@ -9,6 +17,8 @@ import os
 import time
 import tty
 import termios
+import asyncio
+from typing import Optional, List, Dict, Any, Callable
 
 # Save original file descriptors for console I/O
 _original_stdout_fd = os.dup(1)
@@ -169,6 +179,22 @@ def console_password_input(prompt: str = "") -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+def run_async(coro):
+    """Run an async coroutine from sync code."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If loop is running, use run_coroutine_threadsafe
+            import concurrent.futures
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            return future.result(timeout=30)
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        # No event loop, create one
+        return asyncio.run(coro)
+
+
 class NeuronCLI:
     """Interactive CLI for Satori Neuron."""
 
@@ -177,6 +203,32 @@ class NeuronCLI:
         self.runMode = runMode
         self.wallet_manager = None
         self._vault_password = None  # Store password in memory for session
+        self._startup_dag = None  # Reference to StartupDag for P2P access
+
+    def _get_startup_dag(self):
+        """Get or create StartupDag singleton for P2P access."""
+        if self._startup_dag is None:
+            try:
+                from satorineuron.init.start import getStart
+                self._startup_dag = getStart()
+            except Exception as e:
+                console_print(f"Warning: Could not access StartupDag: {e}")
+        return self._startup_dag
+
+    def _get_p2p_peers(self):
+        """Get P2P peers instance from StartupDag."""
+        dag = self._get_startup_dag()
+        if dag and hasattr(dag, '_p2p_peers'):
+            return dag._p2p_peers
+        return None
+
+    def _is_p2p_available(self) -> bool:
+        """Check if P2P networking is available."""
+        try:
+            from satorineuron.init.start import is_p2p_available
+            return is_p2p_available()
+        except ImportError:
+            return False
 
     def check_vault_file_exists(self) -> bool:
         """Check if vault.yaml file exists (like web UI does)."""
@@ -493,6 +545,8 @@ class NeuronCLI:
             return None
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    # ========== Wallet & Vault Operations ==========
 
     def get_wallet_balance_electrumx(self) -> str:
         """Fetch wallet balance from ElectrumX servers."""
@@ -833,6 +887,1043 @@ class NeuronCLI:
         except Exception as e:
             return f"Error sending transaction: {e}"
 
+    # ========== P2P Network Operations ==========
+
+    def p2p_menu(self) -> str | None:
+        """Show P2P network menu."""
+        if not self._is_p2p_available():
+            return "P2P networking not available. Install satorip2p or enable P2P mode."
+
+        options = [
+            {'label': 'Ping Peer', 'action': 'ping'},
+            {'label': 'View Known Peers', 'action': 'peers'},
+            {'label': 'View Peer Identities', 'action': 'identities'},
+            {'label': 'Announce Identity', 'action': 'announce'},
+            {'label': 'Network Status', 'action': 'status'},
+            {'label': 'Discover Peers', 'action': 'discover'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("P2P Network Menu", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'ping':
+            return self.ping_peer()
+        elif action == 'peers':
+            return self.view_known_peers()
+        elif action == 'identities':
+            return self.view_peer_identities()
+        elif action == 'announce':
+            return self.announce_identity()
+        elif action == 'status':
+            return self.network_status()
+        elif action == 'discover':
+            return self.discover_peers()
+
+        return None
+
+    def ping_peer(self) -> str:
+        """Ping a specific peer to test connectivity."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        console_print()
+        console_print("Ping Peer                                       [Esc to cancel]")
+        console_print("=" * 60)
+        console_print()
+
+        peer_id = console_input("Enter peer ID to ping: ")
+        if peer_id is None or not peer_id.strip():
+            return "Cancelled."
+
+        peer_id = peer_id.strip()
+
+        try:
+            console_print(f"\nPinging {peer_id[:20]}...")
+
+            async def do_ping():
+                return await peers.ping_peer(peer_id, count=3, timeout=10.0)
+
+            latencies = run_async(do_ping())
+
+            if latencies:
+                avg_rtt = sum(latencies) / len(latencies)
+                lines = [
+                    f"\nPing Results for {peer_id[:20]}...",
+                    "-" * 40,
+                    f"  Pings sent:     3",
+                    f"  Pings received: {len(latencies)}",
+                    f"  Min RTT:        {min(latencies)*1000:.2f} ms",
+                    f"  Max RTT:        {max(latencies)*1000:.2f} ms",
+                    f"  Avg RTT:        {avg_rtt*1000:.2f} ms",
+                ]
+                return "\n".join(lines)
+            else:
+                return f"Ping failed - no response from {peer_id[:20]}..."
+
+        except Exception as e:
+            return f"Ping error: {e}"
+
+    def view_known_peers(self) -> str:
+        """View list of known/connected peers."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        try:
+            connected = peers.connected_peers
+            peer_id = peers.peer_id or "Not set"
+
+            lines = [
+                "Known Peers",
+                "=" * 60,
+                f"  Our Peer ID: {peer_id[:40]}...",
+                f"  Connected Peers: {connected}",
+                "-" * 60,
+            ]
+
+            # Try to get more peer info if available
+            if hasattr(peers, 'get_connected_peers'):
+                peer_list = peers.get_connected_peers()
+                if peer_list:
+                    lines.append("  Connected Peer IDs:")
+                    for p in peer_list[:10]:  # Limit to 10
+                        lines.append(f"    - {p[:40]}...")
+                    if len(peer_list) > 10:
+                        lines.append(f"    ... and {len(peer_list) - 10} more")
+                else:
+                    lines.append("  No peers currently connected.")
+            else:
+                lines.append("  Detailed peer list not available.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error getting peer info: {e}"
+
+    def view_peer_identities(self) -> str:
+        """View identities of known peers from Identify protocol."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        try:
+            identities = peers.get_known_peer_identities()
+
+            lines = [
+                "Peer Identities",
+                "=" * 60,
+            ]
+
+            if not identities:
+                lines.append("  No peer identities cached.")
+                lines.append("  Peers announce their identity when they connect.")
+            else:
+                lines.append(f"  Known Peers: {len(identities)}")
+                lines.append("-" * 60)
+
+                for peer_id, identity in list(identities.items())[:10]:
+                    lines.append(f"  Peer: {peer_id[:30]}...")
+                    if hasattr(identity, 'evrmore_address'):
+                        lines.append(f"    Evrmore: {identity.evrmore_address[:30]}...")
+                    if hasattr(identity, 'roles'):
+                        lines.append(f"    Roles:   {', '.join(identity.roles)}")
+                    if hasattr(identity, 'agent_version'):
+                        lines.append(f"    Agent:   {identity.agent_version}")
+                    lines.append("")
+
+                if len(identities) > 10:
+                    lines.append(f"  ... and {len(identities) - 10} more peers")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error getting peer identities: {e}"
+
+    def announce_identity(self) -> str:
+        """Announce our identity to the network."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        try:
+            console_print("Announcing identity to network...")
+
+            async def do_announce():
+                await peers.announce_identity()
+
+            run_async(do_announce())
+
+            return "Identity announced successfully!\nPeers will receive our peer info, address, and capabilities."
+
+        except Exception as e:
+            return f"Error announcing identity: {e}"
+
+    def network_status(self) -> str:
+        """Show overall P2P network status."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        try:
+            lines = [
+                "P2P Network Status",
+                "=" * 60,
+            ]
+
+            # Basic info
+            lines.append(f"  Peer ID:         {peers.peer_id[:40]}..." if peers.peer_id else "  Peer ID: Not set")
+            lines.append(f"  Evrmore Address: {peers.evrmore_address[:40]}..." if peers.evrmore_address else "  Evrmore Address: Not set")
+            lines.append(f"  Connected:       {peers.is_connected}")
+            lines.append(f"  Connected Peers: {peers.connected_peers}")
+            lines.append(f"  NAT Type:        {peers.nat_type}")
+            lines.append(f"  Is Relay:        {peers.is_relay}")
+
+            # Public addresses
+            if hasattr(peers, 'public_addresses') and peers.public_addresses:
+                lines.append(f"  Public Addresses:")
+                for addr in peers.public_addresses[:3]:
+                    lines.append(f"    - {addr}")
+
+            # Protocol info
+            lines.append("")
+            lines.append("Protocol Status:")
+            lines.append("-" * 40)
+
+            # Ping protocol stats
+            if hasattr(peers, '_ping_service') and peers._ping_service:
+                ping_stats = peers._ping_service.get_stats()
+                lines.append(f"  Ping Protocol:   v{ping_stats.get('version', '?')} (started: {ping_stats.get('started', False)})")
+            else:
+                lines.append("  Ping Protocol:   Not initialized")
+
+            # Identify protocol stats
+            if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                id_stats = peers._identify_handler.get_stats()
+                lines.append(f"  Identify Protocol: v{id_stats.get('version', '?')} (known peers: {id_stats.get('known_peers', 0)})")
+            else:
+                lines.append("  Identify Protocol: Not initialized")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error getting network status: {e}"
+
+    def discover_peers(self) -> str:
+        """Discover peers on the network."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized. Start the node first."
+
+        try:
+            console_print("Discovering peers on the network...")
+
+            async def do_discover():
+                return await peers.discover_peers()
+
+            discovered = run_async(do_discover())
+
+            if discovered:
+                lines = [
+                    f"Discovered {len(discovered)} peers:",
+                    "-" * 40,
+                ]
+                for p in discovered[:10]:
+                    lines.append(f"  - {p[:40]}...")
+                if len(discovered) > 10:
+                    lines.append(f"  ... and {len(discovered) - 10} more")
+                return "\n".join(lines)
+            else:
+                return "No new peers discovered."
+
+        except Exception as e:
+            return f"Error discovering peers: {e}"
+
+    # ========== Stream Operations ==========
+
+    def streams_menu(self) -> str | None:
+        """Show stream operations menu."""
+        if not self._is_p2p_available():
+            return "P2P networking not available. Install satorip2p or enable P2P mode."
+
+        options = [
+            {'label': 'View My Subscriptions', 'action': 'subscriptions'},
+            {'label': 'View My Publications', 'action': 'publications'},
+            {'label': 'Subscribe to Stream', 'action': 'subscribe'},
+            {'label': 'Publish to Stream', 'action': 'publish'},
+            {'label': 'Discover Streams', 'action': 'discover'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("Stream Operations", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'subscriptions':
+            return self.view_subscriptions()
+        elif action == 'publications':
+            return self.view_publications()
+        elif action == 'subscribe':
+            return self.subscribe_to_stream()
+        elif action == 'publish':
+            return self.publish_to_stream()
+        elif action == 'discover':
+            return self.discover_streams()
+
+        return None
+
+    def view_subscriptions(self) -> str:
+        """View current stream subscriptions."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized."
+
+        try:
+            subs = peers.get_my_subscriptions()
+            lines = ["Current Subscriptions", "=" * 40]
+
+            if subs:
+                for s in subs:
+                    lines.append(f"  - {s}")
+            else:
+                lines.append("  No active subscriptions.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_publications(self) -> str:
+        """View current stream publications."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized."
+
+        try:
+            pubs = peers.get_my_publications()
+            lines = ["Current Publications", "=" * 40]
+
+            if pubs:
+                for p in pubs:
+                    lines.append(f"  - {p}")
+            else:
+                lines.append("  No active publications.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def subscribe_to_stream(self) -> str:
+        """Subscribe to a stream."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized."
+
+        console_print()
+        stream_id = console_input("Enter stream ID to subscribe: ")
+        if stream_id is None or not stream_id.strip():
+            return "Cancelled."
+
+        try:
+            async def do_sub():
+                await peers.subscribe_async(stream_id.strip())
+
+            run_async(do_sub())
+            return f"Subscribed to stream: {stream_id.strip()}"
+
+        except Exception as e:
+            return f"Error subscribing: {e}"
+
+    def publish_to_stream(self) -> str:
+        """Publish data to a stream."""
+        peers = self._get_p2p_peers()
+        if not peers:
+            return "P2P not initialized."
+
+        console_print()
+        stream_id = console_input("Enter stream ID: ")
+        if stream_id is None or not stream_id.strip():
+            return "Cancelled."
+
+        data = console_input("Enter data to publish: ")
+        if data is None or not data.strip():
+            return "Cancelled."
+
+        try:
+            async def do_pub():
+                await peers.publish(stream_id.strip(), data.strip().encode())
+
+            run_async(do_pub())
+            return f"Published to stream: {stream_id.strip()}"
+
+        except Exception as e:
+            return f"Error publishing: {e}"
+
+    def discover_streams(self) -> str:
+        """Discover available streams."""
+        dag = self._get_startup_dag()
+        if not dag or not hasattr(dag, '_stream_registry'):
+            return "Stream registry not available."
+
+        try:
+            registry = dag._stream_registry
+            if not registry:
+                return "Stream registry not initialized."
+
+            # Get known streams
+            streams = registry.get_all_streams() if hasattr(registry, 'get_all_streams') else []
+
+            lines = ["Available Streams", "=" * 40]
+            if streams:
+                for s in streams[:20]:
+                    lines.append(f"  - {s}")
+                if len(streams) > 20:
+                    lines.append(f"  ... and {len(streams) - 20} more")
+            else:
+                lines.append("  No streams discovered yet.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    # ========== Rewards & Referrals ==========
+
+    def rewards_menu(self) -> str | None:
+        """Show rewards and referrals menu."""
+        options = [
+            {'label': 'View Reward Stats', 'action': 'stats'},
+            {'label': 'View Referral Status', 'action': 'referrals'},
+            {'label': 'View Stake Bonuses', 'action': 'stake'},
+            {'label': 'View Role Multipliers', 'action': 'roles'},
+            {'label': 'Custom Reward Address', 'action': 'address'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("Rewards & Referrals", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'stats':
+            return self.view_reward_stats()
+        elif action == 'referrals':
+            return self.view_referral_status()
+        elif action == 'stake':
+            return self.view_stake_bonuses()
+        elif action == 'roles':
+            return self.view_role_multipliers()
+        elif action == 'address':
+            return self.manage_reward_address()
+
+        return None
+
+    def view_reward_stats(self) -> str:
+        """View reward statistics."""
+        try:
+            from satorineuron.init.start import get_p2p_module
+            RewardCalculator = get_p2p_module('RewardCalculator')
+
+            lines = [
+                "Reward Statistics",
+                "=" * 40,
+            ]
+
+            if RewardCalculator:
+                lines.append("  Reward calculation module available.")
+                lines.append("  Use the Neuron web UI for detailed reward history.")
+            else:
+                lines.append("  Reward module not available.")
+                lines.append("  Enable P2P mode for local reward calculation.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_referral_status(self) -> str:
+        """View referral program status."""
+        try:
+            from satorineuron.init.start import get_p2p_module
+
+            lines = [
+                "Referral Program Status",
+                "=" * 40,
+            ]
+
+            ReferralManager = get_p2p_module('ReferralManager')
+            if ReferralManager:
+                lines.append("  Referral system available.")
+                lines.append("")
+                lines.append("  Tier Thresholds:")
+                lines.append("    Bronze:   1+ referrals   (+1% bonus)")
+                lines.append("    Silver:   5+ referrals   (+2% bonus)")
+                lines.append("    Gold:     10+ referrals  (+3% bonus)")
+                lines.append("    Platinum: 25+ referrals  (+4% bonus)")
+                lines.append("    Diamond:  50+ referrals  (+5% bonus)")
+            else:
+                lines.append("  Referral module not available.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_stake_bonuses(self) -> str:
+        """View stake bonus information."""
+        try:
+            from satorineuron.init.start import get_p2p_module
+
+            lines = [
+                "Stake Bonuses",
+                "=" * 40,
+                "",
+                "  Stake bonuses reward holding SATORI:",
+                "",
+                "  Minimum Stake:     1,000 SATORI",
+                "  Bonus per 1,000:   +0.5%",
+                "  Maximum Bonus:     +10%",
+                "",
+                "  Your vault balance determines your stake bonus.",
+            ]
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_role_multipliers(self) -> str:
+        """View role-based reward multipliers."""
+        lines = [
+            "Role Multipliers",
+            "=" * 40,
+            "",
+            "  Bonus rewards for running network roles:",
+            "",
+            "  Predictor:  Base (all nodes)",
+            "  Relay:      +5% bonus (relay nodes)",
+            "  Oracle:     +3% bonus (oracle publishers)",
+            "  Signer:     +2% bonus (multisig signers)",
+            "",
+            "  Multiplier Cap: +10% maximum combined",
+        ]
+
+        return "\n".join(lines)
+
+    def manage_reward_address(self) -> str:
+        """Manage custom reward address."""
+        try:
+            from satorineuron.init.start import get_p2p_module
+            RewardAddressManager = get_p2p_module('RewardAddressManager')
+
+            if not RewardAddressManager:
+                return "Reward address management not available in current mode."
+
+            lines = [
+                "Custom Reward Address",
+                "=" * 40,
+                "",
+                "  Set a custom address to receive rewards.",
+                "  By default, rewards go to your vault address.",
+                "",
+                "  Use the web UI to configure a custom reward address.",
+            ]
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    # ========== Treasury Donation ==========
+
+    def donation_menu(self) -> str | None:
+        """Show treasury donation menu."""
+        options = [
+            {'label': 'Make Donation', 'action': 'donate'},
+            {'label': 'View My Donation Stats', 'action': 'stats'},
+            {'label': 'View Donation History', 'action': 'history'},
+            {'label': 'View Top Donors', 'action': 'top'},
+            {'label': 'View Treasury Address', 'action': 'address'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("Treasury Donation", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'donate':
+            return self.make_donation()
+        elif action == 'stats':
+            return self.view_donation_stats()
+        elif action == 'history':
+            return self.view_donation_history()
+        elif action == 'top':
+            return self.view_top_donors()
+        elif action == 'address':
+            return self.view_treasury_address()
+
+        return None
+
+    def view_treasury_address(self) -> str:
+        """View the treasury donation address."""
+        try:
+            dag = self._get_startup_dag()
+            if dag and hasattr(dag, '_donation_manager') and dag._donation_manager:
+                dm = dag._donation_manager
+                if hasattr(dm, 'get_treasury_address'):
+                    addr = dm.get_treasury_address()
+                    return f"Treasury Address:\n  {addr}\n\nSend EVR to this address to donate to the Satori Network."
+
+            # Fallback: try to get from config
+            from satorineuron import config
+            treasury = config.get().get('treasury_address', 'EeEYJBZBjQA1g3G2RJGz11kqPuSTwtEpf9')
+            return f"Treasury Address:\n  {treasury}\n\nSend EVR to this address to donate to the Satori Network."
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_donation_stats(self) -> str:
+        """View your donation statistics."""
+        try:
+            dag = self._get_startup_dag()
+
+            lines = [
+                "Your Donation Stats",
+                "=" * 40,
+            ]
+
+            if dag and hasattr(dag, '_donation_manager') and dag._donation_manager:
+                dm = dag._donation_manager
+                if hasattr(dm, 'get_donor_stats'):
+                    stats = dm.get_donor_stats()
+                    lines.append(f"  Total Donated: {stats.get('total_donated', 0):.2f} EVR")
+                    lines.append(f"  Donation Count: {stats.get('donation_count', 0)}")
+                    lines.append(f"  Current Tier: {stats.get('tier', 'None').capitalize()}")
+                    lines.append(f"  Badges: {', '.join(stats.get('badges_earned', [])) or 'None'}")
+                else:
+                    lines.append("  Donation stats not available.")
+            else:
+                lines.append("  Donation manager not initialized.")
+                lines.append("")
+                lines.append("  Tier Thresholds:")
+                lines.append("    Bronze:   100 EVR")
+                lines.append("    Silver:   1,000 EVR")
+                lines.append("    Gold:     10,000 EVR")
+                lines.append("    Platinum: 100,000 EVR")
+                lines.append("    Diamond:  1,000,000 EVR")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_donation_history(self) -> str:
+        """View your donation history."""
+        try:
+            dag = self._get_startup_dag()
+
+            lines = [
+                "Donation History",
+                "=" * 60,
+            ]
+
+            if dag and hasattr(dag, '_donation_manager') and dag._donation_manager:
+                dm = dag._donation_manager
+                if hasattr(dm, 'get_donation_history'):
+                    history = dm.get_donation_history()
+                    if history:
+                        lines.append(f"  {'Date':<12} {'Amount':>12} {'SATORI':>12} {'Status':>10}")
+                        lines.append("  " + "-" * 48)
+                        for d in history[:10]:
+                            import datetime
+                            date = datetime.datetime.fromtimestamp(d.get('timestamp', 0)).strftime('%Y-%m-%d')
+                            amount = f"{d.get('amount', 0):.2f}"
+                            satori = f"{d.get('satori_reward', 0):.2f}"
+                            status = d.get('status', 'unknown')
+                            lines.append(f"  {date:<12} {amount:>12} {satori:>12} {status:>10}")
+                        if len(history) > 10:
+                            lines.append(f"  ... and {len(history) - 10} more")
+                    else:
+                        lines.append("  No donations yet.")
+                else:
+                    lines.append("  Donation history not available.")
+            else:
+                lines.append("  Donation manager not initialized.")
+                lines.append("  Use the web UI to view your donation history.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_top_donors(self) -> str:
+        """View top donors leaderboard."""
+        try:
+            dag = self._get_startup_dag()
+
+            lines = [
+                "Top Donors",
+                "=" * 60,
+            ]
+
+            if dag and hasattr(dag, '_donation_manager') and dag._donation_manager:
+                dm = dag._donation_manager
+                if hasattr(dm, 'get_top_donors'):
+                    donors = dm.get_top_donors()
+                    if donors:
+                        lines.append(f"  {'Rank':<6} {'Address':<20} {'Total':>12} {'Tier':>10}")
+                        lines.append("  " + "-" * 50)
+                        for i, d in enumerate(donors[:10], 1):
+                            addr = d.get('donor_address', '')[:16] + '...'
+                            total = f"{d.get('total_donated', 0):.2f}"
+                            tier = d.get('tier', 'none').capitalize()
+                            lines.append(f"  #{i:<5} {addr:<20} {total:>12} {tier:>10}")
+                    else:
+                        lines.append("  No donors yet.")
+                else:
+                    lines.append("  Top donors not available.")
+            else:
+                lines.append("  Donation manager not initialized.")
+                lines.append("  Use the web UI to view top donors.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def make_donation(self) -> str:
+        """Make a treasury donation."""
+        if not self.wallet_manager:
+            return "Wallet manager not initialized."
+
+        try:
+            console_print()
+            console_print("Treasury Donation                               [Esc to cancel]")
+            console_print("=" * 60)
+            console_print()
+            console_print("Donate EVR to the Satori Network treasury.")
+            console_print("You'll receive SATORI tokens in return!")
+            console_print()
+
+            # Get current vault balance
+            if self._vault_password:
+                vault = self.wallet_manager.openVault(password=self._vault_password)
+            else:
+                vault = self.wallet_manager.vault
+
+            if vault and hasattr(vault, 'getBalances'):
+                vault.getBalances()
+
+            if vault and hasattr(vault, 'currency') and vault.currency:
+                evr_balance = vault.currency.amount
+                console_print(f"Your EVR Balance: {evr_balance:.8f} EVR")
+            else:
+                console_print("Could not fetch EVR balance.")
+                evr_balance = 0
+
+            console_print()
+
+            # Get treasury address
+            try:
+                from satorineuron import config
+                treasury = config.get().get('treasury_address', 'EeEYJBZBjQA1g3G2RJGz11kqPuSTwtEpf9')
+            except:
+                treasury = 'EeEYJBZBjQA1g3G2RJGz11kqPuSTwtEpf9'
+
+            console_print(f"Treasury Address: {treasury}")
+            console_print()
+
+            # Get amount
+            amount_str = console_input("Enter EVR amount to donate: ")
+            if amount_str is None or not amount_str.strip():
+                return "Cancelled."
+
+            try:
+                amount = float(amount_str.strip())
+            except ValueError:
+                return f"Invalid amount: {amount_str}"
+
+            if amount <= 0:
+                return "Amount must be greater than 0."
+
+            if evr_balance > 0 and amount > evr_balance:
+                return f"Insufficient balance. You have {evr_balance:.8f} EVR"
+
+            # Estimate SATORI reward (approximate exchange rate)
+            try:
+                dag = self._get_startup_dag()
+                if dag and hasattr(dag, '_price_provider') and dag._price_provider:
+                    rate = dag._price_provider.get_exchange_rate()
+                else:
+                    rate = 0.018  # Default estimate
+            except:
+                rate = 0.018
+
+            satori_estimate = amount * rate * 0.9  # 90% after treasury fee
+
+            console_print()
+            console_print(f"Estimated SATORI reward: {satori_estimate:.2f} SATORI")
+            console_print()
+
+            # Confirmation
+            console_print("Donation Confirmation")
+            console_print("-" * 40)
+            console_print(f"  Amount: {amount:.2f} EVR")
+            console_print(f"  To:     {treasury[:30]}...")
+            console_print(f"  Reward: ~{satori_estimate:.2f} SATORI")
+            console_print()
+
+            confirm = console_input("Type 'yes' to confirm donation: ")
+            if confirm is None or confirm.strip().lower() not in ['yes', 'y']:
+                return "Donation cancelled."
+
+            # Execute donation
+            console_print()
+            console_print("Processing donation...")
+
+            if vault:
+                vault.getReadyToSend(balance=True, save=True)
+                txid = vault.evrTransaction(amount=amount, address=treasury)
+                return f"\nDonation successful!\nTransaction ID: {txid}\n\nThank you for supporting the Satori Network!"
+            else:
+                return "Error: Vault not available for transaction."
+
+        except Exception as e:
+            return f"Error making donation: {e}"
+
+    # ========== Lending & Delegation ==========
+
+    def lending_menu(self) -> str | None:
+        """Show lending and delegation menu."""
+        if not self._is_p2p_available():
+            return "P2P networking required for lending/delegation."
+
+        options = [
+            {'label': 'View Pool Status', 'action': 'pool-status'},
+            {'label': 'Join Lending Pool', 'action': 'join-pool'},
+            {'label': 'Leave Pool', 'action': 'leave-pool'},
+            {'label': 'View Delegations', 'action': 'delegations'},
+            {'label': 'Set Delegation', 'action': 'set-delegate'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("Lending & Delegation", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'pool-status':
+            return self.view_pool_status()
+        elif action == 'join-pool':
+            return self.join_lending_pool()
+        elif action == 'leave-pool':
+            return self.leave_lending_pool()
+        elif action == 'delegations':
+            return self.view_delegations()
+        elif action == 'set-delegate':
+            return self.set_delegation()
+
+        return None
+
+    def view_pool_status(self) -> str:
+        """View lending pool status."""
+        dag = self._get_startup_dag()
+        if not dag:
+            return "Startup not initialized."
+
+        try:
+            lines = [
+                "Lending Pool Status",
+                "=" * 40,
+            ]
+
+            if hasattr(dag, '_lending_manager') and dag._lending_manager:
+                lm = dag._lending_manager
+                lines.append(f"  Pool Active: Yes")
+                # Add more status info
+            else:
+                lines.append("  Lending manager not initialized.")
+                lines.append("  Enable P2P mode and restart.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def join_lending_pool(self) -> str:
+        """Join a lending pool."""
+        console_print()
+        vault_addr = console_input("Enter pool vault address: ")
+        if vault_addr is None or not vault_addr.strip():
+            return "Cancelled."
+
+        return "Pool joining requires the web UI for security confirmation."
+
+    def leave_lending_pool(self) -> str:
+        """Leave current lending pool."""
+        return "Pool leaving requires the web UI for security confirmation."
+
+    def view_delegations(self) -> str:
+        """View delegation status."""
+        dag = self._get_startup_dag()
+        if not dag:
+            return "Startup not initialized."
+
+        try:
+            lines = [
+                "Delegation Status",
+                "=" * 40,
+            ]
+
+            if hasattr(dag, '_delegation_manager') and dag._delegation_manager:
+                dm = dag._delegation_manager
+                lines.append("  Delegation manager active.")
+            else:
+                lines.append("  Delegation manager not initialized.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def set_delegation(self) -> str:
+        """Set stake delegation."""
+        return "Delegation setup requires the web UI for security confirmation."
+
+    # ========== Oracle & Predictions ==========
+
+    def oracle_menu(self) -> str | None:
+        """Show oracle and predictions menu."""
+        if not self._is_p2p_available():
+            return "P2P networking required for oracle/predictions."
+
+        options = [
+            {'label': 'View Oracle Status', 'action': 'oracle-status'},
+            {'label': 'View Predictions', 'action': 'predictions'},
+            {'label': 'Submit Prediction', 'action': 'submit'},
+            {'label': 'View Observations', 'action': 'observations'},
+            {'label': 'Back to Main Menu', 'action': 'back'}
+        ]
+
+        selected = self.interactive_menu("Oracle & Predictions", options)
+        if selected is None:
+            return None
+
+        action = options[selected]['action']
+        if action == 'back':
+            return None
+        elif action == 'oracle-status':
+            return self.view_oracle_status()
+        elif action == 'predictions':
+            return self.view_predictions()
+        elif action == 'submit':
+            return self.submit_prediction()
+        elif action == 'observations':
+            return self.view_observations()
+
+        return None
+
+    def view_oracle_status(self) -> str:
+        """View oracle network status."""
+        dag = self._get_startup_dag()
+        if not dag:
+            return "Startup not initialized."
+
+        try:
+            lines = [
+                "Oracle Network Status",
+                "=" * 40,
+            ]
+
+            if hasattr(dag, '_oracle_network') and dag._oracle_network:
+                oracle = dag._oracle_network
+                lines.append("  Oracle network active.")
+                if hasattr(oracle, 'get_stats'):
+                    stats = oracle.get_stats()
+                    lines.append(f"  Registered Oracles: {stats.get('registered_oracles', 0)}")
+            else:
+                lines.append("  Oracle network not initialized.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def view_predictions(self) -> str:
+        """View recent predictions."""
+        dag = self._get_startup_dag()
+        if not dag:
+            return "Startup not initialized."
+
+        try:
+            lines = [
+                "Recent Predictions",
+                "=" * 40,
+            ]
+
+            if hasattr(dag, '_prediction_protocol') and dag._prediction_protocol:
+                pp = dag._prediction_protocol
+                lines.append("  Prediction protocol active.")
+            else:
+                lines.append("  Prediction protocol not initialized.")
+
+            lines.append("")
+            lines.append("  Use the web UI for detailed prediction history.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    def submit_prediction(self) -> str:
+        """Submit a prediction."""
+        return "Prediction submission requires the engine to be running.\nUse the automated prediction system."
+
+    def view_observations(self) -> str:
+        """View recent observations."""
+        dag = self._get_startup_dag()
+        if not dag:
+            return "Startup not initialized."
+
+        try:
+            lines = [
+                "Recent Observations",
+                "=" * 40,
+            ]
+
+            if hasattr(dag, '_oracle_network') and dag._oracle_network:
+                oracle = dag._oracle_network
+                lines.append("  Oracle network active.")
+                # Would need to implement get_recent_observations
+            else:
+                lines.append("  Oracle network not initialized.")
+
+            lines.append("")
+            lines.append("  Use the web UI for observation history.")
+
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Error: {e}"
+
+    # ========== Command Handling ==========
+
     def handle_command(self, user_input: str) -> str | None:
         """Process user commands and return response."""
         user_input = user_input.strip()
@@ -841,8 +1932,36 @@ class NeuronCLI:
             return """Satori Neuron CLI - Available Commands
 
 Wallet & Vault:
-  /balance       - Show wallet or vault balance (interactive menu)
+  /balance       - Show wallet or vault balance
   /vault-status  - Show vault status
+  /send          - Send SATORI transaction
+
+P2P Network:
+  /p2p           - P2P network menu (ping, peers, identity)
+  /ping          - Quick ping a peer
+  /peers         - View connected peers
+  /network       - Network status
+
+Streams:
+  /streams       - Stream operations menu
+  /subscribe     - Subscribe to a stream
+  /publish       - Publish to a stream
+
+Rewards:
+  /rewards       - Rewards & referrals menu
+  /referrals     - View referral status
+
+Donations:
+  /donate        - Treasury donation menu
+  /treasury      - View treasury address
+
+Lending:
+  /lending       - Lending & delegation menu
+  /pool          - View pool status
+
+Oracle:
+  /oracle        - Oracle & predictions menu
+  /predictions   - View predictions
 
 System:
   /clear         - Clear the screen
@@ -889,6 +2008,48 @@ System:
             ]
             return "\n".join(status_lines)
 
+        # P2P Commands
+        elif user_input == "/p2p":
+            return self.p2p_menu()
+        elif user_input == "/ping":
+            return self.ping_peer()
+        elif user_input == "/peers":
+            return self.view_known_peers()
+        elif user_input == "/network":
+            return self.network_status()
+
+        # Stream Commands
+        elif user_input == "/streams":
+            return self.streams_menu()
+        elif user_input == "/subscribe":
+            return self.subscribe_to_stream()
+        elif user_input == "/publish":
+            return self.publish_to_stream()
+
+        # Rewards Commands
+        elif user_input == "/rewards":
+            return self.rewards_menu()
+        elif user_input == "/referrals":
+            return self.view_referral_status()
+
+        # Donation Commands
+        elif user_input == "/donate":
+            return self.donation_menu()
+        elif user_input == "/treasury":
+            return self.view_treasury_address()
+
+        # Lending Commands
+        elif user_input == "/lending":
+            return self.lending_menu()
+        elif user_input == "/pool":
+            return self.view_pool_status()
+
+        # Oracle Commands
+        elif user_input == "/oracle":
+            return self.oracle_menu()
+        elif user_input == "/predictions":
+            return self.view_predictions()
+
         elif user_input == "/clear":
             # ANSI escape code to clear screen and move cursor to top
             console_write("\033[2J\033[H")
@@ -931,9 +2092,20 @@ System:
         console_print(f"    Satori Neuron CLI - {VERSION}")
         console_print()
 
+        # Check P2P status
+        p2p_status = "Available" if self._is_p2p_available() else "Not Available"
+        console_print(f"    P2P Status: {p2p_status}")
+        console_print()
+
         options = [
             {'label': 'Check Balance', 'action': 'balance'},
             {'label': 'Send Transaction', 'action': 'send'},
+            {'label': 'P2P Network', 'action': 'p2p'},
+            {'label': 'Streams', 'action': 'streams'},
+            {'label': 'Rewards & Referrals', 'action': 'rewards'},
+            {'label': 'Treasury Donation', 'action': 'donate'},
+            {'label': 'Lending & Delegation', 'action': 'lending'},
+            {'label': 'Oracle & Predictions', 'action': 'oracle'},
             {'label': 'Vault Status', 'action': 'vault-status'},
             {'label': 'Clear Screen', 'action': 'clear'},
             {'label': 'Exit', 'action': 'exit'}
@@ -969,7 +2141,7 @@ System:
         from satorineuron import VERSION
         console_print()
         console_print("    Satori Neuron CLI")
-        console_print(f"    Wallet & Vault Manager - {VERSION}")
+        console_print(f"    Full P2P Node Manager - {VERSION}")
         console_print()
 
         # Prompt for vault setup or unlock (matches web UI behavior)
@@ -1036,6 +2208,18 @@ System:
                         response = self.send_transaction_vault()
                     else:
                         response = "Unknown send action"
+                elif action == 'p2p':
+                    response = self.p2p_menu()
+                elif action == 'streams':
+                    response = self.streams_menu()
+                elif action == 'rewards':
+                    response = self.rewards_menu()
+                elif action == 'donate':
+                    response = self.donation_menu()
+                elif action == 'lending':
+                    response = self.lending_menu()
+                elif action == 'oracle':
+                    response = self.oracle_menu()
                 elif action == 'vault-status':
                     response = self.handle_command("/vault-status")
                 elif action == 'clear':
