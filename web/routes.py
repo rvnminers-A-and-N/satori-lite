@@ -666,59 +666,354 @@ def register_routes(app):
             return proxy_api('/peer/reward-address', 'POST', request.json)
         return proxy_api('/peer/reward-address')
 
+    # =========================================================================
+    # STAKE MANAGEMENT - P2P ENABLED ROUTES
+    # =========================================================================
+
     @app.route('/api/lender/status')
     @login_required
     def api_lender_status():
-        """Proxy lender status request."""
+        """Get lender status - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    async def get_status():
+                        if hasattr(manager, 'get_my_lending_status'):
+                            return await manager.get_my_lending_status()
+                        return None
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        status = loop.run_until_complete(get_status())
+                        if status is not None:
+                            return jsonify(status)
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P lender status failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/lender/status')
 
     @app.route('/api/lender/lend', methods=['POST', 'DELETE'])
     @login_required
     def api_lender_lend():
-        """Proxy lend request."""
+        """Lend to pool or remove lending - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
         data = request.get_json(silent=True) if request.method == 'POST' else None
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    if request.method == 'POST':
+                        # Lend to pool
+                        pool_address = data.get('pool_address') if data else None
+                        if pool_address:
+                            async def lend_to():
+                                if hasattr(manager, 'lend_to_vault'):
+                                    return await manager.lend_to_vault(pool_address)
+                                return False
+
+                            try:
+                                loop = asyncio.new_event_loop()
+                                success = loop.run_until_complete(lend_to())
+                                if success:
+                                    return jsonify({'success': True})
+                            finally:
+                                loop.close()
+                    else:
+                        # Remove lending (DELETE)
+                        async def remove_lend():
+                            if hasattr(manager, 'remove_lending'):
+                                return await manager.remove_lending()
+                            return False
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            success = loop.run_until_complete(remove_lend())
+                            if success:
+                                return jsonify({'success': True})
+                        finally:
+                            loop.close()
+            except Exception as e:
+                logger.warning(f"P2P lend operation failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/lender/lend', request.method, data)
 
     @app.route('/api/pool/worker', methods=['POST'])
     @login_required
     def api_pool_worker_add():
-        """Proxy pool worker add request."""
-        return proxy_api('/pool/worker', 'POST', request.json)
+        """Add worker to pool - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+        data = request.json
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+                    worker_address = data.get('worker_address') if data else None
+
+                    if worker_address:
+                        async def add_worker():
+                            if hasattr(manager, 'add_pool_worker'):
+                                return await manager.add_pool_worker(worker_address)
+                            return False
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            success = loop.run_until_complete(add_worker())
+                            if success:
+                                return jsonify({'success': True})
+                        finally:
+                            loop.close()
+            except Exception as e:
+                logger.warning(f"P2P add worker failed, trying central: {e}")
+
+        # Fallback to central
+        return proxy_api('/pool/worker', 'POST', data)
 
     @app.route('/api/pool/worker/<worker_address>', methods=['DELETE'])
     @login_required
     def api_pool_worker_delete(worker_address):
-        """Proxy pool worker delete request."""
+        """Remove worker from pool - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    async def remove_worker():
+                        if hasattr(manager, 'remove_pool_worker'):
+                            return await manager.remove_pool_worker(worker_address)
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(remove_worker())
+                        if success:
+                            return jsonify({'success': True})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P remove worker failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api(f'/pool/worker/{worker_address}', 'DELETE')
 
     @app.route('/api/pool/toggle-open', methods=['POST'])
     @login_required
     def api_pool_toggle():
-        """Proxy pool toggle request."""
-        return proxy_api('/pool/toggle-open', 'POST', request.json)
+        """Toggle pool open/closed - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+        data = request.json
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+                    is_open = data.get('open', False) if data else False
+
+                    async def toggle_pool():
+                        if is_open:
+                            if hasattr(manager, 'register_pool'):
+                                return await manager.register_pool()
+                        else:
+                            if hasattr(manager, 'unregister_pool'):
+                                return await manager.unregister_pool()
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(toggle_pool())
+                        if success:
+                            return jsonify({'success': True, 'open': is_open})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P toggle pool failed, trying central: {e}")
+
+        # Fallback to central
+        return proxy_api('/pool/toggle-open', 'POST', data)
 
     @app.route('/api/pool/open', methods=['GET'])
     @login_required
     def api_pool_open():
-        """Get list of open pools."""
+        """Get list of open pools - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    async def get_pools():
+                        if hasattr(manager, 'get_available_pools'):
+                            pools = await manager.get_available_pools()
+                            return [
+                                {
+                                    'address': p.vault_address,
+                                    'pool_size_limit': p.pool_size_limit,
+                                    'worker_reward_pct': getattr(p, 'worker_reward_pct', 0),
+                                    'accepting': p.accepting,
+                                }
+                                for p in pools if p.accepting
+                            ]
+                        return None
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        pools = loop.run_until_complete(get_pools())
+                        if pools is not None:
+                            return jsonify({'pools': pools})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P get open pools failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/pool/open', 'GET')
 
     @app.route('/api/pool/commission', methods=['GET'])
     @login_required
     def api_pool_commission():
-        """Get pool commission status."""
+        """Get pool commission status - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    if hasattr(manager, '_my_pool_config') and manager._my_pool_config:
+                        config = manager._my_pool_config
+                        return jsonify({
+                            'commission': getattr(config, 'worker_reward_pct', 0),
+                            'open': config.accepting,
+                            'pool_size_limit': config.pool_size_limit,
+                        })
+            except Exception as e:
+                logger.warning(f"P2P get commission failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/pool/commission', 'GET')
 
     @app.route('/api/pool/workers', methods=['GET'])
     @login_required
     def api_pool_workers():
-        """Get list of workers for authenticated user's pool."""
+        """Get list of workers for pool - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    async def get_workers():
+                        if hasattr(manager, 'get_pool_workers'):
+                            return await manager.get_pool_workers()
+                        return None
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        workers = loop.run_until_complete(get_workers())
+                        if workers is not None:
+                            return jsonify({
+                                'workers': [
+                                    {
+                                        'address': w.worker_address if hasattr(w, 'worker_address') else str(w),
+                                        'added_at': getattr(w, 'timestamp', None),
+                                    }
+                                    for w in workers
+                                ]
+                            })
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P get workers failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/pool/workers', 'GET')
 
     @app.route('/api/pool/lenders', methods=['GET'])
     @login_required
     def api_pool_lenders():
-        """Get list of lenders for authenticated user's pool."""
+        """Get list of lenders for pool - P2P first, central fallback."""
+        mode = _get_current_networking_mode()
+
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                    manager = startup._lending_manager
+
+                    async def get_lenders():
+                        if hasattr(manager, 'get_pool_participants'):
+                            return await manager.get_pool_participants()
+                        return None
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        lenders = loop.run_until_complete(get_lenders())
+                        if lenders is not None:
+                            return jsonify({
+                                'lenders': [
+                                    {
+                                        'address': l.lender_address if hasattr(l, 'lender_address') else str(l),
+                                        'amount': getattr(l, 'lent_out', 0),
+                                        'timestamp': getattr(l, 'timestamp', None),
+                                    }
+                                    for l in lenders
+                                ]
+                            })
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P get lenders failed, trying central: {e}")
+
+        # Fallback to central
         return proxy_api('/pool/lenders', 'GET')
 
     @app.route('/api/wallet/address')
