@@ -124,6 +124,31 @@ def _get_p2p_modules():
             sign_message,
             verify_message,
         )
+        # New protocol features: versioning, storage, bandwidth
+        from satorip2p.protocol.versioning import (
+            ProtocolVersion, VersionNegotiator, PeerVersionTracker,
+            PROTOCOL_VERSION, MIN_SUPPORTED_VERSION, get_current_version,
+        )
+        from satorip2p.protocol.storage import (
+            StorageManager, DeferredRewardsStorage, AlertStorage,
+            MemoryBackend, FileBackend, DHTBackend,
+        )
+        from satorip2p.protocol.bandwidth import (
+            BandwidthTracker, QoSManager, QoSPolicy, MessagePriority,
+            create_qos_manager, get_priority_for_message_type,
+        )
+        # Referral, Pricing, and Reward Address
+        from satorip2p.protocol.referral import (
+            ReferralManager, Referral, ReferrerStats,
+            get_tier_for_count, get_bonus_for_tier,
+        )
+        from satorip2p.protocol.pricing import (
+            SafeTradePriceProvider, PriceQuote, TickerData,
+            get_price_provider, calculate_satori_reward,
+        )
+        from satorip2p.protocol.reward_address import (
+            RewardAddressManager, RewardAddressRecord,
+        )
         return {
             'available': True,
             'Peers': Peers,
@@ -158,6 +183,38 @@ def _get_p2p_modules():
             'sign_message': sign_message,
             'verify_message': verify_message,
             'NetworkingMode': NetworkingMode,
+            # New protocol features
+            'ProtocolVersion': ProtocolVersion,
+            'VersionNegotiator': VersionNegotiator,
+            'PeerVersionTracker': PeerVersionTracker,
+            'PROTOCOL_VERSION': PROTOCOL_VERSION,
+            'MIN_SUPPORTED_VERSION': MIN_SUPPORTED_VERSION,
+            'get_current_version': get_current_version,
+            'StorageManager': StorageManager,
+            'DeferredRewardsStorage': DeferredRewardsStorage,
+            'AlertStorage': AlertStorage,
+            'MemoryBackend': MemoryBackend,
+            'FileBackend': FileBackend,
+            'DHTBackend': DHTBackend,
+            'BandwidthTracker': BandwidthTracker,
+            'QoSManager': QoSManager,
+            'QoSPolicy': QoSPolicy,
+            'MessagePriority': MessagePriority,
+            'create_qos_manager': create_qos_manager,
+            'get_priority_for_message_type': get_priority_for_message_type,
+            # Referral, Pricing, Reward Address
+            'ReferralManager': ReferralManager,
+            'Referral': Referral,
+            'ReferrerStats': ReferrerStats,
+            'get_tier_for_count': get_tier_for_count,
+            'get_bonus_for_tier': get_bonus_for_tier,
+            'SafeTradePriceProvider': SafeTradePriceProvider,
+            'PriceQuote': PriceQuote,
+            'TickerData': TickerData,
+            'get_price_provider': get_price_provider,
+            'calculate_satori_reward': calculate_satori_reward,
+            'RewardAddressManager': RewardAddressManager,
+            'RewardAddressRecord': RewardAddressRecord,
         }
     except ImportError:
         return {'available': False}
@@ -444,14 +501,93 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
     def pollObservationsForever(self):
         """
-        Poll the central server for new observations every 11 hours.
-        When new observations arrive, pass them to the engine for predictions.
+        Poll for new observations - P2P first, central fallback.
+        In P2P/hybrid mode, also subscribes to real-time P2P observations.
+        Polling every 11 hours as backup for missed real-time events.
         """
         import pandas as pd
 
+        def processObservation(observation: dict):
+            """Process an observation from any source (P2P or central)."""
+            if observation is None:
+                return
+
+            try:
+                if not hasattr(self, 'aiengine') or self.aiengine is None:
+                    logging.warning("AI Engine not initialized, skipping observation", color='yellow')
+                    return
+
+                # Convert observation to DataFrame for engine
+                value = observation.get('value') or observation.get('bitcoin_price')
+                hash_val = observation.get('hash') or observation.get('id') or observation.get('observation_id')
+                df = pd.DataFrame([{
+                    'ts': observation.get('observed_at') or observation.get('ts'),
+                    'value': float(value) if value is not None else None,
+                    'hash': str(hash_val) if hash_val is not None else None,
+                }])
+
+                # Pass to each stream in the engine
+                for streamUuid, streamModel in self.aiengine.streamModels.items():
+                    try:
+                        logging.info(f"Passing observation to stream {streamUuid}", color='green')
+                        streamModel.onDataReceived(df)
+                    except Exception as e:
+                        logging.error(f"Error passing observation to stream {streamUuid}: {e}", color='red')
+
+            except Exception as e:
+                logging.error(f"Error processing observation: {e}", color='red')
+
+        def getObservationP2PFirst(stream: str = 'bitcoin') -> dict:
+            """Get observation - P2P first, central fallback."""
+            # Try P2P oracle network first
+            if hasattr(self, '_oracle_network') and self._oracle_network:
+                try:
+                    obs = self._oracle_network.get_latest_observation(stream)
+                    if obs:
+                        logging.info(f"Got observation from P2P for {stream}", color='green')
+                        return {
+                            'observation_id': obs.hash if hasattr(obs, 'hash') else obs.get('hash'),
+                            'value': obs.value if hasattr(obs, 'value') else obs.get('value'),
+                            'observed_at': obs.timestamp if hasattr(obs, 'timestamp') else obs.get('timestamp'),
+                            'ts': obs.timestamp if hasattr(obs, 'timestamp') else obs.get('ts'),
+                            'hash': obs.hash if hasattr(obs, 'hash') else obs.get('hash'),
+                            'source': 'p2p',
+                        }
+                except Exception as e:
+                    logging.warning(f"P2P observation failed: {e}", color='yellow')
+
+            # Fallback to central
+            if hasattr(self, 'server') and self.server:
+                try:
+                    obs = self.server.getObservation(stream)
+                    if obs:
+                        obs['source'] = 'central'
+                        logging.info(f"Got observation from central for {stream}", color='blue')
+                        return obs
+                except Exception as e:
+                    logging.warning(f"Central observation failed: {e}", color='yellow')
+
+            return None
+
+        def subscribeToP2PObservations():
+            """Subscribe to real-time P2P observations if available."""
+            if hasattr(self, '_oracle_network') and self._oracle_network:
+                try:
+                    # Subscribe to observation events
+                    if hasattr(self._oracle_network, 'subscribe'):
+                        self._oracle_network.subscribe(
+                            callback=lambda obs: processObservation(obs)
+                        )
+                        logging.info("Subscribed to P2P observations", color='green')
+                except Exception as e:
+                    logging.warning(f"Failed to subscribe to P2P observations: {e}", color='yellow')
+
         def pollForever():
+            # Subscribe to real-time P2P observations
+            subscribeToP2PObservations()
+
             while True:
-                time.sleep(60 * 60 * 11)  # 11 hours
+                time.sleep(60 * 60 * 11)  # 11 hours backup poll
                 try:
                     if not hasattr(self, 'server') or self.server is None:
                         logging.warning("Server not initialized, skipping observation poll", color='yellow')
@@ -461,30 +597,14 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         logging.warning("AI Engine not initialized, skipping observation poll", color='yellow')
                         continue
 
-                    # Get latest observation from central-lite
-                    observation = self.server.getObservation()
+                    # Get latest observation - P2P first, central fallback
+                    observation = getObservationP2PFirst()
 
                     if observation is None:
                         logging.info("No new observations available", color='blue')
                         continue
 
-                    # Convert observation to DataFrame for engine
-                    # Expected format: columns = [ts, value, hash/id]
-                    value = observation.get('value') or observation.get('bitcoin_price')
-                    hash_val = observation.get('hash') or observation.get('id') or observation.get('observation_id')
-                    df = pd.DataFrame([{
-                        'ts': observation.get('observed_at') or observation.get('ts'),
-                        'value': float(value) if value is not None else None,
-                        'hash': str(hash_val) if hash_val is not None else None,
-                    }])
-
-                    # Pass to each stream in the engine
-                    for streamUuid, streamModel in self.aiengine.streamModels.items():
-                        try:
-                            logging.info(f"Passing observation to stream {streamUuid}", color='green')
-                            streamModel.onDataReceived(df)
-                        except Exception as e:
-                            logging.error(f"Error passing observation to stream {streamUuid}: {e}", color='red')
+                    processObservation(observation)
 
                 except Exception as e:
                     logging.error(f"Error polling observations: {e}", color='red')
@@ -846,7 +966,132 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     except Exception as e:
                         logging.warning(f"Failed to initialize prediction protocol: {e}")
 
-                # 11. Wire managers to P2PSatoriServerClient if available
+                # 11. Initialize Treasury Alert Manager
+                if not hasattr(self, '_alert_manager') or self._alert_manager is None:
+                    try:
+                        from satorip2p.protocol.alerts import TreasuryAlertManager
+                        self._alert_manager = TreasuryAlertManager(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._alert_manager.start()
+                        logging.info("P2P treasury alert manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize alert manager: {e}")
+
+                # 12. Initialize Deferred Rewards Manager
+                if not hasattr(self, '_deferred_rewards_manager') or self._deferred_rewards_manager is None:
+                    try:
+                        from satorip2p.protocol.deferred_rewards import DeferredRewardsManager
+                        self._deferred_rewards_manager = DeferredRewardsManager()
+                        logging.info("P2P deferred rewards manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize deferred rewards manager: {e}")
+
+                # 13. Initialize Donation Manager
+                if not hasattr(self, '_donation_manager') or self._donation_manager is None:
+                    try:
+                        from satorip2p.protocol.donation import DonationManager
+                        self._donation_manager = DonationManager(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._donation_manager.start()
+                        logging.info("P2P donation manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize donation manager: {e}")
+
+                # 14. Initialize Protocol Versioning
+                if not hasattr(self, '_version_tracker') or self._version_tracker is None:
+                    try:
+                        PeerVersionTracker = get_p2p_module('PeerVersionTracker')
+                        VersionNegotiator = get_p2p_module('VersionNegotiator')
+                        PROTOCOL_VERSION = get_p2p_module('PROTOCOL_VERSION')
+                        if PeerVersionTracker and VersionNegotiator:
+                            self._version_tracker = PeerVersionTracker()
+                            self._version_negotiator = VersionNegotiator()
+                            self._protocol_version = PROTOCOL_VERSION or '1.0.0'
+                            logging.info(f"P2P protocol versioning initialized (v{self._protocol_version})", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize version tracker: {e}")
+
+                # 15. Initialize Storage Manager (redundant storage for deferred rewards & alerts)
+                if not hasattr(self, '_storage_manager') or self._storage_manager is None:
+                    try:
+                        StorageManager = get_p2p_module('StorageManager')
+                        DeferredRewardsStorage = get_p2p_module('DeferredRewardsStorage')
+                        AlertStorage = get_p2p_module('AlertStorage')
+                        if StorageManager:
+                            import os
+                            storage_dir = os.path.expanduser('~/.satori/storage')
+                            self._storage_manager = StorageManager(storage_dir=storage_dir)
+                            # Create specialized storage for deferred rewards and alerts
+                            if DeferredRewardsStorage:
+                                self._deferred_rewards_storage = DeferredRewardsStorage(
+                                    storage_dir=storage_dir,
+                                    dht_client=getattr(self._p2p_peers, 'dht', None) if self._p2p_peers else None,
+                                )
+                            if AlertStorage:
+                                self._alert_storage = AlertStorage(
+                                    storage_dir=storage_dir,
+                                    dht_client=getattr(self._p2p_peers, 'dht', None) if self._p2p_peers else None,
+                                )
+                            logging.info("P2P storage manager initialized (redundant storage enabled)", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize storage manager: {e}")
+
+                # 16. Initialize Bandwidth Tracker & QoS Manager
+                if not hasattr(self, '_bandwidth_tracker') or self._bandwidth_tracker is None:
+                    try:
+                        BandwidthTracker = get_p2p_module('BandwidthTracker')
+                        create_qos_manager = get_p2p_module('create_qos_manager')
+                        if BandwidthTracker:
+                            self._bandwidth_tracker = BandwidthTracker()
+                            if create_qos_manager:
+                                self._qos_manager = create_qos_manager(self._bandwidth_tracker)
+                            logging.info("P2P bandwidth tracker and QoS manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize bandwidth tracker: {e}")
+
+                # 17. Initialize Referral Manager
+                if not hasattr(self, '_referral_manager') or self._referral_manager is None:
+                    try:
+                        ReferralManager = get_p2p_module('ReferralManager')
+                        if ReferralManager:
+                            self._referral_manager = ReferralManager(
+                                peers=self._p2p_peers,
+                                wallet=self.identity,
+                            )
+                            await self._referral_manager.start()
+                            logging.info("P2P referral manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize referral manager: {e}")
+
+                # 18. Initialize Pricing Provider
+                if not hasattr(self, '_price_provider') or self._price_provider is None:
+                    try:
+                        get_price_provider = get_p2p_module('get_price_provider')
+                        if get_price_provider:
+                            self._price_provider = get_price_provider()
+                            logging.info("P2P price provider initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize price provider: {e}")
+
+                # 19. Initialize Reward Address Manager
+                if not hasattr(self, '_reward_address_manager') or self._reward_address_manager is None:
+                    try:
+                        RewardAddressManager = get_p2p_module('RewardAddressManager')
+                        if RewardAddressManager:
+                            self._reward_address_manager = RewardAddressManager(
+                                peers=self._p2p_peers,
+                                wallet=self.identity,
+                            )
+                            await self._reward_address_manager.start()
+                            logging.info("P2P reward address manager initialized", color="cyan")
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize reward address manager: {e}")
+
+                # 20. Wire managers to P2PSatoriServerClient if available
                 if hasattr(self, 'server') and self.server is not None:
                     try:
                         if hasattr(self.server, 'set_lending_manager'):
@@ -855,13 +1100,38 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                             self.server.set_delegation_manager(getattr(self, '_delegation_manager', None))
                         if hasattr(self.server, 'set_oracle_network'):
                             self.server.set_oracle_network(getattr(self, '_oracle_network', None))
+                        if hasattr(self.server, 'set_stream_registry'):
+                            self.server.set_stream_registry(getattr(self, '_stream_registry', None))
+                        if hasattr(self.server, 'set_alert_manager'):
+                            self.server.set_alert_manager(getattr(self, '_alert_manager', None))
+                        if hasattr(self.server, 'set_deferred_rewards_manager'):
+                            self.server.set_deferred_rewards_manager(getattr(self, '_deferred_rewards_manager', None))
+                        if hasattr(self.server, 'set_donation_manager'):
+                            self.server.set_donation_manager(getattr(self, '_donation_manager', None))
+                        # Wire new protocol feature managers
+                        if hasattr(self.server, 'set_version_tracker'):
+                            self.server.set_version_tracker(getattr(self, '_version_tracker', None))
+                        if hasattr(self.server, 'set_version_negotiator'):
+                            self.server.set_version_negotiator(getattr(self, '_version_negotiator', None))
+                        if hasattr(self.server, 'set_storage_manager'):
+                            self.server.set_storage_manager(getattr(self, '_storage_manager', None))
+                        if hasattr(self.server, 'set_bandwidth_tracker'):
+                            self.server.set_bandwidth_tracker(getattr(self, '_bandwidth_tracker', None))
+                        if hasattr(self.server, 'set_qos_manager'):
+                            self.server.set_qos_manager(getattr(self, '_qos_manager', None))
+                        if hasattr(self.server, 'set_referral_manager'):
+                            self.server.set_referral_manager(getattr(self, '_referral_manager', None))
+                        if hasattr(self.server, 'set_price_provider'):
+                            self.server.set_price_provider(getattr(self, '_price_provider', None))
+                        if hasattr(self.server, 'set_reward_address_manager'):
+                            self.server.set_reward_address_manager(getattr(self, '_reward_address_manager', None))
                         logging.info("P2P managers wired to server client", color="cyan")
                     except Exception as e:
                         logging.warning(f"Failed to wire P2P managers to server: {e}")
 
                 logging.info("P2P components initialization complete", color="cyan")
 
-                # 12. Initialize StreamManager (oracle data streams)
+                # 15. Initialize StreamManager (oracle data streams)
                 try:
                     from streams_lite import StreamManager
                     if not hasattr(self, '_stream_manager') or self._stream_manager is None:

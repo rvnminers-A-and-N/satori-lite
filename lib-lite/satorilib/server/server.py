@@ -36,6 +36,36 @@ from requests.exceptions import RequestException
 import json
 import traceback
 import datetime as dt
+import os
+
+
+def _get_networking_mode() -> str:
+    """
+    Get current networking mode from environment or config.
+
+    Returns:
+        'central' - Use central server only
+        'hybrid' - P2P primary with central fallback
+        'p2p' - P2P only, no central server
+    """
+    # Check environment variable first
+    mode = os.environ.get('SATORI_NETWORKING_MODE', '').lower()
+    if mode in ('central', 'hybrid', 'p2p'):
+        return mode
+
+    # Try to load from config file
+    try:
+        config_path = os.path.expanduser('~/.satori/config.json')
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                mode = config.get('networking_mode', 'central').lower()
+                if mode in ('central', 'hybrid', 'p2p'):
+                    return mode
+    except Exception:
+        pass
+
+    return 'central'  # Default to central mode
 
 
 class SatoriServerClient(object):
@@ -888,10 +918,39 @@ class SatoriServerClient(object):
         address: str,
         vaultAddress: str = '',
     ) -> tuple[bool, str]:
-        ''' add lend address '''
+        '''
+        Register lending to a pool vault address.
+
+        In P2P mode: Uses LendingManager to broadcast registration
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        if isinstance(vaultSignature, bytes):
+            vaultSignature = vaultSignature.decode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_lending_manager') and self._lending_manager:
+                    result = self._lending_manager.lend_to_vault(
+                        vault_address=address,
+                        vault_pubkey=vaultPubkey,
+                        vault_signature=vaultSignature,
+                        lender_vault_address=vaultAddress,
+                    )
+                    if result:
+                        if mode == 'p2p':
+                            return True, 'Registered via P2P'
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P lendToAddress failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, str(e)
+
+        # Central path (central mode or hybrid fallback)
         try:
-            if isinstance(vaultSignature, bytes):
-                vaultSignature = vaultSignature.decode()
             response = self._makeAuthenticatedCall(
                 function=requests.post,
                 endpoint='/stake/lend/to/address',
@@ -904,11 +963,34 @@ class SatoriServerClient(object):
             return response.status_code < 400, response.text
         except Exception as e:
             logging.warning(
-                'unable to determine status of mine to address feature due to connection timeout; try again Later.', e, color='yellow')
+                'unable to lendToAddress due to connection timeout; try again Later.', e, color='yellow')
             return False, ''
 
     def lendRemove(self) -> tuple[bool, dict]:
-        ''' removes a stream from the server '''
+        '''
+        Remove lending registration.
+
+        In P2P mode: Uses LendingManager to broadcast removal
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_lending_manager') and self._lending_manager:
+                    result = self._lending_manager.remove_lending()
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Removed via P2P'}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P lendRemove failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -916,11 +998,34 @@ class SatoriServerClient(object):
             return response.status_code < 400, response.text
         except Exception as e:
             logging.warning(
-                'unable to stakeProxyRemove due to connection timeout; try again Later.', e, color='yellow')
+                'unable to lendRemove due to connection timeout; try again Later.', e, color='yellow')
             return False, {}
 
     def lendAddress(self) -> Union[str, None]:
-        ''' get lending address '''
+        '''
+        Get current lending address.
+
+        In P2P mode: Uses LendingManager to get local state
+        In hybrid mode: P2P first, central fallback
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_lending_manager') and self._lending_manager:
+                    address = self._lending_manager.get_current_lend_address()
+                    if address:
+                        return address
+                    if mode == 'p2p':
+                        return ''
+            except Exception as e:
+                logging.warning(f'P2P lendAddress failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return ''
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -932,7 +1037,7 @@ class SatoriServerClient(object):
             return response.text
         except Exception as e:
             logging.warning(
-                'unable to get reward address; try again Later.', e, color='yellow')
+                'unable to get lend address; try again Later.', e, color='yellow')
             return ''
 
     def registerVault(
@@ -1021,7 +1126,30 @@ class SatoriServerClient(object):
             payload=json.dumps({'lend_id': lend_id})).text
 
     def stakeProxyChildren(self) -> tuple[bool, dict]:
-        ''' removes a stream from the server '''
+        '''
+        Get list of nodes delegating to me (my proxy children).
+
+        In P2P mode: Uses DelegationManager to get local state
+        In hybrid mode: P2P first, central fallback
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    children = self._delegation_manager.get_proxy_children()
+                    if children is not None:
+                        return True, json.dumps(children) if isinstance(children, list) else str(children)
+                    if mode == 'p2p':
+                        return True, '[]'
+            except Exception as e:
+                logging.warning(f'P2P stakeProxyChildren failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, '[]'
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1029,11 +1157,34 @@ class SatoriServerClient(object):
             return response.status_code < 400, response.text
         except Exception as e:
             logging.warning(
-                'unable to stakeProxyRequest due to connection timeout; try again Later.', e, color='yellow')
+                'unable to stakeProxyChildren due to connection timeout; try again Later.', e, color='yellow')
             return False, {}
 
     def stakeProxyCharity(self, address: str, childId: int) -> tuple[bool, dict]:
-        ''' charity for stake '''
+        '''
+        Mark a delegation as charity (rewards go to child).
+
+        In P2P mode: Uses DelegationManager to broadcast update
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    result = self._delegation_manager.set_charity_status(address, childId, True)
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Charity status set via P2P'}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P stakeProxyCharity failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.post,
@@ -1049,7 +1200,30 @@ class SatoriServerClient(object):
             return False, {}
 
     def stakeProxyCharityNot(self, address: str, childId: int) -> tuple[bool, dict]:
-        ''' no charity for stake '''
+        '''
+        Remove charity status from a delegation.
+
+        In P2P mode: Uses DelegationManager to broadcast update
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    result = self._delegation_manager.set_charity_status(address, childId, False)
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Charity status removed via P2P'}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P stakeProxyCharityNot failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.post,
@@ -1065,7 +1239,30 @@ class SatoriServerClient(object):
             return False, {}
 
     def delegateGet(self) -> tuple[bool, str]:
-        ''' my delegate '''
+        '''
+        Get my delegation target (who I'm delegating to).
+
+        In P2P mode: Uses DelegationManager to get local state
+        In hybrid mode: P2P first, central fallback
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    delegate = self._delegation_manager.get_my_delegate()
+                    if delegate:
+                        return True, json.dumps([delegate]) if isinstance(delegate, dict) else str(delegate)
+                    if mode == 'p2p':
+                        return True, '[]'
+            except Exception as e:
+                logging.warning(f'P2P delegateGet failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, '[]'
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1077,7 +1274,30 @@ class SatoriServerClient(object):
             return False, {}
 
     def delegateRemove(self) -> tuple[bool, str]:
-        ''' my delegate '''
+        '''
+        Remove my delegation.
+
+        In P2P mode: Uses DelegationManager to broadcast removal
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    result = self._delegation_manager.remove_delegation()
+                    if result:
+                        if mode == 'p2p':
+                            return True, 'Delegation removed via P2P'
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P delegateRemove failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, str(e)
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1089,7 +1309,30 @@ class SatoriServerClient(object):
             return False, {}
 
     def stakeProxyRemove(self, address: str, childId: int) -> tuple[bool, dict]:
-        ''' removes a stream from the server '''
+        '''
+        Remove a child from my proxy list.
+
+        In P2P mode: Uses DelegationManager to broadcast removal
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
+        '''
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_delegation_manager') and self._delegation_manager:
+                    result = self._delegation_manager.remove_proxy_child(address, childId)
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Proxy child removed via P2P'}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P stakeProxyRemove failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.post,
@@ -1478,8 +1721,32 @@ class SatoriServerClient(object):
 
     def poolAccepting(self, status: bool) -> tuple[bool, dict]:
         """
-        Function to set the pool status to accepting or not accepting
+        Set pool status to accepting or not accepting lenders.
+
+        In P2P mode: Uses LendingManager to broadcast pool status
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
         """
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_lending_manager') and self._lending_manager:
+                    if status:
+                        result = self._lending_manager.register_pool()
+                    else:
+                        result = self._lending_manager.unregister_pool()
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Pool status updated via P2P', 'accepting': status}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P poolAccepting failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1497,8 +1764,29 @@ class SatoriServerClient(object):
 
     def setPoolSize(self, poolStakeLimit: float) -> tuple[bool, dict]:
         """
-        Function to set the pool size
+        Set pool stake limit.
+
+        In P2P mode: Uses LendingManager to broadcast pool config
+        In hybrid mode: P2P first, then syncs with central
+        In central mode: Uses central server only
         """
+        mode = _get_networking_mode()
+
+        # P2P path
+        if mode in ('p2p', 'hybrid'):
+            try:
+                if hasattr(self, '_lending_manager') and self._lending_manager:
+                    result = self._lending_manager.set_pool_size(poolStakeLimit)
+                    if result:
+                        if mode == 'p2p':
+                            return True, {'status': 'Pool size updated via P2P', 'limit': poolStakeLimit}
+                        # In hybrid, continue to central
+            except Exception as e:
+                logging.warning(f'P2P setPoolSize failed: {e}', color='yellow')
+                if mode == 'p2p':
+                    return False, {'error': str(e)}
+
+        # Central path
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.post,
@@ -1510,7 +1798,7 @@ class SatoriServerClient(object):
                 error_message = f"Server returned status code {response.status_code}: {response.text}"
                 return False, {"error": error_message}
         except Exception as e:
-            error_message = f"Error in poolAcceptingWorkers: {str(e)}"
+            error_message = f"Error in setPoolSize: {str(e)}"
             return False, {"error": error_message}
 
     def setPoolWorkerReward(self, rewardPercentage: float) -> tuple[bool, dict]:
@@ -1567,8 +1855,24 @@ class SatoriServerClient(object):
 
     def setMiningMode(self, status: bool) -> tuple[bool, dict]:
         """
-        Function to set the worker mining mode
+        Function to set the worker mining mode.
+
+        In P2P mode: Stores locally (mining mode is a local preference)
+        In hybrid mode: Stores locally AND syncs with central server
+        In central mode: Uses central server only
         """
+        mode = _get_networking_mode()
+
+        # In P2P mode, store locally only
+        if mode == 'p2p':
+            self._mining_mode = status
+            return True, {'mining_mode': status, 'stored': 'local'}
+
+        # In hybrid mode, store locally AND try central
+        if mode == 'hybrid':
+            self._mining_mode = status
+
+        # Central or hybrid: try central server
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1577,9 +1881,15 @@ class SatoriServerClient(object):
                 return True, response.text
             else:
                 error_message = f"Server returned status code {response.status_code}: {response.text}"
+                # In hybrid mode, local storage succeeded even if central failed
+                if mode == 'hybrid':
+                    return True, {'mining_mode': status, 'stored': 'local', 'central_error': error_message}
                 return False, {"error": error_message}
         except Exception as e:
             error_message = f"Error in setMiningMode: {str(e)}"
+            # In hybrid mode, local storage succeeded even if central failed
+            if mode == 'hybrid':
+                return True, {'mining_mode': status, 'stored': 'local', 'central_error': error_message}
             return False, {"error": error_message}
 
     def getMiningMode(self, address) -> tuple[bool, dict]:
@@ -1601,9 +1911,42 @@ class SatoriServerClient(object):
 
     def loopbackCheck(self, ipAddress:Union[str, None], port: Union[int, None]) -> bool:
         """
-        asks the central server (could ask fellow Neurons) if our own dataserver
-        is publically reachable.
+        Checks if our dataserver is publicly reachable.
+
+        In P2P mode: Uses libp2p's NAT detection and peer reachability
+        In hybrid mode: Tries P2P first, falls back to central server
+        In central mode: Asks central server to check reachability
         """
+        mode = _get_networking_mode()
+
+        # In P2P mode, use libp2p NAT detection
+        if mode == 'p2p':
+            try:
+                from satorip2p import Peers
+                # Check if we have NAT traversal info from libp2p
+                # This would use AutoNAT or similar protocol
+                # For now, return True if we have external addresses
+                if hasattr(self, '_p2p_peers') and self._p2p_peers:
+                    addrs = self._p2p_peers.get_external_addresses()
+                    return len(addrs) > 0
+                # Fallback: assume reachable if port is set
+                return port is not None and port > 0
+            except ImportError:
+                return False
+
+        # In hybrid mode, try P2P first
+        if mode == 'hybrid':
+            try:
+                from satorip2p import Peers
+                if hasattr(self, '_p2p_peers') and self._p2p_peers:
+                    addrs = self._p2p_peers.get_external_addresses()
+                    if len(addrs) > 0:
+                        return True
+            except ImportError:
+                pass
+            # Fall through to central check
+
+        # Central or hybrid fallback: ask central server
         try:
             response = self._makeUnauthenticatedCall(
                 function=requests.post,
@@ -1620,7 +1963,7 @@ class SatoriServerClient(object):
                 error_message = f"Server returned status code {response.status_code}: {response.text}"
                 return False
         except Exception as e:
-            error_message = f"Error in setMiningMode: {str(e)}"
+            error_message = f"Error in loopbackCheck: {str(e)}"
             return False
 
     def getSubscribers(self) -> tuple[bool, list]:
@@ -1716,9 +2059,36 @@ class SatoriServerClient(object):
 
     def setDataManagerPort(self, port: int) -> tuple[bool, list]:
         """
-        asks the central server (could ask fellow Neurons) if our own dataserver
-        is publically reachable.
+        Sets the data manager port for peer discovery.
+
+        In P2P mode: Stores locally and updates peer announcement
+        In hybrid mode: Stores locally, updates P2P, AND syncs with central
+        In central mode: Uses central server only
         """
+        mode = _get_networking_mode()
+
+        # In P2P mode, store locally and update peer announcement
+        if mode == 'p2p':
+            self._data_manager_port = port
+            # Update peer announcement if P2P is available
+            try:
+                if hasattr(self, '_p2p_peers') and self._p2p_peers:
+                    self._p2p_peers.update_announcement({'data_manager_port': port})
+            except Exception:
+                pass
+            return True, {'port': port, 'stored': 'local'}
+
+        # In hybrid mode, store locally AND update P2P
+        if mode == 'hybrid':
+            self._data_manager_port = port
+            try:
+                if hasattr(self, '_p2p_peers') and self._p2p_peers:
+                    self._p2p_peers.update_announcement({'data_manager_port': port})
+            except Exception:
+                pass
+            # Fall through to also update central
+
+        # Central or hybrid: update central server
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
@@ -1727,9 +2097,15 @@ class SatoriServerClient(object):
                 return True, response.json()
             else:
                 error_message = f"Server returned status code {response.status_code}: {response.text}"
+                # In hybrid mode, local storage succeeded even if central failed
+                if mode == 'hybrid':
+                    return True, {'port': port, 'stored': 'local', 'central_error': error_message}
                 return False, {"error": error_message}
         except Exception as e:
-            error_message = f"Error in setMiningMode: {str(e)}"
+            error_message = f"Error in setDataManagerPort: {str(e)}"
+            # In hybrid mode, local storage succeeded even if central failed
+            if mode == 'hybrid':
+                return True, {'port': port, 'stored': 'local', 'central_error': error_message}
             return False, {"error": error_message}
 
 

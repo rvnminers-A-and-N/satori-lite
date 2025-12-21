@@ -76,6 +76,18 @@ def _get_p2p_modules():
             sign_message,
             verify_message,
         )
+        # Bandwidth and QoS modules
+        try:
+            from satorip2p.protocol.bandwidth import BandwidthTracker, QoSManager
+            from satorip2p.protocol.versioning import VersionNegotiator, PeerVersionTracker
+            from satorip2p.protocol.storage import StorageManager, RedundantStorage
+        except ImportError:
+            BandwidthTracker = None
+            QoSManager = None
+            VersionNegotiator = None
+            PeerVersionTracker = None
+            StorageManager = None
+            RedundantStorage = None
         return {
             'available': True,
             'Peers': Peers,
@@ -98,6 +110,12 @@ def _get_p2p_modules():
             'sign_message': sign_message,
             'verify_message': verify_message,
             'NetworkingMode': NetworkingMode,
+            'BandwidthTracker': BandwidthTracker,
+            'QoSManager': QoSManager,
+            'VersionNegotiator': VersionNegotiator,
+            'PeerVersionTracker': PeerVersionTracker,
+            'StorageManager': StorageManager,
+            'RedundantStorage': RedundantStorage,
         }
     except ImportError:
         return {'available': False}
@@ -180,6 +198,9 @@ class Engine:
         self._p2p_peers = None
         self._oracle_network = None
         self._prediction_protocol = None
+        self._bandwidth_qos = None
+        self._version_manager = None
+        self._storage_redundancy = None
         self._p2p_observation_subscriptions: dict[str, bool] = {}
         # TODO: Commented out for engine-neuron integration
         # self.centrifugo = None
@@ -276,6 +297,35 @@ class Engine:
                 asyncio.run(self._prediction_protocol.start())
                 info("P2P Prediction Protocol initialized", color="green")
 
+            # Initialize Bandwidth QoS for throttling
+            BandwidthTracker = get_p2p_module('BandwidthTracker')
+            if BandwidthTracker and self._bandwidth_qos is None:
+                try:
+                    self._bandwidth_qos = BandwidthTracker()
+                    info("P2P Bandwidth QoS initialized", color="green")
+                except Exception as e:
+                    debug(f"Bandwidth QoS not initialized: {e}")
+
+            # Initialize Version Tracker
+            PeerVersionTracker = get_p2p_module('PeerVersionTracker')
+            if PeerVersionTracker and self._version_manager is None:
+                try:
+                    self._version_manager = PeerVersionTracker()
+                    info("P2P Version Tracker initialized", color="green")
+                except Exception as e:
+                    debug(f"Version Tracker not initialized: {e}")
+
+            # Initialize Storage Manager
+            StorageManager = get_p2p_module('StorageManager')
+            if StorageManager and self._storage_redundancy is None:
+                try:
+                    self._storage_redundancy = StorageManager(
+                        base_path='/Satori/Neuron/data',
+                    )
+                    info("P2P Storage Manager initialized", color="green")
+                except Exception as e:
+                    debug(f"Storage Manager not initialized: {e}")
+
         except ImportError as e:
             debug(f"satorip2p not available for Engine P2P: {e}")
         except Exception as e:
@@ -315,6 +365,18 @@ class Engine:
             streamModel = self.streamModels.get(streamUuid)
             if streamModel is None:
                 return
+
+            # Track bandwidth if QoS manager is available
+            if self._bandwidth_qos is not None:
+                try:
+                    # Estimate message size (JSON overhead + data)
+                    estimated_size = len(str(observation.value)) + 100
+                    asyncio.run(self._bandwidth_qos.account_receive(
+                        topic=f"p2p/observation/{streamUuid[:8]}",
+                        byte_size=estimated_size
+                    ))
+                except Exception:
+                    pass  # Don't fail observation handling for tracking errors
 
             # Convert P2P Observation to DataFrame format for onDataReceived
             data = pd.DataFrame({

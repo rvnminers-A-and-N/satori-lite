@@ -507,6 +507,119 @@
         </div>
     </div>
 
+    <!-- Protocol Status Row -->
+    <div class="row g-3 mb-4">
+        <!-- Protocol Version -->
+        <div class="col-xl-4 col-md-6 col-12">
+            <div class="card metric-card h-100">
+                <div class="card-header py-2">
+                    <h6 class="mb-0">
+                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #5a5aff;">verified</i>
+                        Protocol Version
+                    </h6>
+                </div>
+                <div class="card-body p-3">
+                    <div class="row">
+                        <div class="col-6 text-center">
+                            <p class="text-muted small mb-1">Current</p>
+                            <h5 id="protocolVersion" class="mb-0" style="color: #5a5aff;">v1.0.0</h5>
+                        </div>
+                        <div class="col-6 text-center">
+                            <p class="text-muted small mb-1">Compatible Peers</p>
+                            <h5 id="compatiblePeers" class="mb-0" style="color: #00ff88;">0%</h5>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <div class="d-flex justify-content-between small">
+                        <span class="text-muted">Features:</span>
+                        <span id="featureCount" class="text-info">0 enabled</span>
+                    </div>
+                    <div class="progress mt-2" style="height: 6px;">
+                        <div id="upgradeProgress" class="progress-bar bg-gradient-success" role="progressbar" style="width: 100%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Storage Redundancy -->
+        <div class="col-xl-4 col-md-6 col-12">
+            <div class="card metric-card h-100">
+                <div class="card-header py-2">
+                    <h6 class="mb-0">
+                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #00d4aa;">storage</i>
+                        Storage Redundancy
+                    </h6>
+                </div>
+                <div class="card-body p-3">
+                    <div class="row">
+                        <div class="col-6 text-center">
+                            <p class="text-muted small mb-1">Disk Usage</p>
+                            <h5 id="diskUsage" class="mb-0" style="color: #00d4aa;">0 MB</h5>
+                        </div>
+                        <div class="col-6 text-center">
+                            <p class="text-muted small mb-1">Status</p>
+                            <span id="storageStatus" class="badge bg-gradient-success">Active</span>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span><i class="material-icons" style="font-size: 14px;">memory</i> Memory</span>
+                        <span id="memoryBackend" class="badge bg-secondary">--</span>
+                    </div>
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span><i class="material-icons" style="font-size: 14px;">folder</i> File</span>
+                        <span id="fileBackend" class="badge bg-secondary">--</span>
+                    </div>
+                    <div class="d-flex justify-content-between small">
+                        <span><i class="material-icons" style="font-size: 14px;">cloud</i> DHT</span>
+                        <span id="dhtBackend" class="badge bg-secondary">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bandwidth & QoS -->
+        <div class="col-xl-4 col-md-12 col-12">
+            <div class="card metric-card h-100">
+                <div class="card-header py-2">
+                    <h6 class="mb-0">
+                        <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #ff6b6b;">speed</i>
+                        Bandwidth & QoS
+                    </h6>
+                </div>
+                <div class="card-body p-3">
+                    <div class="row">
+                        <div class="col-4 text-center">
+                            <p class="text-muted small mb-1">Sent</p>
+                            <h6 id="bytesSent" class="mb-0" style="color: #ff6b6b;">0 KB</h6>
+                        </div>
+                        <div class="col-4 text-center">
+                            <p class="text-muted small mb-1">Received</p>
+                            <h6 id="bytesReceived" class="mb-0" style="color: #00aaff;">0 KB</h6>
+                        </div>
+                        <div class="col-4 text-center">
+                            <p class="text-muted small mb-1">QoS</p>
+                            <span id="qosStatus" class="badge bg-gradient-info">Off</span>
+                        </div>
+                    </div>
+                    <hr class="my-2">
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span class="text-muted">Messages/sec:</span>
+                        <span id="messagesPerSec">0</span>
+                    </div>
+                    <div class="d-flex justify-content-between small mb-1">
+                        <span class="text-muted">Rate Limited:</span>
+                        <span id="dropsRateLimited" class="text-warning">0</span>
+                    </div>
+                    <div class="d-flex justify-content-between small">
+                        <span class="text-muted">Low Priority Drops:</span>
+                        <span id="dropsLowPriority" class="text-danger">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Main Network Visualization -->
     <div class="row g-4 mb-4">
         <!-- Network Graph -->
@@ -1690,6 +1803,106 @@
         fetchP2PStatus();
         loadPoolStatus();
         loadDelegationStatus();
+        fetchProtocolVersion();
+        fetchStorageStatus();
+        fetchBandwidthStats();
+    }
+
+    // Fetch protocol version info
+    function fetchProtocolVersion() {
+        fetch('/api/p2p/version', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('protocolVersion').textContent = 'v' + (data.current_version || '1.0.0');
+
+                const totalPeers = data.peer_stats?.total_peers || 0;
+                const compatiblePeers = data.peer_stats?.compatible_peers || 0;
+                const compatPct = totalPeers > 0 ? Math.round((compatiblePeers / totalPeers) * 100) : 100;
+                document.getElementById('compatiblePeers').textContent = compatPct + '%';
+
+                const features = data.features || [];
+                document.getElementById('featureCount').textContent = features.length + ' enabled';
+
+                const progress = data.upgrade_progress || 100;
+                document.getElementById('upgradeProgress').style.width = progress + '%';
+            })
+            .catch(error => console.debug('Protocol version fetch error:', error));
+    }
+
+    // Fetch storage redundancy status
+    function fetchStorageStatus() {
+        fetch('/api/p2p/storage', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                // Disk usage
+                const usedMB = data.disk_usage?.used_mb || 0;
+                document.getElementById('diskUsage').textContent = usedMB.toFixed(1) + ' MB';
+
+                // Status badge
+                const statusEl = document.getElementById('storageStatus');
+                if (data.status === 'active') {
+                    statusEl.className = 'badge bg-gradient-success';
+                    statusEl.textContent = 'Active';
+                } else if (data.status === 'error') {
+                    statusEl.className = 'badge bg-gradient-danger';
+                    statusEl.textContent = 'Error';
+                } else {
+                    statusEl.className = 'badge bg-gradient-secondary';
+                    statusEl.textContent = 'Inactive';
+                }
+
+                // Backend status badges
+                const backends = data.backends || {};
+                updateBackendBadge('memoryBackend', backends.memory);
+                updateBackendBadge('fileBackend', backends.file);
+                updateBackendBadge('dhtBackend', backends.dht);
+            })
+            .catch(error => console.debug('Storage status fetch error:', error));
+    }
+
+    function updateBackendBadge(elementId, backend) {
+        const el = document.getElementById(elementId);
+        if (!backend || !backend.enabled) {
+            el.className = 'badge bg-secondary';
+            el.textContent = 'Off';
+        } else {
+            el.className = 'badge bg-gradient-success';
+            el.textContent = (backend.items || 0) + ' items';
+        }
+    }
+
+    // Fetch bandwidth stats
+    function fetchBandwidthStats() {
+        fetch('/api/p2p/bandwidth', { method: 'GET' })
+            .then(response => response.json())
+            .then(data => {
+                // Format bytes
+                const formatBytes = (bytes) => {
+                    if (bytes < 1024) return bytes + ' B';
+                    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+                    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+                };
+
+                const global = data.global || {};
+                document.getElementById('bytesSent').textContent = formatBytes(global.bytes_sent || 0);
+                document.getElementById('bytesReceived').textContent = formatBytes(global.bytes_received || 0);
+                document.getElementById('messagesPerSec').textContent = (global.messages_per_second || 0).toFixed(1);
+
+                // QoS status
+                const qos = data.qos || {};
+                const qosEl = document.getElementById('qosStatus');
+                if (qos.enabled) {
+                    qosEl.className = 'badge bg-gradient-success';
+                    qosEl.textContent = 'On';
+                } else {
+                    qosEl.className = 'badge bg-gradient-secondary';
+                    qosEl.textContent = 'Off';
+                }
+
+                document.getElementById('dropsRateLimited').textContent = qos.drops_rate_limited || 0;
+                document.getElementById('dropsLowPriority').textContent = qos.drops_low_priority || 0;
+            })
+            .catch(error => console.debug('Bandwidth stats fetch error:', error));
     }
 
     function fetchP2PStatus() {
@@ -2028,13 +2241,16 @@
     }
 
     function toggleCharity(address, childId, isCharity) {
-        const endpoint = isCharity ? `/proxy/child/no_charity/${address}/${childId}` : `/proxy/child/charity/${address}/${childId}`;
+        const endpoint = isCharity ? `/api/proxy/child/no_charity/${address}/${childId}` : `/api/proxy/child/charity/${address}/${childId}`;
 
-        fetch(endpoint, { method: 'GET' })
-            .then(response => {
-                if (response.ok) {
+        fetch(endpoint, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
                     addEvent('delegation', `${isCharity ? 'Removed charity status' : 'Marked as charity'}: ${truncateId(address)}`);
                     loadDelegationStatus();
+                } else {
+                    alert('Failed: ' + (data.error || 'Unknown error'));
                 }
             })
             .catch(error => console.error('Error:', error));
@@ -2043,11 +2259,14 @@
     function removeWorker(address, childId) {
         if (!confirm('Remove worker ' + truncateId(address) + '?')) return;
 
-        fetch(`/proxy/child/remove/${address}/${childId}`, { method: 'GET' })
-            .then(response => {
-                if (response.ok) {
+        fetch(`/api/proxy/child/remove/${address}/${childId}`, { method: 'POST' })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
                     addEvent('delegation', `Removed worker ${truncateId(address)}`);
                     loadDelegationStatus();
+                } else {
+                    alert('Failed: ' + (data.error || 'Unknown error'));
                 }
             })
             .catch(error => console.error('Error:', error));

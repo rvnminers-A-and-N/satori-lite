@@ -1626,3 +1626,1224 @@ def register_routes(app):
         except Exception as e:
             logger.error(f"Error setting training delay: {e}")
             return jsonify({'error': str(e)}), 500
+
+    # =========================================================================
+    # TREASURY ALERTS ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/treasury/status')
+    @login_required
+    def api_treasury_status():
+        """Get current treasury status and active alerts."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'severity': 'info',
+                'satori_level': 'Normal',
+                'evr_level': 'Normal',
+                'active_alert': None,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_alert_manager') and startup._alert_manager:
+                manager = startup._alert_manager
+                if hasattr(manager, 'get_current_status'):
+                    status = manager.get_current_status()
+                    if status:
+                        result['severity'] = status.severity
+                        result['satori_level'] = status.satori_level
+                        result['evr_level'] = status.evr_level
+                        result['satori_balance'] = getattr(status, 'satori_balance', None)
+                        result['evr_balance'] = getattr(status, 'evr_balance', None)
+
+                if hasattr(manager, 'get_active_alert'):
+                    alert = manager.get_active_alert()
+                    if alert:
+                        result['active_alert'] = {
+                            'type': alert.alert_type,
+                            'severity': alert.severity,
+                            'message': alert.message,
+                            'timestamp': alert.timestamp,
+                        }
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Treasury status failed: {e}")
+            return jsonify({
+                'severity': 'info',
+                'satori_level': 'Unknown',
+                'evr_level': 'Unknown',
+                'error': str(e)
+            })
+
+    @app.route('/api/p2p/treasury/deferred')
+    @login_required
+    def api_treasury_deferred():
+        """Get deferred rewards for current user."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'total_pending': 0.0,
+                'deferred_count': 0,
+                'deferred_rewards': [],
+            }
+
+            # Get wallet address
+            wallet_manager = get_or_create_session_vault()
+            if not wallet_manager or not wallet_manager.vault:
+                return jsonify(result)
+
+            vault_address = wallet_manager.vault.address if hasattr(wallet_manager.vault, 'address') else None
+            if not vault_address:
+                return jsonify(result)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_deferred_rewards_manager') and startup._deferred_rewards_manager:
+                manager = startup._deferred_rewards_manager
+                if hasattr(manager, 'get_deferred_for_address'):
+                    summary = manager.get_deferred_for_address(vault_address)
+                    if summary:
+                        result['total_pending'] = summary.total_pending
+                        result['deferred_count'] = summary.deferred_count
+                        result['oldest_deferred_at'] = summary.oldest_deferred_at
+                        result['newest_deferred_at'] = summary.newest_deferred_at
+                        for r in summary.deferred_rewards[:10]:  # Limit to 10 items
+                            result['deferred_rewards'].append({
+                                'round_id': r.round_id,
+                                'amount': r.amount,
+                                'reason': r.reason,
+                                'created_at': r.created_at,
+                            })
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Deferred rewards failed: {e}")
+            return jsonify({
+                'total_pending': 0.0,
+                'deferred_count': 0,
+                'error': str(e)
+            })
+
+    @app.route('/api/p2p/treasury/alerts/history')
+    @login_required
+    def api_treasury_alert_history():
+        """Get recent alert history."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 20, type=int)
+            history = []
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_alert_manager') and startup._alert_manager:
+                manager = startup._alert_manager
+                if hasattr(manager, 'get_alert_history'):
+                    raw = manager.get_alert_history(limit=limit)
+                    for alert in raw:
+                        history.append({
+                            'type': alert.alert_type,
+                            'severity': alert.severity,
+                            'message': alert.message,
+                            'timestamp': alert.timestamp,
+                            'resolved': getattr(alert, 'resolved', False),
+                            'resolved_at': getattr(alert, 'resolved_at', None),
+                        })
+
+            return jsonify({'history': history})
+        except Exception as e:
+            logger.warning(f"Alert history failed: {e}")
+            return jsonify({'history': [], 'error': str(e)})
+
+    @app.route('/api/p2p/treasury/total-deferred')
+    @login_required
+    def api_treasury_total_deferred():
+        """Get total deferred rewards across all users (for signer dashboard)."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'total_deferred': 0.0,
+                'deferred_count': 0,
+                'unique_addresses': 0,
+                'deferred_rounds': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_deferred_rewards_manager') and startup._deferred_rewards_manager:
+                manager = startup._deferred_rewards_manager
+                if hasattr(manager, 'get_stats'):
+                    stats = manager.get_stats()
+                    result['total_deferred'] = stats.get('total_deferred', 0.0)
+                    result['deferred_count'] = stats.get('deferred_count', 0)
+                    result['unique_addresses'] = stats.get('unique_addresses', 0)
+                    result['deferred_rounds'] = stats.get('deferred_rounds', 0)
+                    result['oldest_deferral'] = stats.get('oldest_deferral')
+                    result['newest_deferral'] = stats.get('newest_deferral')
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Total deferred failed: {e}")
+            return jsonify(result)
+
+    # =========================================================================
+    # PROTOCOL VERSION ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/version')
+    @login_required
+    def api_p2p_version():
+        """Get protocol version info and peer version distribution."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'current_version': '1.0.0',
+                'min_supported': '1.0.0',
+                'peer_stats': {
+                    'total_peers': 0,
+                    'compatible_peers': 0,
+                    'version_distribution': {},
+                },
+                'features': [],
+                'upgrade_progress': 0.0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Get protocol version
+                if hasattr(startup, '_protocol_version'):
+                    result['current_version'] = startup._protocol_version
+
+                # Get version tracker stats
+                if hasattr(startup, '_version_tracker') and startup._version_tracker:
+                    tracker = startup._version_tracker
+                    if hasattr(tracker, 'get_network_stats'):
+                        stats = tracker.get_network_stats()
+                        result['peer_stats'] = {
+                            'total_peers': stats.get('total_peers', 0),
+                            'compatible_peers': stats.get('compatible_peers', 0),
+                            'version_distribution': stats.get('version_distribution', {}),
+                        }
+                    if hasattr(tracker, 'get_upgrade_progress'):
+                        result['upgrade_progress'] = tracker.get_upgrade_progress()
+
+                # Get current features
+                try:
+                    from satorip2p.protocol.versioning import get_current_features
+                    result['features'] = get_current_features()
+                except ImportError:
+                    pass
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Version info failed: {e}")
+            return jsonify({'error': str(e), 'current_version': '1.0.0'})
+
+    # =========================================================================
+    # STORAGE REDUNDANCY ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/storage')
+    @login_required
+    def api_p2p_storage():
+        """Get storage redundancy status and disk usage."""
+        try:
+            from satorineuron.init import start
+            import os
+
+            result = {
+                'status': 'unavailable',
+                'disk_usage': {
+                    'used_bytes': 0,
+                    'used_mb': 0.0,
+                    'storage_dir': '~/.satori/storage',
+                },
+                'backends': {
+                    'memory': {'enabled': False, 'items': 0},
+                    'file': {'enabled': False, 'items': 0},
+                    'dht': {'enabled': False, 'items': 0},
+                },
+                'deferred_rewards': {
+                    'stored_count': 0,
+                    'pending_sync': 0,
+                },
+                'alerts': {
+                    'stored_count': 0,
+                    'pending_sync': 0,
+                },
+            }
+
+            # Calculate actual disk usage
+            storage_dir = os.path.expanduser('~/.satori/storage')
+            if os.path.exists(storage_dir):
+                total_size = 0
+                for dirpath, dirnames, filenames in os.walk(storage_dir):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        if os.path.exists(fp):
+                            total_size += os.path.getsize(fp)
+                result['disk_usage']['used_bytes'] = total_size
+                result['disk_usage']['used_mb'] = round(total_size / (1024 * 1024), 2)
+                result['disk_usage']['storage_dir'] = storage_dir
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Get storage manager status
+                if hasattr(startup, '_storage_manager') and startup._storage_manager:
+                    manager = startup._storage_manager
+                    result['status'] = 'active'
+                    if hasattr(manager, 'get_status'):
+                        status = manager.get_status()
+                        result['backends'] = status.get('backends', result['backends'])
+
+                # Get deferred rewards storage status
+                if hasattr(startup, '_deferred_rewards_storage') and startup._deferred_rewards_storage:
+                    storage = startup._deferred_rewards_storage
+                    result['backends']['file']['enabled'] = True
+                    if hasattr(storage, 'count'):
+                        result['deferred_rewards']['stored_count'] = storage.count()
+                    if hasattr(storage, 'pending_sync_count'):
+                        result['deferred_rewards']['pending_sync'] = storage.pending_sync_count()
+
+                # Get alert storage status
+                if hasattr(startup, '_alert_storage') and startup._alert_storage:
+                    storage = startup._alert_storage
+                    if hasattr(storage, 'count'):
+                        result['alerts']['stored_count'] = storage.count()
+                    if hasattr(storage, 'pending_sync_count'):
+                        result['alerts']['pending_sync'] = storage.pending_sync_count()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Storage status failed: {e}")
+            return jsonify({'status': 'error', 'error': str(e)})
+
+    # =========================================================================
+    # BANDWIDTH & QOS ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/bandwidth')
+    @login_required
+    def api_p2p_bandwidth():
+        """Get bandwidth usage statistics and QoS status."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'status': 'unavailable',
+                'global': {
+                    'bytes_sent': 0,
+                    'bytes_received': 0,
+                    'messages_sent': 0,
+                    'messages_received': 0,
+                    'bytes_per_second': 0.0,
+                    'messages_per_second': 0.0,
+                },
+                'topics': {},
+                'qos': {
+                    'enabled': False,
+                    'drops_low_priority': 0,
+                    'drops_rate_limited': 0,
+                    'policy': 'none',
+                },
+                'peers': {},
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Get bandwidth tracker stats
+                if hasattr(startup, '_bandwidth_tracker') and startup._bandwidth_tracker:
+                    tracker = startup._bandwidth_tracker
+                    result['status'] = 'active'
+
+                    # Global metrics
+                    if hasattr(tracker, 'get_global_metrics'):
+                        global_metrics = tracker.get_global_metrics()
+                        if hasattr(global_metrics, 'to_dict'):
+                            result['global'] = global_metrics.to_dict()
+                        elif isinstance(global_metrics, dict):
+                            result['global'] = global_metrics
+
+                    # Per-topic metrics
+                    if hasattr(tracker, 'get_topic_metrics'):
+                        topic_metrics = tracker.get_topic_metrics()
+                        for topic, metrics in topic_metrics.items():
+                            if hasattr(metrics, 'to_dict'):
+                                result['topics'][topic] = metrics.to_dict()
+                            elif isinstance(metrics, dict):
+                                result['topics'][topic] = metrics
+
+                    # Per-peer metrics (summarized)
+                    if hasattr(tracker, 'get_peer_metrics'):
+                        peer_metrics = tracker.get_peer_metrics()
+                        result['peers'] = {
+                            'count': len(peer_metrics),
+                            'top_senders': [],
+                            'top_receivers': [],
+                        }
+
+                # Get QoS manager stats
+                if hasattr(startup, '_qos_manager') and startup._qos_manager:
+                    qos = startup._qos_manager
+                    result['qos']['enabled'] = True
+                    if hasattr(qos, 'get_stats'):
+                        qos_stats = qos.get_stats()
+                        result['qos']['drops_low_priority'] = qos_stats.get('drops_low_priority', 0)
+                        result['qos']['drops_rate_limited'] = qos_stats.get('drops_rate_limited', 0)
+                        result['qos']['policy'] = qos_stats.get('policy', 'default')
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Bandwidth stats failed: {e}")
+            return jsonify({'status': 'error', 'error': str(e)})
+
+    @app.route('/api/p2p/bandwidth/history')
+    @login_required
+    def api_p2p_bandwidth_history():
+        """Get bandwidth usage history for charting."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'history': [],
+                'interval_seconds': 60,
+                'points': 60,  # Last 60 minutes
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_bandwidth_tracker') and startup._bandwidth_tracker:
+                tracker = startup._bandwidth_tracker
+                if hasattr(tracker, 'get_history'):
+                    result['history'] = tracker.get_history(points=60)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Bandwidth history failed: {e}")
+            return jsonify({'history': [], 'error': str(e)})
+
+    # =========================================================================
+    # PRICING ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/pricing/satori')
+    @login_required
+    def api_p2p_pricing_satori():
+        """Get SATORI price info from SafeTrade."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'symbol': 'SATORI',
+                'price_usd': 0.0,
+                'price_btc': 0.0,
+                'volume_24h_usd': 0.0,
+                'change_24h_pct': 0.0,
+                'source': 'safetrade',
+                'updated_at': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_price_provider') and startup._price_provider:
+                provider = startup._price_provider
+                if hasattr(provider, 'get_satori_price'):
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    try:
+                        quote = loop.run_until_complete(provider.get_satori_price())
+                        if quote:
+                            result['price_usd'] = quote.price_usd
+                            result['price_btc'] = quote.price_btc if hasattr(quote, 'price_btc') else 0.0
+                            result['volume_24h_usd'] = quote.volume_24h if hasattr(quote, 'volume_24h') else 0.0
+                            result['updated_at'] = quote.timestamp if hasattr(quote, 'timestamp') else 0
+                    finally:
+                        loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"SATORI pricing failed: {e}")
+            return jsonify({'symbol': 'SATORI', 'price_usd': 0.0, 'error': str(e)})
+
+    @app.route('/api/p2p/pricing/evr')
+    @login_required
+    def api_p2p_pricing_evr():
+        """Get EVR price info from SafeTrade."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'symbol': 'EVR',
+                'price_usd': 0.0,
+                'price_btc': 0.0,
+                'volume_24h_usd': 0.0,
+                'change_24h_pct': 0.0,
+                'source': 'safetrade',
+                'updated_at': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_price_provider') and startup._price_provider:
+                provider = startup._price_provider
+                if hasattr(provider, 'get_evr_price'):
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    try:
+                        quote = loop.run_until_complete(provider.get_evr_price())
+                        if quote:
+                            result['price_usd'] = quote.price_usd
+                            result['price_btc'] = quote.price_btc if hasattr(quote, 'price_btc') else 0.0
+                            result['volume_24h_usd'] = quote.volume_24h if hasattr(quote, 'volume_24h') else 0.0
+                            result['updated_at'] = quote.timestamp if hasattr(quote, 'timestamp') else 0
+                    finally:
+                        loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"EVR pricing failed: {e}")
+            return jsonify({'symbol': 'EVR', 'price_usd': 0.0, 'error': str(e)})
+
+    @app.route('/api/p2p/pricing/exchange-rate')
+    @login_required
+    def api_p2p_pricing_exchange_rate():
+        """Get EVR to SATORI exchange rate for donations."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'evr_to_satori': 0.0,
+                'satori_price_usd': 0.0,
+                'evr_price_usd': 0.0,
+                'discount_applied': 0.8,
+                'source': 'safetrade',
+                'updated_at': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_price_provider') and startup._price_provider:
+                provider = startup._price_provider
+                if hasattr(provider, 'get_exchange_rate'):
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    try:
+                        rate_info = loop.run_until_complete(provider.get_exchange_rate())
+                        if rate_info:
+                            result.update(rate_info)
+                    finally:
+                        loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Exchange rate failed: {e}")
+            return jsonify({'evr_to_satori': 0.0, 'error': str(e)})
+
+    # =========================================================================
+    # DONATION ENDPOINTS
+    # =========================================================================
+
+    @app.route('/donate')
+    @login_required
+    def donate():
+        """Treasury donation page."""
+        return render_template('donate.html', **get_base_context())
+
+    @app.route('/donate/treasury-address')
+    @login_required
+    def donate_treasury_address():
+        """Get the treasury multi-sig address."""
+        try:
+            from satorineuron.init import start
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, 'server') and startup.server:
+                if hasattr(startup.server, 'getTreasuryAddress'):
+                    address = startup.server.getTreasuryAddress()
+                    return address or 'Not available'
+            return 'Not available'
+        except Exception as e:
+            logger.error(f"Get treasury address failed: {e}")
+            return 'Error'
+
+    @app.route('/donate/send', methods=['POST'])
+    @login_required
+    def donate_send():
+        """Submit a donation to the treasury."""
+        try:
+            from satorineuron.init import start
+            data = request.get_json() or {}
+            amount = float(data.get('amount', 0))
+
+            if amount <= 0:
+                return jsonify({'success': False, 'error': 'Invalid amount'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, 'server') and startup.server:
+                if hasattr(startup.server, 'donateToTreasury'):
+                    result = startup.server.donateToTreasury(amount)
+                    if result:
+                        return jsonify({'success': True, 'message': 'Donation submitted!'})
+
+            return jsonify({'success': False, 'error': 'Unable to process donation'})
+        except Exception as e:
+            logger.error(f"Donate send failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/donate/stats')
+    @login_required
+    def donate_stats():
+        """Get donation stats for current user."""
+        try:
+            return jsonify({
+                'total_donated': 0.0,
+                'donation_count': 0,
+                'tier': 'none',
+                'badges_earned': [],
+            })
+        except Exception as e:
+            logger.error(f"Get donation stats failed: {e}")
+            return jsonify({'total_donated': 0.0, 'donation_count': 0, 'tier': 'none'})
+
+    @app.route('/donate/history')
+    @login_required
+    def donate_history():
+        """Get donation history for current user."""
+        try:
+            return jsonify([])
+        except Exception as e:
+            logger.error(f"Get donation history failed: {e}")
+            return jsonify([])
+
+    @app.route('/donate/top-donors')
+    @login_required
+    def donate_top_donors():
+        """Get top donors list."""
+        try:
+            return jsonify([])
+        except Exception as e:
+            logger.error(f"Get top donors failed: {e}")
+            return jsonify([])
+
+    @app.route('/api/donate/treasury-address')
+    @login_required
+    def api_donate_treasury_address():
+        """Get the treasury address for donations."""
+        try:
+            from satorineuron.init import start
+
+            # Try to get from signer module
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_signer_node') and startup._signer_node:
+                signer = startup._signer_node
+                if hasattr(signer, 'treasury_address') and signer.treasury_address:
+                    return jsonify({'treasury_address': signer.treasury_address})
+
+            # Fallback to P2P treasury config
+            try:
+                from satorip2p.protocol.signer import get_treasury_address
+                treasury = get_treasury_address()
+                if treasury:
+                    return jsonify({'treasury_address': treasury})
+            except ImportError:
+                pass
+
+            # Final fallback - return a placeholder
+            return jsonify({'treasury_address': 'Not configured'})
+        except Exception as e:
+            logger.warning(f"Treasury address failed: {e}")
+            return jsonify({'treasury_address': 'Error', 'error': str(e)})
+
+    @app.route('/api/donate/stats')
+    @login_required
+    def api_donate_stats():
+        """Get donation stats for current user."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            result = {
+                'total_donated': 0.0,
+                'tier': 'None',
+                'rewards_received': 0.0,
+                'progress_to_next': 0.0,
+                'next_tier': None,
+                'next_tier_threshold': 0.0,
+            }
+
+            # Get wallet address
+            wallet_manager = get_or_create_session_vault()
+            if not wallet_manager or not wallet_manager.vault:
+                return jsonify(result)
+
+            vault_address = wallet_manager.vault.address if hasattr(wallet_manager.vault, 'address') else None
+            if not vault_address:
+                return jsonify(result)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_donation_manager') and startup._donation_manager:
+                manager = startup._donation_manager
+
+                async def get_donor_stats():
+                    if hasattr(manager, 'get_donor_stats'):
+                        return await manager.get_donor_stats(vault_address)
+                    return None
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    stats = loop.run_until_complete(get_donor_stats())
+                    if stats:
+                        result['total_donated'] = stats.total_donated
+                        result['tier'] = stats.current_tier
+                        result['rewards_received'] = stats.total_rewards_received
+
+                        # Get tier progress
+                        if hasattr(manager, 'get_progress_to_next_tier'):
+                            progress_info = loop.run_until_complete(
+                                manager.get_progress_to_next_tier(vault_address))
+                            if progress_info:
+                                result['progress_to_next'] = progress_info.get('progress', 0.0)
+                                result['next_tier'] = progress_info.get('next_tier')
+                                result['next_tier_threshold'] = progress_info.get('threshold', 0.0)
+                finally:
+                    loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Donation stats failed: {e}")
+            return jsonify(result)
+
+    @app.route('/api/donate/send', methods=['POST'])
+    @login_required
+    def api_donate_send():
+        """Send a donation to the treasury."""
+        try:
+            data = request.get_json() or {}
+            amount = data.get('amount')
+
+            if not amount or float(amount) <= 0:
+                return jsonify({'success': False, 'error': 'Invalid amount'})
+
+            # Get wallet manager
+            wallet_manager = get_or_create_session_vault()
+            if not wallet_manager or not wallet_manager.vault:
+                return jsonify({'success': False, 'error': 'Vault not available'})
+
+            # Get treasury address
+            from satorineuron.init import start
+            treasury_address = None
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_signer_node') and startup._signer_node:
+                signer = startup._signer_node
+                if hasattr(signer, 'treasury_address'):
+                    treasury_address = signer.treasury_address
+
+            if not treasury_address:
+                try:
+                    from satorip2p.protocol.signer import get_treasury_address
+                    treasury_address = get_treasury_address()
+                except ImportError:
+                    pass
+
+            if not treasury_address:
+                return jsonify({'success': False, 'error': 'Treasury address not configured'})
+
+            # Send EVR to treasury
+            vault = wallet_manager.vault
+            vault.get()
+            vault.getReadyToSend()
+
+            # Send EVR transaction
+            txid = vault.evrTransaction(amount=float(amount), address=treasury_address)
+
+            if txid and len(txid) == 64:
+                return jsonify({'success': True, 'tx_hash': txid})
+            else:
+                return jsonify({'success': False, 'error': 'Transaction failed', 'details': str(txid)})
+
+        except Exception as e:
+            logger.error(f"Donation send failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/donate/top-donors')
+    @login_required
+    def api_donate_top_donors():
+        """Get top donors leaderboard."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            limit = request.args.get('limit', 10, type=int)
+            donors = []
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_donation_manager') and startup._donation_manager:
+                manager = startup._donation_manager
+
+                async def get_top():
+                    if hasattr(manager, 'get_top_donors'):
+                        return await manager.get_top_donors(limit=limit)
+                    return []
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    top = loop.run_until_complete(get_top())
+                    for d in top:
+                        donors.append({
+                            'address': d.address,
+                            'total_donated': d.total_donated,
+                            'tier': d.current_tier,
+                        })
+                finally:
+                    loop.close()
+
+            return jsonify({'donors': donors})
+        except Exception as e:
+            logger.warning(f"Top donors failed: {e}")
+            return jsonify({'donors': [], 'error': str(e)})
+
+    # =========================================================================
+    # REFERRAL SYSTEM ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/referral/stats')
+    @login_required
+    def api_referral_stats():
+        """Get referral stats for current user."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            result = {
+                'referral_count': 0,
+                'tier': 'None',
+                'bonus_percent': 0,
+            }
+
+            # Get wallet address
+            wallet_manager = get_or_create_session_vault()
+            if not wallet_manager or not wallet_manager.wallet:
+                return jsonify(result)
+
+            wallet_address = wallet_manager.wallet.address if hasattr(wallet_manager.wallet, 'address') else None
+            if not wallet_address:
+                return jsonify(result)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_referral_manager') and startup._referral_manager:
+                manager = startup._referral_manager
+
+                async def get_stats():
+                    if hasattr(manager, 'get_referrer_stats'):
+                        return await manager.get_referrer_stats(wallet_address)
+                    return None
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    stats = loop.run_until_complete(get_stats())
+                    if stats:
+                        result['referral_count'] = stats.referral_count
+                        result['tier'] = stats.tier
+                        result['bonus_percent'] = stats.bonus_percent
+                finally:
+                    loop.close()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Referral stats failed: {e}")
+            return jsonify(result)
+
+    @app.route('/api/referral/top')
+    @login_required
+    def api_referral_top():
+        """Get top referrers leaderboard."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            limit = request.args.get('limit', 10, type=int)
+            referrers = []
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_referral_manager') and startup._referral_manager:
+                manager = startup._referral_manager
+
+                async def get_top():
+                    if hasattr(manager, 'get_top_referrers'):
+                        return await manager.get_top_referrers(limit=limit)
+                    return []
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    top = loop.run_until_complete(get_top())
+                    for r in top:
+                        referrers.append({
+                            'address': r.address,
+                            'referral_count': r.referral_count,
+                            'tier': r.tier,
+                            'bonus_percent': r.bonus_percent,
+                        })
+                finally:
+                    loop.close()
+
+            return jsonify({'referrers': referrers})
+        except Exception as e:
+            logger.warning(f"Top referrers failed: {e}")
+            return jsonify({'referrers': [], 'error': str(e)})
+
+    @app.route('/api/referral/set', methods=['POST'])
+    @login_required
+    def api_referral_set():
+        """Set referrer for current user."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            referrer_address = data.get('referrer_address', '').strip()
+
+            if not referrer_address or len(referrer_address) != 34:
+                return jsonify({'success': False, 'error': 'Invalid referrer address'})
+
+            # Get wallet address
+            wallet_manager = get_or_create_session_vault()
+            if not wallet_manager or not wallet_manager.wallet:
+                return jsonify({'success': False, 'error': 'Wallet not available'})
+
+            wallet_address = wallet_manager.wallet.address
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_referral_manager') and startup._referral_manager:
+                manager = startup._referral_manager
+
+                async def set_referrer():
+                    if hasattr(manager, 'register_referral'):
+                        return await manager.register_referral(wallet_address, referrer_address)
+                    return False
+
+                try:
+                    loop = asyncio.new_event_loop()
+                    success = loop.run_until_complete(set_referrer())
+                    return jsonify({'success': success})
+                finally:
+                    loop.close()
+
+            return jsonify({'success': False, 'error': 'Referral manager not available'})
+        except Exception as e:
+            logger.error(f"Set referrer failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # PROXY/DELEGATION MANAGEMENT ENDPOINTS
+    # =========================================================================
+
+    def _get_current_networking_mode():
+        """Helper to get current networking mode."""
+        try:
+            from satorineuron.init import start
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_get_networking_mode'):
+                return startup._get_networking_mode()
+        except:
+            pass
+        return 'central'
+
+    @app.route('/api/proxy/child/charity/<address>/<int:child_id>', methods=['POST'])
+    @login_required
+    def api_proxy_charity(address, child_id):
+        """Mark a proxy child as charity."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                    manager = startup._delegation_manager
+
+                    async def set_charity():
+                        if hasattr(manager, 'set_charity_status'):
+                            return await manager.set_charity_status(address, child_id, True)
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(set_charity())
+                        if success:
+                            return jsonify({'success': True})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P charity failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/stake/proxy/charity', 'POST', {'child': address, 'childId': child_id})
+        except Exception as e:
+            logger.error(f"Set charity failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/proxy/child/no_charity/<address>/<int:child_id>', methods=['POST'])
+    @login_required
+    def api_proxy_no_charity(address, child_id):
+        """Remove charity status from a proxy child."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                    manager = startup._delegation_manager
+
+                    async def remove_charity():
+                        if hasattr(manager, 'set_charity_status'):
+                            return await manager.set_charity_status(address, child_id, False)
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(remove_charity())
+                        if success:
+                            return jsonify({'success': True})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P remove charity failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/stake/proxy/charity/not', 'POST', {'child': address, 'childId': child_id})
+        except Exception as e:
+            logger.error(f"Remove charity failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/proxy/child/remove/<address>/<int:child_id>', methods=['POST'])
+    @login_required
+    def api_proxy_remove_child(address, child_id):
+        """Remove a proxy child."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                    manager = startup._delegation_manager
+
+                    async def remove_child():
+                        if hasattr(manager, 'remove_proxy_child'):
+                            return await manager.remove_proxy_child(address, child_id)
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(remove_child())
+                        if success:
+                            return jsonify({'success': True})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P remove child failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/stake/proxy/remove', 'POST', {'child': address, 'childId': child_id})
+        except Exception as e:
+            logger.error(f"Remove proxy child failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/delegation/remove', methods=['POST'])
+    @login_required
+    def api_delegation_remove():
+        """Remove current delegation."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                wallet_manager = get_or_create_session_vault()
+                if wallet_manager and wallet_manager.wallet:
+                    wallet_address = wallet_manager.wallet.address
+
+                    startup = start.getStart() if hasattr(start, 'getStart') else None
+                    if startup and hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                        manager = startup._delegation_manager
+
+                        async def remove_delegation():
+                            if hasattr(manager, 'remove_delegation'):
+                                return await manager.remove_delegation(wallet_address)
+                            return False
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            success = loop.run_until_complete(remove_delegation())
+                            if success:
+                                return jsonify({'success': True})
+                        finally:
+                            loop.close()
+            except Exception as e:
+                logger.warning(f"P2P remove delegation failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/stake/proxy/delegate/remove', 'GET')
+        except Exception as e:
+            logger.error(f"Remove delegation failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # POOL SIZE MANAGEMENT
+    # =========================================================================
+
+    @app.route('/api/pool/size/set', methods=['POST'])
+    @login_required
+    def api_pool_size_set():
+        """Set pool size limit."""
+        mode = _get_current_networking_mode()
+        data = request.get_json() or {}
+        size_limit = float(data.get('size_limit', 0))
+
+        if size_limit < 0:
+            return jsonify({'success': False, 'error': 'Size limit must be >= 0'})
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                wallet_manager = get_or_create_session_vault()
+                if wallet_manager and wallet_manager.wallet:
+                    vault_address = wallet_manager.wallet.address
+
+                    startup = start.getStart() if hasattr(start, 'getStart') else None
+                    if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                        manager = startup._lending_manager
+
+                        async def set_size():
+                            if hasattr(manager, 'set_pool_size'):
+                                return await manager.set_pool_size(vault_address, size_limit)
+                            return False
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            success = loop.run_until_complete(set_size())
+                            if success:
+                                return jsonify({'success': True})
+                        finally:
+                            loop.close()
+            except Exception as e:
+                logger.warning(f"P2P set pool size failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/pool/size/set', 'POST', {'amount': size_limit})
+        except Exception as e:
+            logger.error(f"Set pool size failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # REWARD ADDRESS MANAGEMENT
+    # =========================================================================
+
+    @app.route('/api/peer/reward-address/remove', methods=['POST'])
+    @login_required
+    def api_reward_address_remove():
+        """Remove custom reward address (revert to wallet address)."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                startup = start.getStart() if hasattr(start, 'getStart') else None
+                if startup and hasattr(startup, '_reward_address_manager') and startup._reward_address_manager:
+                    manager = startup._reward_address_manager
+
+                    async def remove_addr():
+                        if hasattr(manager, 'remove_reward_address'):
+                            return await manager.remove_reward_address()
+                        return False
+
+                    try:
+                        loop = asyncio.new_event_loop()
+                        success = loop.run_until_complete(remove_addr())
+                        if success:
+                            return jsonify({'success': True})
+                    finally:
+                        loop.close()
+            except Exception as e:
+                logger.warning(f"P2P remove reward address failed, trying central: {e}")
+
+        # Fallback to central - POST empty address to remove
+        try:
+            return proxy_api('/peer/reward-address', 'POST', {'reward_address': ''})
+        except Exception as e:
+            logger.error(f"Remove reward address failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # LENDING MANAGEMENT
+    # =========================================================================
+
+    @app.route('/api/lend/addresses')
+    @login_required
+    def api_lend_addresses():
+        """Get all pools user is lending to."""
+        mode = _get_current_networking_mode()
+
+        # Try P2P first if in P2P/hybrid mode
+        if mode in ('p2p', 'hybrid'):
+            try:
+                from satorineuron.init import start
+                import asyncio
+
+                wallet_manager = get_or_create_session_vault()
+                if wallet_manager and wallet_manager.wallet:
+                    wallet_address = wallet_manager.wallet.address
+
+                    startup = start.getStart() if hasattr(start, 'getStart') else None
+                    if startup and hasattr(startup, '_lending_manager') and startup._lending_manager:
+                        manager = startup._lending_manager
+
+                        async def get_lendings():
+                            if hasattr(manager, 'get_my_lendings'):
+                                return await manager.get_my_lendings(wallet_address)
+                            return []
+
+                        try:
+                            loop = asyncio.new_event_loop()
+                            my_lendings = loop.run_until_complete(get_lendings())
+                            lendings = []
+                            for l in my_lendings:
+                                lendings.append({
+                                    'vault_address': l.vault_address,
+                                    'lent_out': l.lent_out,
+                                    'timestamp': l.timestamp,
+                                })
+                            if lendings:
+                                return jsonify({'lendings': lendings})
+                        finally:
+                            loop.close()
+            except Exception as e:
+                logger.warning(f"P2P get lendings failed, trying central: {e}")
+
+        # Fallback to central
+        try:
+            return proxy_api('/stake/lend/addresses', 'GET')
+        except Exception as e:
+            logger.warning(f"Get lendings failed: {e}")
+            return jsonify({'lendings': [], 'error': str(e)})
