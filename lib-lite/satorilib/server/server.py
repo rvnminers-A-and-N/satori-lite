@@ -1428,10 +1428,10 @@ class SatoriServerClient(object):
             None if request fails or no observation available
         """
         try:
-            # NOTE: Using POST /api/v1/observation/{stream} as temporary testing endpoint
+            # NOTE: Using GET /api/v1/observation/get endpoint
             response = self._makeAuthenticatedCall(
-                function=requests.post,
-                endpoint=f'/api/v1/observation/{stream}',
+                function=requests.get,
+                endpoint='/api/v1/observation/get',
                 raiseForStatus=False
             )
             if response.status_code == 200:
