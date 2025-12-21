@@ -1,0 +1,625 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Stake Management{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        Satori - Stake Management
+        <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">arrow_back</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <div class="row g-4">
+
+        <!-- Pool Staking Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">handshake</i>
+                        Pool Staking
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadAvailablePools()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Status</label>
+                        <div id="stakingStatus" class="alert alert-secondary">Loading...</div>
+                    </div>
+
+                    <!-- Available Pools List -->
+                    <div class="mb-3">
+                        <label class="form-label">Available Open Pools</label>
+                        <div id="availablePoolsList" class="list-group mb-2" style="max-height: 200px; overflow-y: auto;">
+                            <div class="text-muted small p-2">Loading pools...</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Pool Address</label>
+                        <span class="d-inline-block w-100" id="poolAddressWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <input type="text" class="form-control" id="poolAddress" placeholder="Enter pool address or select from list above">
+                        </span>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <span class="d-inline-block" id="addStakeBtnWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <button class="btn btn-primary" id="addStakeBtn" onclick="addStakeToPool()">Add Stake to Pool</button>
+                        </span>
+                        <span class="d-inline-block" id="removeStakeBtnWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <button class="btn btn-danger" id="removeStakeBtn" onclick="removeStakeFromPool()">Remove Stake from Pool</button>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pool Management Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">groups</i>
+                        Pool Management
+                    </h5>
+                </div>
+                <div class="card-body" id="poolManagementBody">
+                    <!-- Pool Staking Notice (shown when user is staking to another pool) -->
+                    <div class="alert alert-warning pool-staking-notice mb-3" id="poolStakingNotice" style="display: none;">
+                        <i class="material-icons align-middle me-1" style="font-size: 18px;">info</i>
+                        <strong>Note:</strong> Staking to a pool disables this neuron to act as a pool.
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Lender Commission (%)</label>
+                        <span class="d-inline-block w-100" id="poolCommissionWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="poolCommission"
+                                       placeholder="0 = closed, 1-100 = open"
+                                       min="0" max="100" step="1"
+                                       onchange="setPoolCommission()"
+                                       onkeypress="if(event.key === 'Enter') { setPoolCommission(); event.preventDefault(); }">
+                                <span class="input-group-text">%</span>
+                            </div>
+                        </span>
+                        <small class="form-text text-muted">
+                            Commission you pay to pool stakers. Empty or 0 = pool closed. 1-100 = pool open with that commission %.
+                        </small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Workers</label>
+                        <div id="workerList" class="mb-3">
+                            <p class="text-muted">Loading...</p>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Add Worker</label>
+                        <span class="d-inline-block w-100" id="addWorkerWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="newWorkerAddress" placeholder="Worker address">
+                                <button class="btn btn-primary" id="addWorkerBtn" onclick="addWorker()">Add</button>
+                            </div>
+                        </span>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pool Stakers</label>
+                        <div id="lenderList" class="mb-3">
+                            <p class="text-muted">Loading...</p>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pool Audits</label>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-primary btn-sm" onclick="downloadWorkersAudit()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">download</i>
+                                Download Workers Audit
+                            </button>
+                            <button class="btn btn-outline-primary btn-sm" onclick="downloadLendersAudit()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">download</i>
+                                Download Pool Stakers Audit
+                            </button>
+                        </div>
+                        <small class="form-text text-muted">
+                            Download the latest audit files showing worker distributions and pool staker commissions.
+                        </small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pool Staker Payments</label>
+                        <button class="btn btn-success btn-sm" onclick="payLenders()">
+                            <i class="material-icons align-middle" style="font-size: 16px;">payments</i>
+                            Pay Pool Stakers From Audit
+                        </button>
+                        <small class="form-text text-muted">
+                            Automatically pay your pool stakers based on the latest audit file (up to 1000 pool stakers in one transaction).
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<!-- Toast for notifications -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="statusToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-body" id="toastMessage"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const API_URL = '/api';
+
+    // State tracking
+    let isStakingToPool = false;
+    let isOpenPool = false;
+    let hasWorkers = false;
+
+    // Helper function to format balance values (removes trailing zeros)
+    function formatBalance(value) {
+        if (value === undefined || value === null) return '--';
+        return parseFloat(parseFloat(value).toFixed(8)).toString();
+    }
+
+    function showToast(message, isError = false) {
+        const toast = document.getElementById('statusToast');
+        const toastBody = document.getElementById('toastMessage');
+        toastBody.textContent = message;
+        toastBody.className = 'toast-body ' + (isError ? 'text-danger' : 'text-success');
+        const bsToast = new bootstrap.Toast(toast);
+        bsToast.show();
+    }
+
+    async function apiCall(endpoint, method = 'GET', data = null) {
+        try {
+            const options = {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            const response = await fetch(API_URL + endpoint, options);
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                showToast(errorData.detail || 'API request failed', true);
+                return null;
+            }
+            return await response.json();
+        } catch (error) {
+            console.error('API call error:', error);
+            showToast('Network error: ' + error.message, true);
+            return null;
+        }
+    }
+
+    function updateMutualExclusionUI() {
+        // Pool Staking elements
+        const poolAddressInput = document.getElementById('poolAddress');
+        const poolAddressWrapper = document.getElementById('poolAddressWrapper');
+        const addStakeBtn = document.getElementById('addStakeBtn');
+        const addStakeBtnWrapper = document.getElementById('addStakeBtnWrapper');
+        const removeStakeBtn = document.getElementById('removeStakeBtn');
+        const removeStakeBtnWrapper = document.getElementById('removeStakeBtnWrapper');
+
+        // Pool Staking inputs are always enabled
+        poolAddressInput.disabled = false;
+        poolAddressWrapper.setAttribute('title', '');
+        addStakeBtn.disabled = false;
+        addStakeBtnWrapper.setAttribute('title', '');
+
+        // Remove button only enabled if actually staking to a pool
+        if (isStakingToPool) {
+            removeStakeBtn.disabled = false;
+            removeStakeBtnWrapper.setAttribute('title', '');
+        } else {
+            removeStakeBtn.disabled = true;
+            removeStakeBtnWrapper.setAttribute('title', 'You are not currently staking to a pool');
+        }
+
+        // If staking to pool, dim Pool Management card and show notice
+        const poolManagementBody = document.getElementById('poolManagementBody');
+        const poolStakingNotice = document.getElementById('poolStakingNotice');
+
+        if (isStakingToPool) {
+            poolManagementBody.classList.add('dimmed');
+            poolStakingNotice.style.display = 'block';
+        } else {
+            poolManagementBody.classList.remove('dimmed');
+            poolStakingNotice.style.display = 'none';
+        }
+    }
+
+    async function loadStakingStatus() {
+        const result = await apiCall('/lender/status');
+        const statusEl = document.getElementById('stakingStatus');
+        if (result && result.pool_address) {
+            isStakingToPool = true;
+            statusEl.className = 'alert alert-success';
+            statusEl.textContent = 'Staking with pool: ' + result.pool_address;
+            document.getElementById('poolAddress').value = result.pool_address;
+        } else {
+            isStakingToPool = false;
+            statusEl.className = 'alert alert-secondary';
+            statusEl.textContent = 'Not staking with a pool';
+            document.getElementById('poolAddress').value = '';
+        }
+        updateMutualExclusionUI();
+    }
+
+    async function addStakeToPool() {
+        const pool = document.getElementById('poolAddress').value.trim();
+        if (!pool) {
+            showToast('Please enter a pool address', true);
+            return;
+        }
+        if (!isValidAddress(pool)) {
+            showToast('Invalid address: must start with E and be 34 characters', true);
+            return;
+        }
+        const result = await apiCall('/lender/lend', 'POST', { pool_address: pool });
+        if (result) {
+            showToast('Stake added to pool');
+            loadStakingStatus();
+        }
+    }
+
+    async function removeStakeFromPool() {
+        const result = await apiCall('/lender/lend', 'DELETE');
+        if (result) {
+            showToast('Stake removed from pool');
+            loadStakingStatus();
+        }
+    }
+
+    async function loadAvailablePools() {
+        const listEl = document.getElementById('availablePoolsList');
+        listEl.innerHTML = '<div class="text-muted small p-2">Loading pools...</div>';
+
+        const result = await apiCall('/pool/open', 'GET');
+        if (result && result.pools && result.pools.length > 0) {
+            listEl.innerHTML = '';
+            result.pools.forEach(pool => {
+                const item = document.createElement('a');
+                item.href = '#';
+                item.className = 'list-group-item list-group-item-action';
+                item.onclick = (e) => {
+                    e.preventDefault();
+                    document.getElementById('poolAddress').value = pool.address;
+                };
+                item.innerHTML = `
+                    <div class="d-flex w-100 justify-content-between align-items-center">
+                        <div>
+                            <small class="text-muted">Address:</small><br>
+                            <code class="small">${pool.address}</code>
+                        </div>
+                        <div class="text-end">
+                            ${pool.alias ? `<span class="badge bg-primary">${pool.alias}</span><br>` : ''}
+                            <small class="text-success fw-bold">${pool.commission}% commission</small>
+                        </div>
+                    </div>
+                `;
+                listEl.appendChild(item);
+            });
+        } else {
+            listEl.innerHTML = '<div class="text-muted small p-2">No open pools available</div>';
+        }
+    }
+
+    async function setPoolCommission() {
+        const commissionInput = document.getElementById('poolCommission');
+        let commission = commissionInput.value ? parseInt(commissionInput.value) : null;
+
+        if (commission !== null && (commission < 0 || commission > 100)) {
+            showToast('Commission must be between 0 and 100', true);
+            return;
+        }
+
+        if (commission === 0) {
+            commission = null;
+        }
+
+        const result = await apiCall('/pool/toggle-open', 'POST', { commission: commission });
+        if (result) {
+            const msg = commission === null ? 'Pool closed' : `Pool open with ${commission}% commission`;
+            showToast(msg);
+            await loadPoolCommission();
+            await loadAvailablePools();
+            updateMutualExclusionUI();
+        }
+    }
+
+    async function loadPoolCommission() {
+        const result = await apiCall('/pool/commission', 'GET');
+        if (result) {
+            const commissionInput = document.getElementById('poolCommission');
+            commissionInput.value = result.commission || '';
+            isOpenPool = result.commission !== null && result.commission > 0;
+            updateMutualExclusionUI();
+        }
+    }
+
+    async function loadWorkers() {
+        const workerListEl = document.getElementById('workerList');
+        const result = await apiCall('/pool/workers');
+
+        if (result && result.workers && result.workers.length > 0) {
+            hasWorkers = true;
+            workerListEl.innerHTML = '';
+            result.workers.forEach(worker => {
+                const workerItem = document.createElement('div');
+                workerItem.className = 'd-flex justify-content-between align-items-center mb-2 p-2 border rounded';
+                workerItem.innerHTML = `
+                    <div>
+                        <small class="text-muted">Address:</small><br>
+                        <code class="small">${worker.address}</code>
+                        ${worker.alias ? `<br><span class="badge bg-secondary">${worker.alias}</span>` : ''}
+                    </div>
+                    <button class="btn btn-sm btn-danger" onclick="removeWorker('${worker.address}')">
+                        <i class="material-icons align-middle" style="font-size: 16px;">delete</i>
+                    </button>
+                `;
+                workerListEl.appendChild(workerItem);
+            });
+        } else {
+            hasWorkers = false;
+            workerListEl.innerHTML = '<p class="text-muted">No workers</p>';
+        }
+
+        updateMutualExclusionUI();
+    }
+
+    async function loadLenders() {
+        const lenderListEl = document.getElementById('lenderList');
+        const result = await apiCall('/pool/lenders');
+
+        if (result && result.lenders && result.lenders.length > 0) {
+            lenderListEl.innerHTML = '';
+            result.lenders.forEach(lender => {
+                const lenderItem = document.createElement('div');
+                lenderItem.className = 'd-flex justify-content-between align-items-center mb-2 p-2 border rounded';
+                lenderItem.innerHTML = `
+                    <div>
+                        <small class="text-muted">Address:</small><br>
+                        <code class="small">${lender.address}</code>
+                        ${lender.alias ? `<br><span class="badge bg-secondary">${lender.alias}</span>` : ''}
+                    </div>
+                `;
+                lenderListEl.appendChild(lenderItem);
+            });
+        } else {
+            lenderListEl.innerHTML = '<p class="text-muted">No pool stakers</p>';
+        }
+    }
+
+    function getCentralApiUrl() {
+        const protocol = window.location.protocol;
+        const hostname = window.location.hostname;
+
+        if (hostname === 'localhost' || hostname === '127.0.0.1') {
+            return `${protocol}//${hostname}:8000`;
+        }
+        return `${protocol}//${hostname}`;
+    }
+
+    function downloadJSON(data, filename) {
+        const blob = new Blob([JSON.stringify(data, null, 2)], {
+            type: 'application/json'
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    async function downloadWorkersAudit() {
+        try {
+            const centralApiUrl = getCentralApiUrl();
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/workers/latest`);
+
+            if (!response.ok) {
+                if (response.status === 404) {
+                    showToast('No workers audit available yet', 'warning');
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `workers_audit_${timestamp}.json`;
+
+            downloadJSON(data, filename);
+            showToast('Workers audit downloaded');
+        } catch (error) {
+            console.error('Error downloading workers audit:', error);
+            showToast('Failed to download workers audit', 'error');
+        }
+    }
+
+    async function downloadLendersAudit() {
+        try {
+            const centralApiUrl = getCentralApiUrl();
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/stakers/latest`);
+
+            if (!response.ok) {
+                if (response.status === 404) {
+                    showToast('No pool stakers audit available yet', 'warning');
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+            const now = new Date();
+            const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            const filename = `stakers_audit_${timestamp}.json`;
+
+            downloadJSON(data, filename);
+            showToast('Pool stakers audit downloaded');
+        } catch (error) {
+            console.error('Error downloading pool stakers audit:', error);
+            showToast('Failed to download pool stakers audit', 'error');
+        }
+    }
+
+    async function payLenders() {
+        try {
+            showToast('Fetching audit...', 'info');
+            const centralApiUrl = getCentralApiUrl();
+            const response = await fetch(`${centralApiUrl}/api/v1/audit/stakers/latest`);
+
+            if (!response.ok) {
+                if (response.status === 404) {
+                    showToast('No audit available yet', 'warning');
+                    return;
+                }
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const audit = await response.json();
+
+            const myAddress = await apiCall('/wallet/address');
+            if (!myAddress || !myAddress.wallet_address) {
+                showToast('Unable to determine your wallet address', 'error');
+                return;
+            }
+
+            const myPool = audit.pools.find(p => p.pool_address === myAddress.wallet_address);
+
+            if (!myPool || !myPool.lenders || myPool.lenders.length === 0) {
+                showToast('No pool stakers to pay', 'info');
+                return;
+            }
+
+            const payments = {};
+            myPool.lenders.forEach(lender => {
+                if (lender.commission_owed > 0) {
+                    payments[lender.lender_address] = lender.commission_owed;
+                }
+            });
+
+            const count = Object.keys(payments).length;
+            if (count === 0) {
+                showToast('No pool stakers with amounts owed', 'info');
+                return;
+            }
+
+            const total = Object.values(payments).reduce((sum, amt) => sum + amt, 0);
+
+            const balance = await apiCall('/wallet/balance/direct');
+            if (!balance) {
+                showToast('Unable to check balance', 'error');
+                return;
+            }
+
+            if (balance.vault_balance < total) {
+                showToast(`Insufficient balance: need ${formatBalance(total)}, have ${formatBalance(balance.vault_balance)}`, 'error');
+                return;
+            }
+
+            const confirmMsg =
+                `Pay ${count} pool stakers a total of ${formatBalance(total)} SATORI?\n\n` +
+                `Your balance: ${formatBalance(balance.vault_balance)} SATORI\n` +
+                `EVR for fees: ${formatBalance(balance.vault_evr)} EVR\n\n` +
+                `⚠️ This action cannot be undone!`;
+
+            if (!confirm(confirmMsg)) {
+                return;
+            }
+
+            showToast('Sending payment to pool stakers...', 'info');
+
+            const paymentResponse = await fetch('/api/lender/pay', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({payments})
+            });
+
+            const data = await paymentResponse.json();
+
+            if (data.success) {
+                const explorerUrl = `https://evr.cryptoscope.io/tx/?hash=${data.txhash}`;
+                showToast(`✓ Paid ${data.lenders_paid} pool stakers!`, 'success');
+
+                const resultMsg =
+                    `Successfully paid ${data.lenders_paid} pool stakers!\n\n` +
+                    `Total: ${formatBalance(data.total_sent)} SATORI\n\n` +
+                    `Transaction: ${data.txhash}\n\n` +
+                    `View on blockchain explorer:\n${explorerUrl}`;
+
+                alert(resultMsg);
+            } else {
+                showToast(`Payment failed: ${data.error}`, 'error');
+            }
+
+        } catch (error) {
+            console.error('Error paying pool stakers:', error);
+            showToast(`Failed to pay pool stakers: ${error.message}`, 'error');
+        }
+    }
+
+    function isValidAddress(address) {
+        return address && address.length === 34 && address.startsWith('E');
+    }
+
+    async function addWorker() {
+        const address = document.getElementById('newWorkerAddress').value.trim();
+        if (!address) {
+            showToast('Please enter a worker address', true);
+            return;
+        }
+        if (!isValidAddress(address)) {
+            showToast('Invalid address: must start with E and be 34 characters', true);
+            return;
+        }
+        const result = await apiCall('/pool/worker', 'POST', { worker_address: address });
+        if (result) {
+            showToast('Worker added');
+            document.getElementById('newWorkerAddress').value = '';
+            loadWorkers();
+        }
+    }
+
+    async function removeWorker(address) {
+        const result = await apiCall(`/pool/worker/${address}`, 'DELETE');
+        if (result) {
+            showToast('Worker removed');
+            loadWorkers();
+        }
+    }
+
+    // Load all data on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        loadStakingStatus();
+        loadWorkers();
+        loadLenders();
+        loadAvailablePools();
+        loadPoolCommission();
+    });
+</script>
+{% endblock %}

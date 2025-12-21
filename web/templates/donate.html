@@ -1,0 +1,493 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Donate{% endblock %}
+
+{% block content %}
+  <div class="row">
+    <!-- Donation Form Card -->
+    <div class="col-xl-6 col-sm-12 mb-xl-0 mb-4">
+      <div class="card">
+        <div class="row" style='padding-left:2rem;padding-right:2rem;'>
+          <div class="col-xl-12 col-sm-12 mb-xl-0">
+            <button class="btn btn-link w-100 text-left"
+                    style="padding-top:1.5rem; text-transform: none;"
+                    type="button"
+                    data-toggle="collapse"
+                    data-target="#donationFormContent"
+                    aria-expanded="true"
+                    aria-controls="donationFormContent">
+                    <h4>Treasury Donation</h4>
+            </button>
+          </div>
+        </div>
+        <div id="donationFormContent" class="collapse show">
+          <p class="text-sm mb-0 text-center padding-left-right-5">
+            Support the Satori Network by donating EVR to the treasury.
+            <br>You'll receive SATORI tokens in return!
+          </p>
+          <!-- Live Price Display -->
+          <div class="row" style='padding: 1rem 2rem;'>
+            <div class="col-xl-4 col-sm-4 mb-xl-0 text-center">
+              <p class="text-xs text-uppercase text-muted mb-0">EVR Price</p>
+              <h5 id="evrPriceDisplay" class="mb-0">$0.000000</h5>
+              <p class="text-xs text-muted mb-0">
+                <span id="evrChangeDisplay" class="text-success">+0.00%</span>
+              </p>
+            </div>
+            <div class="col-xl-4 col-sm-4 mb-xl-0 text-center">
+              <p class="text-xs text-uppercase text-muted mb-0">SATORI Price</p>
+              <h5 id="satoriPriceDisplay" class="mb-0">$0.00</h5>
+              <p class="text-xs text-muted mb-0">
+                <span id="satoriChangeDisplay" class="text-success">+0.00%</span>
+              </p>
+            </div>
+            <div class="col-xl-4 col-sm-4 mb-xl-0 text-center">
+              <p class="text-xs text-uppercase text-muted mb-0">Exchange Rate</p>
+              <h5 id="exchangeRateDisplay" class="mb-0">1 EVR = 0.00 SATORI</h5>
+              <p class="text-xs text-muted mb-0">
+                <span id="priceSourceDisplay">via SafeTrade</span>
+              </p>
+            </div>
+          </div>
+          <hr>
+          <div class="row" style='padding-left:2rem;padding-right:2rem; padding-top: .1rem; padding-bottom: 1rem;'>
+            <div class="col-xl-12 col-sm-12 mb-xl-0 text-center">
+              <p class="mb-1">
+                Treasury Address:
+              </p>
+              <p id="treasuryAddress" class="mb-1" style="font-family: monospace; font-size: 0.9rem;">
+                Loading...
+              </p>
+              <button class="btn btn-sm btn-outline-primary" onclick="copyTreasuryAddress()">Copy Address</button>
+            </div>
+          </div>
+          <hr>
+          <div class="row" style='padding-left:2rem;padding-right:2rem; padding-top: .1rem; padding-bottom: 2rem;'>
+            <div class="col-xl-3 col-sm-3 mb-xl-0">
+              <center>
+                <p id="donationAmountLabel" class="mb-1" style="padding-top: .25rem;">
+                  Amount (EVR):
+                </p>
+              </center>
+            </div>
+            <div class="col-xl-5 col-sm-5 mb-xl-0">
+              <div class="d-flex px-3 py-1" style="padding-right: 1rem; margin-left:auto; margin-right: auto;">
+                <div class="input-group input-group-outline">
+                  <input
+                    id="donationAmount"
+                    name="donationAmount"
+                    class="tight form-control"
+                    style="text-align: center;"
+                    min="1"
+                    step="0.01"
+                    required=""
+                    type="number"
+                    placeholder="100"
+                    onInput="updateEstimate()">
+                </div>
+              </div>
+            </div>
+            <div class="col-xl-4 col-sm-4 mb-xl-0">
+              <center>
+                <button class="btn btn-primary" onclick="submitDonation()">Donate</button>
+              </center>
+            </div>
+          </div>
+          <div class="row" style='padding-left:2rem;padding-right:2rem; padding-bottom: 1rem;'>
+            <div class="col-xl-12 col-sm-12 mb-xl-0 text-center">
+              <p id="donationEstimate" class="mb-1">
+                Estimated reward: <span id="satori-estimate">0</span> SATORI
+              </p>
+              <p id="donationConfirmation" class="mb-1" style="color: #4CAF50;"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Donor Stats Card -->
+    <div class="col-xl-6 col-sm-12 mb-xl-0 mb-4">
+      <div class="card">
+        <div class="row" style='padding-left:2rem;padding-right:2rem;'>
+          <div class="col-xl-12 col-sm-12 mb-xl-0">
+            <button class="btn btn-link w-100 text-left"
+                    style="padding-top:1.5rem; text-transform: none;"
+                    type="button"
+                    data-toggle="collapse"
+                    data-target="#donorStatsContent"
+                    aria-expanded="true"
+                    aria-controls="donorStatsContent">
+                    <h4>Your Donation Stats</h4>
+            </button>
+          </div>
+        </div>
+        <div id="donorStatsContent" class="collapse show">
+          <div class="row" style='padding-left:2rem;padding-right:2rem; padding-top: .5rem; padding-bottom: 2rem;'>
+            <div class="col-xl-6 col-sm-6 mb-xl-0">
+              <p class="mb-1">Total Donated:</p>
+              <h5 id="totalDonated">0 EVR</h5>
+            </div>
+            <div class="col-xl-6 col-sm-6 mb-xl-0">
+              <p class="mb-1">Donation Count:</p>
+              <h5 id="donationCount">0</h5>
+            </div>
+            <div class="col-xl-6 col-sm-6 mb-xl-0" style="margin-top: 1rem;">
+              <p class="mb-1">Current Tier:</p>
+              <h5 id="currentTier" style="text-transform: capitalize;">None</h5>
+            </div>
+            <div class="col-xl-6 col-sm-6 mb-xl-0" style="margin-top: 1rem;">
+              <p class="mb-1">Next Tier:</p>
+              <h5 id="nextTier">Bronze (100 EVR)</h5>
+              <div class="progress" style="height: 10px;">
+                <div id="tierProgress" class="progress-bar bg-primary" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+              </div>
+            </div>
+            <div class="col-xl-12 col-sm-12 mb-xl-0" style="margin-top: 1rem;">
+              <p class="mb-1">Badges Earned:</p>
+              <div id="badgesEarned">
+                <span class="badge bg-secondary">None yet</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <br>
+
+  <!-- Donation History Card -->
+  <div class="row">
+    <div class="col-xl-12 col-sm-12 mb-xl-0 mb-4">
+      <div class="card">
+        <div class="row" style='padding-left:2rem;padding-right:2rem;'>
+          <div class="col-xl-12 col-sm-12 mb-xl-0">
+            <button class="btn btn-link w-100 text-left"
+                    style="padding-top:1.5rem; text-transform: none;"
+                    type="button"
+                    data-toggle="collapse"
+                    data-target="#donationHistoryContent"
+                    aria-expanded="true"
+                    aria-controls="donationHistoryContent">
+                    <h4>Donation History</h4>
+            </button>
+          </div>
+        </div>
+        <div id="donationHistoryContent" class="collapse show">
+          <div class="table-responsive" style="padding: 1rem 2rem 2rem 2rem;">
+            <table class="table align-items-center mb-0">
+              <thead>
+                <tr>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Date</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">EVR Amount</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">SATORI Reward</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Status</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">TX ID</th>
+                </tr>
+              </thead>
+              <tbody id="donationHistoryTable">
+                <tr>
+                  <td colspan="5" class="text-center text-sm">
+                    No donations yet
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <br>
+
+  <!-- Top Donors Leaderboard -->
+  <div class="row">
+    <div class="col-xl-12 col-sm-12 mb-xl-0 mb-4">
+      <div class="card">
+        <div class="row" style='padding-left:2rem;padding-right:2rem;'>
+          <div class="col-xl-12 col-sm-12 mb-xl-0">
+            <button class="btn btn-link w-100 text-left"
+                    style="padding-top:1.5rem; text-transform: none;"
+                    type="button"
+                    data-toggle="collapse"
+                    data-target="#topDonorsContent"
+                    aria-expanded="false"
+                    aria-controls="topDonorsContent">
+                    <h4>Top Donors</h4>
+            </button>
+          </div>
+        </div>
+        <div id="topDonorsContent" class="collapse">
+          <div class="table-responsive" style="padding: 1rem 2rem 2rem 2rem;">
+            <table class="table align-items-center mb-0">
+              <thead>
+                <tr>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Rank</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Address</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Total Donated</th>
+                  <th class="text-uppercase text-secondary text-xxs font-weight-bolder opacity-7">Tier</th>
+                </tr>
+              </thead>
+              <tbody id="topDonorsTable">
+                <tr>
+                  <td colspan="4" class="text-center text-sm">
+                    Loading...
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Tier thresholds
+  const TIERS = {
+    'none': 0,
+    'bronze': 100,
+    'silver': 1000,
+    'gold': 10000,
+    'platinum': 100000,
+    'diamond': 1000000
+  };
+
+  const TIER_ORDER = ['none', 'bronze', 'silver', 'gold', 'platinum', 'diamond'];
+
+  // Exchange rate estimate (will be fetched from server)
+  let evrToSatoriRate = 0.018; // Default estimate
+  let evrPriceUsd = 0;
+  let satoriPriceUsd = 0;
+  let priceRefreshInterval = null;
+
+  document.addEventListener('DOMContentLoaded', (event) => {
+    loadTreasuryAddress();
+    loadDonorStats();
+    loadDonationHistory();
+    loadTopDonors();
+    loadPrices();
+    // Refresh prices every 60 seconds
+    priceRefreshInterval = setInterval(loadPrices, 60000);
+  });
+
+  async function loadPrices() {
+    try {
+      // Fetch EVR price
+      const evrResponse = await fetch('/api/p2p/pricing/evr');
+      if (evrResponse.ok) {
+        const evrData = await evrResponse.json();
+        if (evrData.success && evrData.price) {
+          evrPriceUsd = parseFloat(evrData.price.last) || 0;
+          const evrChange = parseFloat(evrData.price.percentChange) || 0;
+          document.getElementById('evrPriceDisplay').innerText = '$' + evrPriceUsd.toFixed(6);
+          const evrChangeEl = document.getElementById('evrChangeDisplay');
+          evrChangeEl.innerText = (evrChange >= 0 ? '+' : '') + evrChange.toFixed(2) + '%';
+          evrChangeEl.className = evrChange >= 0 ? 'text-success' : 'text-danger';
+        }
+      }
+
+      // Fetch SATORI price
+      const satoriResponse = await fetch('/api/p2p/pricing/satori');
+      if (satoriResponse.ok) {
+        const satoriData = await satoriResponse.json();
+        if (satoriData.success && satoriData.price) {
+          satoriPriceUsd = parseFloat(satoriData.price.last) || 0;
+          const satoriChange = parseFloat(satoriData.price.percentChange) || 0;
+          document.getElementById('satoriPriceDisplay').innerText = '$' + satoriPriceUsd.toFixed(4);
+          const satoriChangeEl = document.getElementById('satoriChangeDisplay');
+          satoriChangeEl.innerText = (satoriChange >= 0 ? '+' : '') + satoriChange.toFixed(2) + '%';
+          satoriChangeEl.className = satoriChange >= 0 ? 'text-success' : 'text-danger';
+        }
+      }
+
+      // Fetch exchange rate
+      const rateResponse = await fetch('/api/p2p/pricing/exchange-rate');
+      if (rateResponse.ok) {
+        const rateData = await rateResponse.json();
+        if (rateData.success && rateData.exchange_rate) {
+          evrToSatoriRate = parseFloat(rateData.exchange_rate) || 0.018;
+          document.getElementById('exchangeRateDisplay').innerText = '1 EVR = ' + evrToSatoriRate.toFixed(4) + ' SATORI';
+          // Update estimate with new rate
+          updateEstimate();
+        }
+      }
+    } catch (error) {
+      console.error('Error loading prices:', error);
+    }
+  }
+
+  function loadTreasuryAddress() {
+    fetch('/donate/treasury-address', { method: 'GET' })
+      .then(response => response.text())
+      .then(address => {
+        document.getElementById('treasuryAddress').innerText = address || 'Not available';
+      })
+      .catch(error => {
+        console.error('Error loading treasury address:', error);
+        document.getElementById('treasuryAddress').innerText = 'Error loading';
+      });
+  }
+
+  function copyTreasuryAddress() {
+    const address = document.getElementById('treasuryAddress').innerText;
+    navigator.clipboard.writeText(address).then(() => {
+      alert('Treasury address copied to clipboard!');
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+    });
+  }
+
+  function updateEstimate() {
+    const amount = parseFloat(document.getElementById('donationAmount').value) || 0;
+    // Calculate SATORI reward (90% of exchange rate as per treasury rules)
+    const satoriEstimate = (amount * evrToSatoriRate * 0.9).toFixed(2);
+    document.getElementById('satori-estimate').innerText = satoriEstimate;
+
+    // Also show USD value if we have prices
+    const estimateEl = document.getElementById('donationEstimate');
+    if (evrPriceUsd > 0 && amount > 0) {
+      const usdValue = (amount * evrPriceUsd).toFixed(2);
+      const satoriUsdValue = (parseFloat(satoriEstimate) * satoriPriceUsd).toFixed(2);
+      estimateEl.innerHTML = `Estimated reward: <span id="satori-estimate">${satoriEstimate}</span> SATORI (~$${satoriUsdValue} USDT)<br><small class="text-muted">Donating ~$${usdValue} USDT worth of EVR</small>`;
+    } else {
+      estimateEl.innerHTML = `Estimated reward: <span id="satori-estimate">${satoriEstimate}</span> SATORI`;
+    }
+  }
+
+  function submitDonation() {
+    const amount = parseFloat(document.getElementById('donationAmount').value);
+    if (!amount || amount <= 0) {
+      document.getElementById('donationConfirmation').innerText = 'Please enter a valid amount';
+      document.getElementById('donationConfirmation').style.color = '#f44336';
+      return;
+    }
+
+    document.getElementById('donationConfirmation').innerText = 'Processing...';
+    document.getElementById('donationConfirmation').style.color = '#2196F3';
+
+    fetch('/donate/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: amount })
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        document.getElementById('donationConfirmation').innerText = data.message || 'Donation successful!';
+        document.getElementById('donationConfirmation').style.color = '#4CAF50';
+        document.getElementById('donationAmount').value = '';
+        document.getElementById('satori-estimate').innerText = '0';
+        // Refresh stats and history
+        loadDonorStats();
+        loadDonationHistory();
+      } else {
+        document.getElementById('donationConfirmation').innerText = data.error || 'Donation failed';
+        document.getElementById('donationConfirmation').style.color = '#f44336';
+      }
+    })
+    .catch(error => {
+      console.error('Error:', error);
+      document.getElementById('donationConfirmation').innerText = 'Error: ' + error;
+      document.getElementById('donationConfirmation').style.color = '#f44336';
+    });
+  }
+
+  function loadDonorStats() {
+    fetch('/donate/stats', { method: 'GET' })
+      .then(response => response.json())
+      .then(stats => {
+        document.getElementById('totalDonated').innerText = (stats.total_donated || 0).toFixed(2) + ' EVR';
+        document.getElementById('donationCount').innerText = stats.donation_count || 0;
+        document.getElementById('currentTier').innerText = stats.tier || 'None';
+
+        // Calculate next tier and progress
+        const currentTierIdx = TIER_ORDER.indexOf(stats.tier || 'none');
+        if (currentTierIdx < TIER_ORDER.length - 1) {
+          const nextTierName = TIER_ORDER[currentTierIdx + 1];
+          const nextTierThreshold = TIERS[nextTierName];
+          const currentThreshold = TIERS[stats.tier || 'none'];
+          const progress = ((stats.total_donated - currentThreshold) / (nextTierThreshold - currentThreshold)) * 100;
+          document.getElementById('nextTier').innerText = nextTierName.charAt(0).toUpperCase() + nextTierName.slice(1) + ' (' + nextTierThreshold + ' EVR)';
+          document.getElementById('tierProgress').style.width = Math.min(progress, 100) + '%';
+        } else {
+          document.getElementById('nextTier').innerText = 'Max tier reached!';
+          document.getElementById('tierProgress').style.width = '100%';
+        }
+
+        // Display badges
+        const badges = stats.badges_earned || [];
+        const badgesContainer = document.getElementById('badgesEarned');
+        if (badges.length > 0) {
+          badgesContainer.innerHTML = badges.map(badge =>
+            '<span class="badge bg-primary" style="margin-right: 5px;">' + badge + '</span>'
+          ).join('');
+        } else {
+          badgesContainer.innerHTML = '<span class="badge bg-secondary">None yet</span>';
+        }
+      })
+      .catch(error => {
+        console.error('Error loading donor stats:', error);
+      });
+  }
+
+  function loadDonationHistory() {
+    fetch('/donate/history', { method: 'GET' })
+      .then(response => response.json())
+      .then(donations => {
+        const tbody = document.getElementById('donationHistoryTable');
+        if (donations.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="text-center text-sm">No donations yet</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = donations.map(d => {
+          const date = new Date(d.timestamp * 1000).toLocaleDateString();
+          const txIdShort = d.tx_id ? d.tx_id.substring(0, 12) + '...' : 'Pending';
+          const statusColor = d.status === 'paid' ? '#4CAF50' : (d.status === 'pending' ? '#FF9800' : '#f44336');
+          return `
+            <tr>
+              <td class="text-sm">${date}</td>
+              <td class="text-sm">${d.amount.toFixed(2)} EVR</td>
+              <td class="text-sm">${d.satori_reward.toFixed(2)} SATORI</td>
+              <td class="text-sm" style="color: ${statusColor}; text-transform: capitalize;">${d.status}</td>
+              <td class="text-sm" style="font-family: monospace;">${txIdShort}</td>
+            </tr>
+          `;
+        }).join('');
+      })
+      .catch(error => {
+        console.error('Error loading donation history:', error);
+      });
+  }
+
+  function loadTopDonors() {
+    fetch('/donate/top-donors', { method: 'GET' })
+      .then(response => response.json())
+      .then(donors => {
+        const tbody = document.getElementById('topDonorsTable');
+        if (donors.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" class="text-center text-sm">No donors yet</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = donors.map((d, idx) => {
+          const addrShort = d.donor_address ? d.donor_address.substring(0, 12) + '...' : 'Unknown';
+          return `
+            <tr>
+              <td class="text-sm">#${idx + 1}</td>
+              <td class="text-sm" style="font-family: monospace;">${addrShort}</td>
+              <td class="text-sm">${d.total_donated.toFixed(2)} EVR</td>
+              <td class="text-sm" style="text-transform: capitalize;">${d.tier || 'None'}</td>
+            </tr>
+          `;
+        }).join('');
+      })
+      .catch(error => {
+        console.error('Error loading top donors:', error);
+        document.getElementById('topDonorsTable').innerHTML = '<tr><td colspan="4" class="text-center text-sm">Error loading</td></tr>';
+      });
+  }
+</script>
+{% endblock %}

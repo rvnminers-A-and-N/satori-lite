@@ -621,6 +621,8 @@ class StreamModel:
         streamModel._prediction_protocol = None
         streamModel._current_round_id: int = 0
         streamModel._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
+        # Model training customization (from team)
+        streamModel.trainingDelay = streamModel._loadTrainingDelay()  # Load from config
         streamModel.initializeFromServer()
         return streamModel
 
@@ -658,6 +660,8 @@ class StreamModel:
         self._prediction_protocol = None
         self._current_round_id: int = 0
         self._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
+        # Model training customization (from team)
+        self.trainingDelay: int = self._loadTrainingDelay()  # Load from config
 
     def initialize(self):
         self.data: pd.DataFrame = self.loadData()
@@ -678,6 +682,20 @@ class StreamModel:
         self.stable: ModelAdapter = copy.deepcopy(self.pilot)
         self.paused: bool = False
         debug(f'AI Engine: stream id {self.streamUuid} using {self.adapter.__name__} (Central Server mode)', color='teal')
+
+    def _loadTrainingDelay(self) -> int:
+        """Load training delay from config file.
+
+        Returns:
+            int: Delay in seconds (default 600 = 10 minutes)
+        """
+        try:
+            from satorineuron import config
+            delay = config.get().get('training_delay', 600)
+            return int(delay)
+        except Exception as e:
+            warning(f"Failed to load training delay from config: {e}")
+            return 600  # Default to 10 minutes
 
     def loadDataFromServer(self) -> pd.DataFrame:
         """Load historical data - currently loads from local SQLite only."""
@@ -1286,6 +1304,11 @@ class StreamModel:
                     debug(self.pilot.dataset)
                 except Exception as e:
                     pass
+
+            # Sleep between training iterations based on user setting
+            if self.trainingDelay > 0:
+                debug(f"Sleeping {self.trainingDelay}s before next training iteration for stream {self.streamUuid}")
+                time.sleep(self.trainingDelay)
 
 
     def run_forever(self):

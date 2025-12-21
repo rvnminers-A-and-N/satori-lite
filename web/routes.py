@@ -35,6 +35,9 @@ _startup_vault = None
 _session_vaults = {}
 _vault_lock = Lock()
 
+# JWT authentication lock to prevent concurrent login attempts
+_auth_lock = Lock()
+
 
 def check_vault_file_exists():
     """Check if vault.yaml file exists.
@@ -490,6 +493,13 @@ def register_routes(app):
         from satorineuron import VERSION
         return render_template('dashboard.html', version=VERSION)
 
+    @app.route('/stake')
+    @login_required
+    def stake_management():
+        """Stake management page for pool staking and pool management."""
+        from satorineuron import VERSION
+        return render_template('stake.html', version=VERSION)
+
     @app.route('/health')
     def health():
         """Health check endpoint - checks API server connectivity."""
@@ -504,52 +514,115 @@ def register_routes(app):
 
     # API Proxy Routes
     def get_auth_headers():
-        """Get authentication headers for API requests.
+        """Get authentication headers for API requests using JWT.
 
-        This implements the challenge-response flow:
-        1. Get a challenge token from the API
-        2. Sign it with the identity wallet
-        3. Return headers with pubkey, message, and signature
+        This implements JWT authentication:
+        1. Check if we have a valid access token in session
+        2. If not or expired, login with wallet signature to get JWT tokens
+        3. If expiring soon, refresh the access token
+        4. Return Authorization header with Bearer token
         """
+        from datetime import datetime, timedelta
+        import time
+
         wallet_manager = get_or_create_session_vault()
         if not wallet_manager or not wallet_manager.wallet:
             return None
 
+        wallet = wallet_manager.wallet
+        if not hasattr(wallet, 'pubkey') or not hasattr(wallet, 'sign'):
+            logger.warning("Wallet missing pubkey or sign method")
+            return None
+
         api_url = current_app.config.get('SATORI_API_URL', get_api_url())
 
-        try:
-            # Step 1: Get challenge
-            resp = requests.get(f"{api_url}/api/v1/auth/challenge", timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"Failed to get challenge: {resp.text}")
+        # Use lock to prevent concurrent login attempts
+        with _auth_lock:
+            try:
+                # Check if we have a valid JWT token in session
+                access_token = session.get('access_token')
+                refresh_token = session.get('refresh_token')
+                token_expiry = session.get('token_expiry')
+
+                # Convert token_expiry back to datetime if it exists
+                if token_expiry:
+                    token_expiry = datetime.fromisoformat(token_expiry)
+
+                now = datetime.now()
+
+                # If no token or expired, perform JWT login
+                if not access_token or not token_expiry or now >= token_expiry:
+                    logger.info("JWT token missing or expired, performing login")
+
+                    # Generate challenge (timestamp)
+                    challenge = str(time.time())
+
+                    # Sign with wallet
+                    signature = wallet.sign(message=challenge)
+                    if isinstance(signature, bytes):
+                        signature = signature.decode('utf-8')
+
+                    # Call JWT login endpoint
+                    resp = requests.post(
+                        f"{api_url}/api/v1/auth/login",
+                        headers={
+                            'wallet-pubkey': wallet.pubkey,
+                            'message': challenge,
+                            'signature': signature
+                        },
+                        timeout=10
+                    )
+
+                    if resp.status_code != 200:
+                        logger.warning(f"JWT login failed: {resp.text}")
+                        return None
+
+                    data = resp.json()
+                    access_token = data['access_token']
+                    refresh_token = data['refresh_token']
+                    expires_in = data['expires_in']
+
+                    # Store tokens in session
+                    session['access_token'] = access_token
+                    session['refresh_token'] = refresh_token
+                    session['token_expiry'] = (now + timedelta(seconds=expires_in)).isoformat()
+
+                    logger.info("JWT login successful")
+
+                # Token expiring soon (within 5 minutes)? Refresh it
+                elif now >= (token_expiry - timedelta(minutes=5)) and refresh_token:
+                    logger.info("JWT token expiring soon, refreshing")
+
+                    try:
+                        resp = requests.post(
+                            f"{api_url}/api/v1/auth/refresh",
+                            headers={'Authorization': f'Bearer {refresh_token}'},
+                            timeout=10
+                        )
+
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            access_token = data['access_token']
+                            expires_in = data['expires_in']
+
+                            # Update session with new token
+                            session['access_token'] = access_token
+                            session['token_expiry'] = (now + timedelta(seconds=expires_in)).isoformat()
+
+                            logger.info("JWT token refreshed successfully")
+                        else:
+                            logger.warning(f"JWT refresh failed: {resp.text}")
+                    except Exception as e:
+                        logger.warning(f"JWT refresh failed: {e}")
+
+                # Return JWT Bearer token header
+                return {
+                    'Authorization': f'Bearer {access_token}'
+                }
+
+            except Exception as e:
+                logger.warning(f"JWT auth header generation failed: {e}")
                 return None
-
-            challenge = resp.json().get('challenge')
-            if not challenge:
-                return None
-
-            # Step 2: Get wallet pubkey and sign the challenge
-            wallet = wallet_manager.wallet
-            if not hasattr(wallet, 'pubkey') or not hasattr(wallet, 'sign'):
-                logger.warning("Wallet missing pubkey or sign method")
-                return None
-
-            signature = wallet.sign(message=challenge)
-
-            # Signature from wallet.sign() is already base64-encoded as bytes
-            # Just decode to string - do NOT base64 encode again
-            if isinstance(signature, bytes):
-                signature = signature.decode('utf-8')
-
-            # Step 3: Return auth headers
-            return {
-                'wallet-pubkey': wallet.pubkey,
-                'message': challenge,
-                'signature': signature
-            }
-        except Exception as e:
-            logger.warning(f"Auth header generation failed: {e}")
-            return None
 
     def proxy_api(endpoint, method='GET', data=None, authenticated=True):
         """Proxy requests to the Satori API server."""
@@ -1476,3 +1549,80 @@ def register_routes(app):
         except Exception as e:
             logger.error(f"Networking mode failed: {e}")
             return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # AI ENGINE TRAINING DELAY CONTROL (from upstream)
+    # =========================================================================
+
+    @app.route('/api/engine/training-delay', methods=['GET'])
+    @login_required
+    def get_training_delay():
+        """Get current AI engine training delay setting.
+
+        Returns:
+            JSON with delay_seconds (int)
+        """
+        try:
+            from satorineuron import config
+
+            # Default to 10 minutes if not set
+            delay = config.get().get('training_delay', 600)
+
+            return jsonify({
+                'delay_seconds': delay
+            })
+        except Exception as e:
+            logger.error(f"Error getting training delay: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/engine/training-delay', methods=['POST'])
+    @login_required
+    def set_training_delay():
+        """Set AI engine training delay.
+
+        Request Body:
+            {
+                "delay_seconds": int  // 0 to 86400
+            }
+
+        Returns:
+            JSON with updated delay_seconds
+        """
+        try:
+            from satorineuron import config
+            from start import getStart
+
+            data = request.get_json()
+            delay_seconds = data.get('delay_seconds')
+
+            # Validate
+            if delay_seconds is None:
+                return jsonify({'error': 'delay_seconds required'}), 400
+
+            delay_seconds = int(delay_seconds)
+
+            if delay_seconds < 0 or delay_seconds > 86400:
+                return jsonify({'error': 'delay_seconds must be between 0 and 86400'}), 400
+
+            # Save to config
+            config.add(data={'training_delay': delay_seconds})
+
+            # Update running engine instances
+            try:
+                startup = getStart()
+                if hasattr(startup, 'aiengine') and startup.aiengine is not None:
+                    for streamUuid, streamModel in startup.aiengine.streamModels.items():
+                        streamModel.trainingDelay = delay_seconds
+                        logger.info(f"Updated training delay for stream {streamUuid}: {delay_seconds}s")
+            except Exception as e:
+                # Log but don't fail if engine isn't running
+                logger.warning(f"Could not update running engine instances: {e}")
+
+            return jsonify({
+                'delay_seconds': delay_seconds,
+                'message': 'Training delay updated successfully'
+            })
+
+        except Exception as e:
+            logger.error(f"Error setting training delay: {e}")
+            return jsonify({'error': str(e)}), 500
