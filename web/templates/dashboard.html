@@ -352,6 +352,19 @@
         return parseFloat(parseFloat(value).toFixed(8)).toString();
     }
 
+    // Get color for commission percentage (light green at 0% to red at 100%)
+    function getCommissionColor(percentage) {
+        // Clamp percentage between 0 and 100
+        const p = Math.max(0, Math.min(100, percentage));
+
+        // Light green (144, 238, 144) at 0% to red (220, 53, 69) at 100%
+        const r = Math.round(144 + (220 - 144) * (p / 100));
+        const g = Math.round(238 + (53 - 238) * (p / 100));
+        const b = Math.round(144 + (69 - 144) * (p / 100));
+
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+
     // State tracking for mutual exclusion
     let isStakingToPool = false;
     let isOpenPool = false;  // True if pool has commission > 0 (accepting pool stakers)
@@ -662,6 +675,8 @@
         const result = await apiCall('/pool/open', 'GET');
         if (result && result.pools && result.pools.length > 0) {
             listEl.innerHTML = '';
+            // Sort pools by increasing fee percentage (inverted commission)
+            result.pools.sort((a, b) => (100 - a.commission) - (100 - b.commission));
             result.pools.forEach(pool => {
                 const item = document.createElement('a');
                 item.href = '#';
@@ -670,6 +685,8 @@
                     e.preventDefault();
                     document.getElementById('poolAddress').value = pool.address;
                 };
+                const invertedCommission = 100 - pool.commission;
+                const commissionColor = getCommissionColor(invertedCommission);
                 item.innerHTML = `
                     <div class="d-flex w-100 justify-content-between align-items-center">
                         <div>
@@ -678,7 +695,7 @@
                         </div>
                         <div class="text-end">
                             ${pool.alias ? `<span class="badge bg-primary">${pool.alias}</span><br>` : ''}
-                            <small class="text-success fw-bold">${pool.commission}% commission</small>
+                            <small class="fw-bold" style="color: ${commissionColor}">${invertedCommission}% Fee</small>
                         </div>
                     </div>
                 `;
@@ -691,22 +708,26 @@
 
     async function setPoolCommission() {
         const commissionInput = document.getElementById('poolCommission');
-        let commission = commissionInput.value ? parseInt(commissionInput.value) : null;
+        let displayedCommission = commissionInput.value ? parseInt(commissionInput.value) : null;
 
         // Validate
-        if (commission !== null && (commission < 0 || commission > 100)) {
+        if (displayedCommission !== null && (displayedCommission < 0 || displayedCommission > 100)) {
             showToast('Commission must be between 0 and 100', true);
             return;
         }
 
-        // Convert 0 to null (closed)
-        if (commission === 0) {
+        // Convert inverted value back to actual commission (100 - displayed)
+        // Displayed 95% means pool stakers keep 95%, so commission is 5%
+        let commission = displayedCommission !== null ? (100 - displayedCommission) : null;
+
+        // Convert 100% commission (0% to stakers) to null (closed)
+        if (commission === 100) {
             commission = null;
         }
 
         const result = await apiCall('/pool/toggle-open', 'POST', { commission: commission });
         if (result) {
-            const msg = commission === null ? 'Pool closed' : `Pool open with ${commission}% commission`;
+            const msg = commission === null ? 'Pool closed' : `Pool open with ${displayedCommission}% Fee`;
             showToast(msg);
             await loadPoolCommission();
             await loadAvailablePools();  // Refresh pool list to show updated commission
@@ -718,7 +739,7 @@
         const result = await apiCall('/pool/commission', 'GET');
         if (result) {
             const commissionInput = document.getElementById('poolCommission');
-            commissionInput.value = result.commission || '';
+            commissionInput.value = result.commission !== null ? (100 - result.commission) : '';
             isOpenPool = result.commission !== null && result.commission > 0;
             updateMutualExclusionUI();  // Update UI after setting isOpenPool
         }

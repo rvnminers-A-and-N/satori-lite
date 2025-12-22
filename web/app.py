@@ -31,6 +31,14 @@ def create_app(testing=False):
     # Session configuration - sessions expire after 24 hours
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
+    # FIX: Set unique session cookie name per port to prevent cookie collision
+    # between multiple instances running on localhost:24601, localhost:24602, etc.
+    # Without this, browsers share the same session cookie across all ports,
+    # causing JWT tokens and session data to be overwritten between instances.
+    ui_port = os.environ.get('SATORI_UI_PORT', '24601')
+    app.config['SESSION_COOKIE_NAME'] = f'satori_session_{ui_port}'
+    print(f"[Web UI] Port: {ui_port} | Session Cookie: {app.config['SESSION_COOKIE_NAME']}")
+
     # Server API URL (for proxying requests)
     from satorilib.config import get_api_url
     app.config['SATORI_API_URL'] = get_api_url()
