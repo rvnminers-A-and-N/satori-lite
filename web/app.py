@@ -37,7 +37,6 @@ def create_app(testing=False):
     # causing JWT tokens and session data to be overwritten between instances.
     ui_port = os.environ.get('SATORI_UI_PORT', '24601')
     app.config['SESSION_COOKIE_NAME'] = f'satori_session_{ui_port}'
-    print(f"[Web UI] Port: {ui_port} | Session Cookie: {app.config['SESSION_COOKIE_NAME']}")
 
     # Server API URL (for proxying requests)
     from satorilib.config import get_api_url
