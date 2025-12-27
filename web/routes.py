@@ -1231,8 +1231,7 @@ def register_routes(app):
                 stats = {
                     'avg_error': round(avg_error, 4),
                     'avg_abs_error': round(avg_abs_error, 4),
-                    'accuracy_pct': round(accuracy_pct, 2),
-                    'total_predictions': len(accuracy_data)
+                    'accuracy_pct': round(accuracy_pct, 2)
                 }
 
             return jsonify({

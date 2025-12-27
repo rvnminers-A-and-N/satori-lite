@@ -288,28 +288,22 @@
                 <div class="card-body">
                     <!-- Stats Summary -->
                     <div class="row mb-4" id="performanceStats">
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
                                 <div class="text-muted small">Accuracy</div>
                                 <div class="h4 mb-0" id="accuracyPct">--</div>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
                                 <div class="text-muted small">Avg Error</div>
                                 <div class="h5 mb-0" id="avgError">--</div>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col-md-4">
                             <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
                                 <div class="text-muted small">Avg Abs Error</div>
                                 <div class="h5 mb-0" id="avgAbsError">--</div>
-                            </div>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
-                                <div class="text-muted small">Predictions</div>
-                                <div class="h5 mb-0" id="totalPredictions">--</div>
                             </div>
                         </div>
                     </div>
@@ -1465,11 +1459,7 @@
     async function loadPerformance() {
         try {
             const data = await apiCall('/engine/performance');
-
-            if (!data || data.error) {
-                console.log('Performance data not available:', data?.error);
-                return;
-            }
+            if (!data || data.error) return;
 
             // Update stats
             if (data.stats) {
@@ -1479,16 +1469,10 @@
                     data.stats.avg_error !== undefined ? data.stats.avg_error.toFixed(2) : '--';
                 document.getElementById('avgAbsError').textContent =
                     data.stats.avg_abs_error !== undefined ? data.stats.avg_abs_error.toFixed(2) : '--';
-                document.getElementById('totalPredictions').textContent =
-                    data.stats.total_predictions || '0';
             }
 
-            // Render predictions vs observations chart
             renderPredVsObsChart(data.observations, data.predictions);
-
-            // Render accuracy chart
             renderAccuracyChart(data.accuracy);
-
         } catch (error) {
             console.error('Error loading performance data:', error);
         }
@@ -1498,23 +1482,8 @@
         const ctx = document.getElementById('predVsObsChart');
         if (!ctx) return;
 
-        // Destroy existing chart
-        if (predVsObsChart) {
-            predVsObsChart.destroy();
-        }
+        if (predVsObsChart) predVsObsChart.destroy();
 
-        // Prepare data
-        const obsData = observations.map(o => ({
-            x: new Date(o.ts),
-            y: o.value
-        }));
-
-        const predData = predictions.map(p => ({
-            x: new Date(p.ts),
-            y: p.value
-        }));
-
-        // Get theme colors
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         const textColor = isDark ? '#a0a0a0' : '#555555';
         const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
@@ -1522,45 +1491,26 @@
         predVsObsChart = new Chart(ctx, {
             type: 'line',
             data: {
-                datasets: [
-                    {
-                        label: 'Observations',
-                        data: obsData,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                        borderWidth: 2,
-                        pointRadius: 3,
-                        pointHoverRadius: 5,
-                        tension: 0.1
-                    },
-                    {
-                        label: 'Predictions',
-                        data: predData,
-                        borderColor: 'rgb(153, 102, 255)',
-                        backgroundColor: 'rgba(153, 102, 255, 0.1)',
-                        borderWidth: 2,
-                        pointRadius: 3,
-                        pointHoverRadius: 5,
-                        tension: 0.1
-                    }
-                ]
+                datasets: [{
+                    label: 'Observations',
+                    data: observations.map(o => ({ x: new Date(o.ts), y: o.value })),
+                    borderColor: 'rgb(75, 192, 192)',
+                    borderWidth: 2,
+                    pointRadius: 2
+                }, {
+                    label: 'Predictions',
+                    data: predictions.map(p => ({ x: new Date(p.ts), y: p.value })),
+                    borderColor: 'rgb(153, 102, 255)',
+                    borderWidth: 2,
+                    pointRadius: 2
+                }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
                 scales: {
                     x: {
                         type: 'time',
-                        time: {
-                            unit: 'day',
-                            displayFormats: {
-                                day: 'MMM dd'
-                            }
-                        },
                         ticks: { color: textColor },
                         grid: { color: gridColor }
                     },
@@ -1570,16 +1520,7 @@
                     }
                 },
                 plugins: {
-                    legend: {
-                        labels: { color: textColor }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}`;
-                            }
-                        }
-                    }
+                    legend: { labels: { color: textColor } }
                 }
             }
         });
@@ -1589,18 +1530,8 @@
         const ctx = document.getElementById('accuracyChart');
         if (!ctx) return;
 
-        // Destroy existing chart
-        if (accuracyChart) {
-            accuracyChart.destroy();
-        }
+        if (accuracyChart) accuracyChart.destroy();
 
-        // Prepare data
-        const data = accuracyData.map(a => ({
-            x: new Date(a.ts),
-            y: a.abs_error
-        }));
-
-        // Get theme colors
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         const textColor = isDark ? '#a0a0a0' : '#555555';
         const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
@@ -1610,32 +1541,20 @@
             data: {
                 datasets: [{
                     label: 'Absolute Error',
-                    data: data,
+                    data: accuracyData.map(a => ({ x: new Date(a.ts), y: a.abs_error })),
                     borderColor: 'rgb(255, 99, 132)',
                     backgroundColor: 'rgba(255, 99, 132, 0.1)',
                     borderWidth: 2,
-                    pointRadius: 3,
-                    pointHoverRadius: 5,
-                    fill: true,
-                    tension: 0.1
+                    pointRadius: 2,
+                    fill: true
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
                 scales: {
                     x: {
                         type: 'time',
-                        time: {
-                            unit: 'day',
-                            displayFormats: {
-                                day: 'MMM dd'
-                            }
-                        },
                         ticks: { color: textColor },
                         grid: { color: gridColor }
                     },
@@ -1646,21 +1565,7 @@
                     }
                 },
                 plugins: {
-                    legend: {
-                        labels: { color: textColor }
-                    },
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                const point = accuracyData[context.dataIndex];
-                                return [
-                                    `Error: ${context.parsed.y.toFixed(2)}`,
-                                    `Predicted: ${point.predicted.toFixed(2)}`,
-                                    `Actual: ${point.actual.toFixed(2)}`
-                                ];
-                            }
-                        }
-                    }
+                    legend: { labels: { color: textColor } }
                 }
             }
         });
