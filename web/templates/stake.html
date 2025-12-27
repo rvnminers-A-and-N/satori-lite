@@ -606,13 +606,22 @@
                 return;
             }
 
-            const confirmMsg =
-                `Pay ${count} pool stakers a total of ${formatBalance(total)} SATORI?\n\n` +
-                `Your balance: ${formatBalance(balance.vault_balance)} SATORI\n` +
-                `EVR for fees: ${formatBalance(balance.vault_evr)} EVR\n\n` +
-                `⚠️ This action cannot be undone!`;
+            // Build detailed payment list for review
+            let paymentDetails = '=== POOL STAKER PAYMENTS ===\n\n';
+            let lineNum = 1;
+            for (const [address, amount] of Object.entries(payments)) {
+                paymentDetails += `${lineNum}. ${address}\n   ${formatBalance(amount)} SATORI\n\n`;
+                lineNum++;
+            }
+            paymentDetails += '─'.repeat(50) + '\n';
+            paymentDetails += `TOTAL: ${formatBalance(total)} SATORI to ${count} stakers\n\n`;
+            paymentDetails += `Your vault balance: ${formatBalance(balance.vault_balance)} SATORI\n`;
+            paymentDetails += `EVR for fees: ${formatBalance(balance.vault_evr)} EVR\n\n`;
+            paymentDetails += '⚠️  WARNING: This action cannot be undone!\n\n';
+            paymentDetails += 'Review all addresses and amounts carefully before proceeding.';
 
-            if (!confirm(confirmMsg)) {
+            // Confirm with user
+            if (!confirm(paymentDetails)) {
                 return;
             }
 
