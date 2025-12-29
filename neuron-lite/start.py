@@ -29,16 +29,6 @@ class SingletonMeta(type):
 class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     """a DAG of startup tasks."""
 
-    @staticmethod
-    def getUiPort() -> int:
-        """Get UI port with priority: config file > environment variable > default (24601)"""
-        existing_port = config.get().get('uiport')
-        if existing_port is not None:
-            return int(existing_port)
-        else:
-            port = int(os.environ.get('SATORI_UI_PORT', '24601'))
-            config.add(data={'uiport': port})
-            return port
 
     @classmethod
     def create(
@@ -67,15 +57,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         super(StartupDag, self).__init__(*args)
         self.env = env
         self.runMode = RunMode.choose(runMode or config.get().get('mode', None))
-        # logging.debug(f'mode: {self.runMode.name}', print=True)
         self.uiPort = self.getUiPort()
-        self.userInteraction = time.time()
         self.walletManager: WalletManager
         self.isDebug: bool = isDebug
-        self.urlServer: str = None
-        self.urlMundo: str = None
-        self.paused: bool = False
-        self.pauseThread: Union[threading.Thread, None] = None
         self.balances: dict = {}
         # Central-lite only needs basic fields - no subscriptions/publications/keys
         self.aiengine: Union[Engine, None] = None
@@ -107,6 +91,17 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 target=self.restartEverythingPeriodic,
                 daemon=True)
             self.restartThread.start()
+
+    @staticmethod
+    def getUiPort() -> int:
+        """Get UI port with priority: config file > environment variable > default (24601)"""
+        existing_port = config.get().get('uiport')
+        if existing_port is not None:
+            return int(existing_port)
+        else:
+            port = int(os.environ.get('SATORI_UI_PORT', '24601'))
+            config.add(data={'uiport': port})
+            return port
 
     @property
     def walletOnlyMode(self) -> bool:
@@ -390,7 +385,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     def createServerConn(self):
         # logging.debug(self.urlServer, color="teal")
         self.server = SatoriServerClient(
-            self.wallet, url=self.urlServer, sendingUrl=self.urlMundo
+            self.wallet, url=None, sendingUrl=None
         )
 
     def authWithCentral(self):
@@ -541,32 +536,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 logging.warning(f"Could not update web routes with startup: {e}")
         except Exception as e:
             logging.error(f"Failed to spawn AI Engine: {e}")
-
-    # def findMatchingPubSubStream(self, uuid: str, sub: bool = True) -> Stream:
-    #         if sub:
-    #             for sub in self.subscriptions:
-    #                 if sub.streamId.uuid == uuid:
-    #                     return sub
-    #         else:
-    #             for pub in self.publications:
-    #                 if pub.streamId.uuid == uuid:
-    #                     return pub
-
-    def pause(self, timeout: int = 60):
-        """pause the engine."""
-        self.paused = True
-        self.pauseTimer = threading.Timer(timeout, self.unpause)
-        self.pauseTimer.daemon = True
-        self.pauseTimer.start()
-        logging.info("AI engine paused", color="green")
-
-    def unpause(self):
-        """unpause the engine."""
-        self.paused = False
-        if hasattr(self, 'pauseTimer') and self.pauseTimer is not None:
-            self.pauseTimer.cancel()
-        self.pauseTimer = None
-        logging.info("AI engine unpaused", color="green")
 
     def delayedStart(self):
         alreadySetup: bool = os.path.exists(config.walletPath("wallet.yaml"))
