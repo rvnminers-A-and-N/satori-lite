@@ -10,6 +10,22 @@
         <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
     </span>
     <div class="ms-auto d-flex align-items-center">
+        <!-- Wallet Dropdown -->
+        <div class="dropdown me-3">
+            <button class="btn btn-outline-light btn-sm dropdown-toggle" type="button" id="walletDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="material-icons align-middle" style="font-size: 16px;">account_balance_wallet</i>
+                Wallet
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="walletDropdown" style="background: var(--bg-card); border: 1px solid var(--border-color);">
+                <li>
+                    <a class="dropdown-item" href="#" onclick="openImportWalletModal(); return false;" style="color: var(--text-primary);">
+                        <i class="material-icons align-middle me-2" style="font-size: 18px;">upload_file</i>
+                        Import Wallet
+                    </a>
+                </li>
+            </ul>
+        </div>
+
         <span class="me-3">
             <span class="status-indicator status-online" id="statusIndicator"></span>
             <span id="statusText">Connected</span>
@@ -24,6 +40,55 @@
         </button>
     </div>
 </nav>
+
+<!-- Import Wallet Modal -->
+<div class="modal fade" id="importWalletModal" tabindex="-1" aria-labelledby="importWalletModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content" style="background: var(--bg-card); border: 1px solid var(--border-color);">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color);">
+                <h5 class="modal-title" id="importWalletModalLabel">
+                    <i class="material-icons align-middle me-2">upload_file</i>
+                    Import Wallet
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="filter: invert(1);"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>Warning:</strong> Importing a wallet will replace your current wallet and restart the container.
+                    Make sure you have backed up your current wallet first!
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Select Wallet Folder</label>
+                    <input type="file"
+                           class="form-control"
+                           id="walletFolderInputModal"
+                           webkitdirectory
+                           directory
+                           multiple
+                           accept=".yaml,.yml">
+                    <small class="form-text text-muted">
+                        Select the "wallet" folder containing wallet.yaml and vault.yaml
+                    </small>
+                </div>
+
+                <div id="importFileListModal" class="mb-3" style="display: none;">
+                    <label class="form-label">Files to Import:</label>
+                    <ul id="importFileListItemsModal" class="small"></ul>
+                </div>
+
+                <div id="importResultModal" class="mt-3" style="display: none;"></div>
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="importWalletFromModal()" id="importWalletBtnModal" disabled>
+                    <i class="material-icons align-middle me-1">upload</i>
+                    Import Wallet & Restart
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="container-fluid py-4">
     <div class="row g-4">
@@ -1788,8 +1853,175 @@
         loadPerformance();
     }
 
+    // Wallet Import Functionality
+    let walletImportFilesModal = [];
+
+    function openImportWalletModal() {
+        const modal = new bootstrap.Modal(document.getElementById('importWalletModal'));
+        modal.show();
+    }
+
+    function handleWalletFolderSelectModal(event) {
+        const files = Array.from(event.target.files);
+        const importBtn = document.getElementById('importWalletBtnModal');
+        const fileListDiv = document.getElementById('importFileListModal');
+        const fileListItems = document.getElementById('importFileListItemsModal');
+
+        walletImportFilesModal = [];
+        fileListItems.innerHTML = '';
+
+        if (files.length === 0) {
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Validate folder name is "wallet"
+        const firstFile = files[0];
+        const pathParts = firstFile.webkitRelativePath.split('/');
+        const folderName = pathParts[0];
+
+        if (folderName !== 'wallet') {
+            showToast('Please select a folder named "wallet"', true);
+            event.target.value = '';
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Filter to only .yaml files
+        const yamlFiles = files.filter(f =>
+            f.name.endsWith('.yaml') || f.name.endsWith('.yml')
+        );
+
+        // Check for required files
+        const fileNames = yamlFiles.map(f => f.name);
+        const hasWallet = fileNames.includes('wallet.yaml');
+        const hasVault = fileNames.includes('vault.yaml');
+
+        if (!hasWallet || !hasVault) {
+            showToast('Wallet folder must contain wallet.yaml and vault.yaml', true);
+            event.target.value = '';
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Valid files - show list
+        walletImportFilesModal = yamlFiles;
+        fileListItems.innerHTML = '';
+        yamlFiles.forEach(file => {
+            const li = document.createElement('li');
+            li.innerHTML = `<code>${file.name}</code> (${(file.size / 1024).toFixed(2)} KB)`;
+            fileListItems.appendChild(li);
+        });
+
+        fileListDiv.style.display = 'block';
+        importBtn.disabled = false;
+    }
+
+    async function importWalletFromModal() {
+        if (walletImportFilesModal.length === 0) {
+            showToast('No files selected', true);
+            return;
+        }
+
+        const importBtn = document.getElementById('importWalletBtnModal');
+        const resultDiv = document.getElementById('importResultModal');
+
+        // Confirm action
+        const confirmMsg =
+            'WARNING: This will replace your current wallet and restart the container!\n\n' +
+            `Files to import: ${walletImportFilesModal.map(f => f.name).join(', ')}\n\n` +
+            'Make sure you have backed up your current wallet.\n\n' +
+            'Continue?';
+
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+
+        // Disable button and show loading
+        importBtn.disabled = true;
+        importBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Importing...';
+        resultDiv.style.display = 'none';
+
+        try {
+            // Prepare FormData
+            const formData = new FormData();
+            walletImportFilesModal.forEach(file => {
+                formData.append('files', file, file.name);
+            });
+
+            // Upload files
+            const response = await fetch('/api/wallet/import', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                resultDiv.className = 'mt-3 alert alert-success';
+                resultDiv.innerHTML =
+                    '<strong>Success!</strong><br>' +
+                    'Wallet imported successfully.<br>' +
+                    'Container is restarting...<br>' +
+                    '<small>Backup saved to: ' + data.backup_location + '</small><br>' +
+                    '<small class="text-warning">Note: You\'ll need to set a new reward address after restart.</small>';
+                resultDiv.style.display = 'block';
+
+                showToast('Wallet imported! Container restarting...');
+
+                // Show restart notice
+                setTimeout(() => {
+                    alert(
+                        'Container Restarting\n\n' +
+                        'The application is restarting with your imported wallet.\n' +
+                        'Please wait 10-15 seconds, then refresh this page.\n\n' +
+                        'You will need to:\n' +
+                        '1. Log in again with your vault password\n' +
+                        '2. Set a new reward address for this wallet'
+                    );
+
+                    // Auto-reload after 15 seconds
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 15000);
+                }, 2000);
+
+            } else {
+                const errorMsg = data.error || 'Import failed';
+                const rolledBack = data.rolled_back ? '\n\nYour old wallet has been restored.' : '';
+                resultDiv.className = 'mt-3 alert alert-danger';
+                resultDiv.innerHTML = '<strong>Error:</strong> ' + errorMsg + rolledBack;
+                resultDiv.style.display = 'block';
+                showToast('Import failed: ' + errorMsg, true);
+
+                // Re-enable button
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="material-icons align-middle me-1">upload</i> Import Wallet & Restart';
+            }
+
+        } catch (error) {
+            resultDiv.className = 'mt-3 alert alert-danger';
+            resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+            resultDiv.style.display = 'block';
+            showToast('Import error: ' + error.message, true);
+
+            // Re-enable button
+            importBtn.disabled = false;
+            importBtn.innerHTML = '<i class="material-icons align-middle me-1">upload</i> Import Wallet & Restart';
+        }
+    }
+
     // Initialize dashboard
     document.addEventListener('DOMContentLoaded', function() {
+        // Set up wallet import file input handler for modal
+        const walletFolderInputModal = document.getElementById('walletFolderInputModal');
+        if (walletFolderInputModal) {
+            walletFolderInputModal.addEventListener('change', handleWalletFolderSelectModal);
+        }
+
         // Update theme icon based on stored theme
         const storedTheme = localStorage.getItem('satori-theme') || 'dark';
         const themeIcon = document.getElementById('themeIcon');

@@ -1349,3 +1349,216 @@ def register_routes(app):
             import traceback
             logger.error(traceback.format_exc())
             return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/wallet/import', methods=['POST'])
+    @login_required
+    def api_wallet_import():
+        """Import wallet from uploaded files with automatic rollback on failure.
+
+        Security: Requires vault to be unlocked (login_required decorator)
+        Process:
+        1. Validate uploaded files
+        2. Create timestamped backup of existing wallet directory
+        3. Save uploaded files to temporary directory
+        4. Validate YAML structure
+        5. Move files to wallet directory
+        6. Trigger container restart (critical for safety)
+
+        Rollback: If ANY step fails, automatically restores from backup
+
+        Expected files in upload:
+        - wallet.yaml (required)
+        - vault.yaml (required)
+        - wallet.yaml.bak (optional)
+        - vault.yaml.bak (optional)
+        """
+        import tempfile
+        import shutil
+        import datetime
+        from pathlib import Path
+        import yaml
+
+        try:
+            # 1. Validate request has files
+            if 'files' not in request.files:
+                return jsonify({'error': 'No files uploaded'}), 400
+
+            files = request.files.getlist('files')
+            if not files:
+                return jsonify({'error': 'No files selected'}), 400
+
+            # 2. Validate required files are present
+            file_names = [f.filename for f in files if f.filename]
+            required_files = {'wallet.yaml', 'vault.yaml'}
+            uploaded_files = set(file_names)
+
+            if not required_files.issubset(uploaded_files):
+                missing = required_files - uploaded_files
+                return jsonify({
+                    'error': f'Missing required files: {", ".join(missing)}'
+                }), 400
+
+            # 3. Validate file names (security: prevent directory traversal)
+            allowed_files = {'wallet.yaml', 'vault.yaml', 'wallet.yaml.bak', 'vault.yaml.bak'}
+            for name in file_names:
+                if name not in allowed_files:
+                    return jsonify({
+                        'error': f'Invalid file: {name}. Only wallet files allowed.'
+                    }), 400
+
+            # 4. Get wallet directory path
+            from satorineuron import config
+            wallet_dir = Path(config.walletPath())
+
+            # 5. Create timestamped backup of wallet files inside wallet directory
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_dir = wallet_dir / f'backup_{timestamp}'
+
+            try:
+                if wallet_dir.exists():
+                    # Create backup directory inside wallet folder
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Copy all wallet files to backup (excluding other backup folders)
+                    for item in wallet_dir.iterdir():
+                        if item.is_file():
+                            shutil.copy2(item, backup_dir / item.name)
+
+                    logger.info(f"Created backup at {backup_dir}")
+                else:
+                    logger.warning(f"Wallet directory doesn't exist yet: {wallet_dir}")
+                    wallet_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Backup failed: {e}")
+                return jsonify({
+                    'error': f'Failed to create backup: {str(e)}'
+                }), 500
+
+            # 6. Save uploaded files to temporary location first
+            temp_dir = Path(tempfile.mkdtemp())
+            try:
+                # Save files to temp
+                for file in files:
+                    if file.filename:
+                        file_path = temp_dir / file.filename
+                        file.save(str(file_path))
+                        logger.info(f"Saved {file.filename} to temp: {file_path}")
+
+                # 7. Validate file contents (basic YAML check)
+                for file_name in ['wallet.yaml', 'vault.yaml']:
+                    file_path = temp_dir / file_name
+                    try:
+                        with open(file_path, 'r') as f:
+                            yaml.safe_load(f)
+                        logger.info(f"Validated {file_name}")
+                    except Exception as e:
+                        # Validation failed - cleanup and rollback
+                        shutil.rmtree(temp_dir)
+                        logger.error(f"Invalid {file_name}: {e}")
+
+                        # Rollback: This shouldn't be needed as we haven't modified wallet_dir yet
+                        # but include for safety
+                        if backup_dir.exists():
+                            logger.info("Validation failed before any changes - no rollback needed")
+
+                        return jsonify({
+                            'error': f'Invalid {file_name}: {str(e)}',
+                            'rolled_back': False
+                        }), 400
+
+                # 8. Files validated - move to wallet directory
+                for file_name in file_names:
+                    src = temp_dir / file_name
+                    dst = wallet_dir / file_name
+                    shutil.move(str(src), str(dst))
+                    logger.info(f"Moved {file_name} to wallet directory")
+
+                logger.info(f"Wallet import: saved {len(file_names)} files")
+
+                # 8.5. Clear reward address from config since wallet changed
+                try:
+                    # Read config, remove reward address, and write back
+                    config_data = config.get()
+                    logger.info(f"Current config before clearing reward address: {list(config_data.keys())}")
+
+                    if 'reward address' in config_data:
+                        old_address = config_data['reward address']
+                        del config_data['reward address']
+                        # Use put to write the entire config back (this will remove the key)
+                        config.put(data=config_data)
+                        logger.info(f"Cleared old reward address '{old_address}' from config")
+
+                        # Verify it was removed
+                        verify_config = config.get()
+                        if 'reward address' in verify_config:
+                            logger.error("Failed to remove reward address from config!")
+                        else:
+                            logger.info("Verified: reward address successfully removed from config")
+                    else:
+                        logger.info("No reward address found in config to clear")
+                except Exception as config_error:
+                    logger.error(f"Error clearing reward address from config: {config_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # Don't fail the import for this - it's not critical
+
+            except Exception as e:
+                # Error during file operations - ROLLBACK
+                logger.error(f"Import failed during file operations: {e}. Rolling back...")
+
+                # Delete any partial changes in wallet_dir
+                for file_name in file_names:
+                    try:
+                        (wallet_dir / file_name).unlink(missing_ok=True)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Cleanup error for {file_name}: {cleanup_error}")
+
+                # Restore from backup
+                if backup_dir.exists():
+                    try:
+                        for item in backup_dir.iterdir():
+                            if item.is_file():
+                                shutil.copy2(item, wallet_dir / item.name)
+                        logger.info("Rollback completed. Old wallet restored.")
+                    except Exception as rollback_error:
+                        logger.error(f"Rollback failed: {rollback_error}")
+                        return jsonify({
+                            'error': f'Import failed AND rollback failed: {str(e)}. Backup at: {backup_dir}',
+                            'rolled_back': False
+                        }), 500
+
+                return jsonify({
+                    'error': str(e),
+                    'rolled_back': True
+                }), 500
+
+            finally:
+                # Cleanup temp directory
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+
+            # 9. Schedule container restart (happens after response sent)
+            def delayed_restart():
+                import time
+                time.sleep(2)  # Give response time to be sent
+                startup = get_startup()
+                if startup:
+                    logger.info("Triggering restart after wallet import")
+                    startup.triggerRestart()
+                else:
+                    logger.error("Cannot restart - startup instance not available")
+
+            import threading
+            threading.Thread(target=delayed_restart, daemon=True).start()
+
+            return jsonify({
+                'success': True,
+                'message': 'Wallet imported successfully. Container restarting...',
+                'backup_location': str(backup_dir)
+            })
+
+        except Exception as e:
+            logger.error(f"Wallet import error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'error': str(e)}), 500
