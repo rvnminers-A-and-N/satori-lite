@@ -13,9 +13,14 @@ if ! docker info &> /dev/null; then
 fi
 
 # Production mode - uses Docker image code
-IMAGE_TAG="latest"
-IMAGE="satorinet/satori-lite:${IMAGE_TAG}"
+LOCAL_MODE=false
 BASE_PORT=24601
+
+# Parse "local" flag first
+if [ "$1" = "local" ]; then
+    LOCAL_MODE=true
+    shift
+fi
 
 # Parse instance number (default: 1)
 if [[ "$1" =~ ^[0-9]+$ ]]; then
@@ -24,6 +29,10 @@ if [[ "$1" =~ ^[0-9]+$ ]]; then
 else
     INSTANCE=1
 fi
+
+# Always use latest tag
+IMAGE_TAG="latest"
+IMAGE="satorinet/satori-lite:${IMAGE_TAG}"
 
 CONTAINER_NAME="satori-${INSTANCE}"
 PORT=$((BASE_PORT + INSTANCE - 1))
@@ -42,15 +51,21 @@ create_container() {
     # Create data directories
     create_data_dirs
 
-    # Always pull latest image
-    echo "Pulling latest image..."
-    docker pull $IMAGE
+    # Pull image only when not in local mode
+    if [ "$LOCAL_MODE" = false ]; then
+        echo "Pulling latest image..."
+        docker pull $IMAGE
+        SATORI_ENV="prod"
+    else
+        echo "Using local image: $IMAGE"
+        SATORI_ENV="dev"
+    fi
 
     # Production mode: mount data only
     docker run -d --name $CONTAINER_NAME \
         --restart unless-stopped \
         -p ${PORT}:${PORT} \
-        -e SATORI_ENV=prod \
+        -e SATORI_ENV=${SATORI_ENV} \
         -e SATORI_UI_PORT=${PORT} \
         -v "${DATA_DIR}/config:/Satori/Neuron/config" \
         -v "${DATA_DIR}/wallet:/Satori/Neuron/wallet" \
@@ -66,7 +81,10 @@ create_container() {
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "Satori Neuron"
     echo ""
-    echo "Usage: satori [instance] [command]"
+    echo "Usage: satori [local] [instance] [command]"
+    echo ""
+    echo "Modes:"
+    echo "  local       Use local Docker image (SATORI_ENV=dev, no pull)"
     echo ""
     echo "Instance:"
     echo "  (number)    Instance number (default: 1)"
@@ -81,10 +99,13 @@ if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
     echo "  --help      Show this help"
     echo ""
     echo "Examples:"
-    echo "  satori          # Run instance 1 on port 24601"
-    echo "  satori 2        # Run instance 2 on port 24602"
-    echo "  satori 2 stop   # Stop instance 2"
-    echo "  satori 3 logs   # Show logs for instance 3"
+    echo "  satori              # Run instance 1 on port 24601 (pulls latest)"
+    echo "  satori local        # Run instance 1 with local latest image"
+    echo "  satori 2            # Run instance 2 on port 24602"
+    echo "  satori local 2      # Run instance 2 with local latest image"
+    echo "  satori 2 stop       # Stop instance 2"
+    echo "  satori local restart # Restart with local latest image"
+    echo "  satori 3 logs       # Show logs for instance 3"
     echo ""
     echo "Data persists in: ./<instance>/config, wallet, models, data"
     exit 0
