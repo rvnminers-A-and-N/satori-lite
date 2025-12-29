@@ -29,6 +29,17 @@ class SingletonMeta(type):
 class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     """a DAG of startup tasks."""
 
+    @staticmethod
+    def getUiPort() -> int:
+        """Get UI port with priority: config file > environment variable > default (24601)"""
+        existing_port = config.get().get('uiport')
+        if existing_port is not None:
+            return int(existing_port)
+        else:
+            port = int(os.environ.get('SATORI_UI_PORT', '24601'))
+            config.add(data={'uiport': port})
+            return port
+
     @classmethod
     def create(
         cls,
@@ -54,13 +65,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         isDebug: bool = False,
     ):
         super(StartupDag, self).__init__(*args)
-        self.needsRestart: Union[str, None] = None
         self.env = env
         self.runMode = RunMode.choose(runMode or config.get().get('mode', None))
         # logging.debug(f'mode: {self.runMode.name}', print=True)
-        # Read UI port from environment and save to config
-        self.uiPort = int(os.environ.get('SATORI_UI_PORT', '24601'))
-        config.add(data={'uiport': self.uiPort})
+        self.uiPort = self.getUiPort()
         self.userInteraction = time.time()
         self.walletManager: WalletManager
         self.isDebug: bool = isDebug
@@ -649,14 +657,24 @@ if __name__ == "__main__":
 
     # Start web UI early (before blocking server connection)
     def start_web_early():
-        """Start web UI after a brief delay to let StartupDag initialize."""
+        """Poll for StartupDag singleton and start web UI when ready."""
         import time
-        time.sleep(2)  # Wait for StartupDag to be created
-        try:
-            startup = StartupDag()
-            startWebUI(startup, port=startup.uiPort)
-        except Exception as e:
-            logging.warning(f"Early web UI start failed: {e}")
+        max_wait = 30  # Maximum 30 seconds
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            # Check if singleton instance exists
+            if StartupDag in SingletonMeta._instances:
+                try:
+                    startup = StartupDag()
+                    startWebUI(startup, port=startup.uiPort)
+                    return
+                except Exception as e:
+                    logging.warning(f"Web UI start failed: {e}")
+                    return
+            time.sleep(0.5)  # Poll every 500ms
+
+        logging.warning("StartupDag not initialized within timeout, skipping web UI")
 
     web_early_thread = threading.Thread(target=start_web_early, daemon=True)
     web_early_thread.start()
