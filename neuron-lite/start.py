@@ -230,6 +230,44 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     def electrumxCheck(self):
         return self.walletManager.isConnected()
 
+    def collectAndSubmitPredictions(self):
+        """Collect predictions from all models and submit in batch."""
+        try:
+            if not hasattr(self, 'aiengine') or self.aiengine is None:
+                logging.warning("AI Engine not initialized, skipping prediction collection", color='yellow')
+                return
+
+            # Collect predictions from all models
+            predictions_collected = 0
+            for stream_uuid, model in self.aiengine.streamModels.items():
+                if hasattr(model, '_pending_prediction') and model._pending_prediction:
+                    # Queue prediction in engine
+                    pred = model._pending_prediction
+                    self.aiengine.queuePrediction(
+                        stream_uuid=pred['stream_uuid'],
+                        stream_name=pred['stream_name'],
+                        value=pred['value'],
+                        observed_at=pred['observed_at'],
+                        hash_val=pred['hash']
+                    )
+                    predictions_collected += 1
+                    # Clear the pending prediction
+                    model._pending_prediction = None
+
+            if predictions_collected > 0:
+                logging.info(f"Collected {predictions_collected} predictions from models", color='cyan')
+                # Submit all queued predictions in batch
+                result = self.aiengine.flushPredictionQueue()
+                if result:
+                    logging.info(f"✓ Batch predictions submitted: {result['successful']}/{result['total_submitted']}", color='green')
+                else:
+                    logging.warning("Failed to submit batch predictions", color='yellow')
+            else:
+                logging.debug("No predictions ready to submit")
+
+        except Exception as e:
+            logging.error(f"Error collecting and submitting predictions: {e}", color='red')
+
     def pollObservationsForever(self):
         """
         Poll the central server for new observations.
@@ -353,6 +391,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                             logging.error(f"Error processing individual observation: {e}", color='red')
 
                     logging.info(f"✓ Processed and stored {observations_processed}/{len(observations)} observations", color='cyan')
+
+                    # After processing all observations, collect predictions and submit in batch
+                    self.collectAndSubmitPredictions()
 
                 except Exception as e:
                     logging.error(f"Error polling observations: {e}", color='red')

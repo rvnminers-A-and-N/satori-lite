@@ -1190,6 +1190,62 @@ class SatoriServerClient(object):
             return None
         return True
 
+    def publishPredictionsBatch(self, predictions: list[dict]) -> Union[dict, None]:
+        """
+        Publish multiple predictions in a single batch request.
+
+        Args:
+            predictions: List of prediction dicts, each containing:
+                - stream_uuid: Stream UUID this prediction is for
+                - stream_name: Optional stream name for logging
+                - value: Predicted value
+                - observed_at: Timestamp
+                - hash: Hash for data integrity
+
+        Returns:
+            dict with keys: total_submitted, successful, failed, prediction_ids, errors
+            None if request fails
+
+        Example:
+            >>> predictions = [
+            ...     {"stream_uuid": "abc-123", "stream_name": "btc", "value": "45000", "observed_at": "...", "hash": "..."},
+            ...     {"stream_uuid": "def-456", "stream_name": "eth", "value": "3000", "observed_at": "...", "hash": "..."}
+            ... ]
+            >>> result = server.publishPredictionsBatch(predictions)
+            >>> print(f"Submitted {result['successful']}/{result['total_submitted']} predictions")
+        """
+        try:
+            if not predictions:
+                logging.warning("No predictions to submit in batch", color='yellow')
+                return None
+
+            # Call batch prediction endpoint
+            response = self._makeAuthenticatedCall(
+                function=requests.post,
+                endpoint='/api/v1/predictions/batch',
+                payload=json.dumps({'predictions': predictions}),
+                raiseForStatus=False
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                logging.info(
+                    f"Batch prediction: {result['successful']}/{result['total_submitted']} successful",
+                    color='green')
+                return result
+            elif response.status_code > 399:
+                logging.warning(
+                    f'Batch prediction rejected with status {response.status_code}: {response.text}',
+                    color='yellow')
+                return None
+            else:
+                logging.warning(f'Batch prediction unexpected response: {response.text}', color='yellow')
+                return None
+
+        except Exception as e:
+            logging.error(f'Failed to submit batch predictions: {e}', color='red')
+            return None
+
     def getObservationsBatch(self, storage=None, limit: int = 100) -> Union[list, None]:
         """
         Get the latest batch of observations from the Central Server.
