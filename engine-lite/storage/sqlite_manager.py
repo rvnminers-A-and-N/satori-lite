@@ -304,6 +304,7 @@ class EngineSqliteDatabase:
                     server_stream_id INTEGER,
                     uuid TEXT UNIQUE NOT NULL,
                     name TEXT,
+                    author TEXT,
                     secondary TEXT,
                     target TEXT,
                     meta TEXT,
@@ -325,6 +326,7 @@ class EngineSqliteDatabase:
         uuid: str,
         server_stream_id: Optional[int] = None,
         name: Optional[str] = None,
+        author: Optional[str] = None,
         secondary: Optional[str] = None,
         target: Optional[str] = None,
         meta: Optional[str] = None,
@@ -337,6 +339,7 @@ class EngineSqliteDatabase:
             uuid: Stream UUID (required, unique)
             server_stream_id: Stream ID from central server
             name: Human-readable stream name
+            author: Wallet pubkey of peer allowed to publish on this stream
             secondary: Secondary identifier
             target: Target field for StreamId compatibility
             meta: Metadata field
@@ -356,11 +359,11 @@ class EngineSqliteDatabase:
             # Use INSERT OR REPLACE to upsert
             self.cursor.execute('''
                 INSERT OR REPLACE INTO streams
-                (uuid, server_stream_id, name, secondary, target, meta, description, last_synced)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (uuid, server_stream_id, name, secondary, target, meta, description, last_synced))
+                (uuid, server_stream_id, name, author, secondary, target, meta, description, last_synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (uuid, server_stream_id, name, author, secondary, target, meta, description, last_synced))
             self.conn.commit()
-            debug(f"Engine DB: Upserted stream metadata for {uuid} (name: {name})")
+            debug(f"Engine DB: Upserted stream metadata for {uuid} (name: {name}, author: {author})")
             return True
         except Exception as e:
             error(f"Engine DB: Error upserting stream {uuid}: {e}")
@@ -375,7 +378,7 @@ class EngineSqliteDatabase:
         """
         try:
             self.cursor.execute(
-                '''SELECT id, server_stream_id, uuid, name, secondary, target, meta, description, last_synced, created_at
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
                 FROM streams WHERE uuid = ?''', (uuid,))
             row = self.cursor.fetchone()
             if row:
@@ -384,12 +387,13 @@ class EngineSqliteDatabase:
                     'server_stream_id': row[1],
                     'uuid': row[2],
                     'name': row[3],
-                    'secondary': row[4],
-                    'target': row[5],
-                    'meta': row[6],
-                    'description': row[7],
-                    'last_synced': row[8],
-                    'created_at': row[9]
+                    'author': row[4],
+                    'secondary': row[5],
+                    'target': row[6],
+                    'meta': row[7],
+                    'description': row[8],
+                    'last_synced': row[9],
+                    'created_at': row[10]
                 }
             return None
         except Exception as e:
@@ -405,7 +409,7 @@ class EngineSqliteDatabase:
         """
         try:
             self.cursor.execute(
-                '''SELECT id, server_stream_id, uuid, name, secondary, target, meta, description, last_synced, created_at
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
                 FROM streams WHERE name = ?''', (name,))
             row = self.cursor.fetchone()
             if row:
@@ -414,12 +418,13 @@ class EngineSqliteDatabase:
                     'server_stream_id': row[1],
                     'uuid': row[2],
                     'name': row[3],
-                    'secondary': row[4],
-                    'target': row[5],
-                    'meta': row[6],
-                    'description': row[7],
-                    'last_synced': row[8],
-                    'created_at': row[9]
+                    'author': row[4],
+                    'secondary': row[5],
+                    'target': row[6],
+                    'meta': row[7],
+                    'description': row[8],
+                    'last_synced': row[9],
+                    'created_at': row[10]
                 }
             return None
         except Exception as e:
@@ -435,7 +440,7 @@ class EngineSqliteDatabase:
         """
         try:
             self.cursor.execute(
-                '''SELECT id, server_stream_id, uuid, name, secondary, target, meta, description, last_synced, created_at
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
                 FROM streams ORDER BY created_at DESC''')
             rows = self.cursor.fetchall()
             return [{
@@ -443,12 +448,13 @@ class EngineSqliteDatabase:
                 'server_stream_id': row[1],
                 'uuid': row[2],
                 'name': row[3],
-                'secondary': row[4],
-                'target': row[5],
-                'meta': row[6],
-                'description': row[7],
-                'last_synced': row[8],
-                'created_at': row[9]
+                'author': row[4],
+                'secondary': row[5],
+                'target': row[6],
+                'meta': row[7],
+                'description': row[8],
+                'last_synced': row[9],
+                'created_at': row[10]
             } for row in rows]
         except Exception as e:
             error(f"Engine DB: Error getting all streams: {e}")

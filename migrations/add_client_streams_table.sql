@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS streams (
     -- Human-readable stream name (e.g., "bitcoin", "ethereum")
     name TEXT,
 
+    -- Author pubkey - wallet_pubkey of peer allowed to publish on this stream
+    author TEXT,
+
     -- Optional secondary identifier
     secondary TEXT,
 
