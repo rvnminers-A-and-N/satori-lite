@@ -997,17 +997,8 @@
 
     // Get central-lite API URL
     function getCentralApiUrl() {
-        // For development: assume central-lite runs on port 8000
-        // For production: this should be configured properly
-        const protocol = window.location.protocol;
-        const hostname = window.location.hostname;
-
-        // If we're on localhost, use localhost:8000
-        // Otherwise, use the same hostname (assumes central-lite on same domain)
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return `${protocol}//${hostname}:8000`;
-        }
-        return `${protocol}//${hostname}`;
+        // Always use the production Satori network server for audit files
+        return 'https://network.satorinet.io';
     }
 
     // Helper function to download JSON data as a file

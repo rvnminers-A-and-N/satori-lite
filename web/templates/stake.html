@@ -433,13 +433,8 @@
     }
 
     function getCentralApiUrl() {
-        const protocol = window.location.protocol;
-        const hostname = window.location.hostname;
-
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return `${protocol}//${hostname}:8000`;
-        }
-        return `${protocol}//${hostname}`;
+        // Always use the production Satori network server for audit files
+        return 'https://network.satorinet.io';
     }
 
     function downloadJSON(data, filename) {
