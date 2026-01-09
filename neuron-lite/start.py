@@ -351,7 +351,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                                         )
 
                                         # Import StreamModel dynamically
-                                        from satoriengine.veda.model import StreamModel
+                                        from satoriengine.veda.engine import StreamModel
 
                                         # Create new stream model for this crypto
                                         self.aiengine.streamModels[stream_uuid] = StreamModel(
