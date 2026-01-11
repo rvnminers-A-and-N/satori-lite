@@ -1,0 +1,750 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Oracles & Streams{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        <i class="material-icons align-middle me-2">visibility</i>
+        Satori - Oracles & Streams
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('predictions_page') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">insights</i>
+            Predictions
+        </a>
+        <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+            Governance
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <!-- Mode Tabs -->
+    <ul class="nav nav-tabs mb-4" role="tablist">
+        <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#streamsTab" type="button">
+                <i class="material-icons align-middle me-1" style="font-size: 18px;">hub</i>
+                Stream Registry
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#oraclesTab" type="button">
+                <i class="material-icons align-middle me-1" style="font-size: 18px;">visibility</i>
+                Oracles
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#observationsTab" type="button">
+                <i class="material-icons align-middle me-1" style="font-size: 18px;">update</i>
+                Observations
+            </button>
+        </li>
+    </ul>
+
+    <div class="tab-content">
+        <!-- ============================================================== -->
+        <!-- STREAMS TAB -->
+        <!-- ============================================================== -->
+        <div class="tab-pane fade show active" id="streamsTab">
+            <!-- Stream Stats Row -->
+            <div class="row g-4 mb-4">
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="knownStreams" class="mb-1" style="color: #00aaff;">--</h3>
+                            <small class="text-muted">Known Streams</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="myClaims" class="mb-1 text-success">--</h3>
+                            <small class="text-muted">My Claims</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="totalClaims" class="mb-1" style="color: #ffd700;">--</h3>
+                            <small class="text-muted">Total Claims</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h4 id="streamRegistryStatus" class="mb-1 text-success">--</h4>
+                            <small class="text-muted">Registry Status</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-4">
+                <!-- Discovered Streams -->
+                <div class="col-lg-6">
+                    <div class="card h-100">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">explore</i>
+                                Discovered Streams
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadDiscoveredStreams()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div id="discoveredStreamsList" style="max-height: 350px; overflow-y: auto;">
+                                <div class="text-center text-muted py-5">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- My Claimed Streams -->
+                <div class="col-lg-6">
+                    <div class="card h-100">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">check_circle</i>
+                                My Claimed Streams
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadMyClaimedStreams()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div id="myClaimedStreamsList" style="max-height: 350px; overflow-y: auto;">
+                                <div class="text-center text-muted py-5">Loading...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Claim/Register Stream Row -->
+            <div class="row g-4 mt-2">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="material-icons align-middle me-2">assignment_turned_in</i>
+                                Claim Predictor Slot
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="claimStreamId" placeholder="Stream ID">
+                                <button class="btn btn-primary" onclick="claimStream()">Claim</button>
+                                <button class="btn btn-outline-danger" onclick="releaseStreamClaim()">Release</button>
+                            </div>
+                            <small class="text-muted">Claim a slot to make predictions on this stream</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#registerStreamCollapse">
+                            <h6 class="mb-0">
+                                <i class="material-icons align-middle me-2">add_circle</i>
+                                Register New Stream
+                                <i class="material-icons align-middle float-end">expand_more</i>
+                            </h6>
+                        </div>
+                        <div class="collapse" id="registerStreamCollapse">
+                            <div class="card-body">
+                                <div class="row g-2">
+                                    <div class="col-4">
+                                        <input type="text" class="form-control form-control-sm" id="regStreamSource" placeholder="Source">
+                                    </div>
+                                    <div class="col-4">
+                                        <input type="text" class="form-control form-control-sm" id="regStreamName" placeholder="Stream">
+                                    </div>
+                                    <div class="col-4">
+                                        <input type="text" class="form-control form-control-sm" id="regStreamTarget" placeholder="Target">
+                                    </div>
+                                </div>
+                                <div class="row g-2 mt-1">
+                                    <div class="col-4">
+                                        <select class="form-select form-select-sm" id="regStreamDatatype">
+                                            <option value="numeric">Numeric</option>
+                                            <option value="price">Price</option>
+                                            <option value="volume">Volume</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-4">
+                                        <input type="number" class="form-control form-control-sm" id="regStreamCadence" value="60" placeholder="Cadence">
+                                    </div>
+                                    <div class="col-4">
+                                        <input type="number" class="form-control form-control-sm" id="regStreamSlots" value="10" placeholder="Slots">
+                                    </div>
+                                </div>
+                                <button class="btn btn-primary btn-sm mt-2" onclick="registerStream()">Register</button>
+                                <span id="registerStreamResult" class="ms-2 small"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- ORACLES TAB -->
+        <!-- ============================================================== -->
+        <div class="tab-pane fade" id="oraclesTab">
+            <!-- Oracle Stats Row -->
+            <div class="row g-4 mb-4">
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="oracleSubscribedStreams" class="mb-1" style="color: #00aaff;">--</h3>
+                            <small class="text-muted">Subscribed Streams</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="myOracleRegistrations" class="mb-1 text-success">--</h3>
+                            <small class="text-muted">My Oracle Registrations</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="knownOracles" class="mb-1" style="color: #ffd700;">--</h3>
+                            <small class="text-muted">Known Oracles</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="cachedObservations" class="mb-1" style="color: #00ff88;">--</h3>
+                            <small class="text-muted">Cached Observations</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-4">
+                <!-- Registered Oracles -->
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">group</i>
+                                Registered Oracles
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadRegisteredOracles()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Stream</th>
+                                            <th>Oracle Address</th>
+                                            <th>Peer ID</th>
+                                            <th>Reputation</th>
+                                            <th>Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="oraclesTable">
+                                        <tr><td colspan="5" class="text-center text-muted py-3">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Register as Oracle Row -->
+            <div class="row g-4 mt-2">
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="material-icons align-middle me-2">notifications</i>
+                                Subscribe to Observations
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="oracleSubscribeStreamId" placeholder="Stream ID">
+                                <button class="btn btn-primary" onclick="subscribeToObservations()">Subscribe</button>
+                                <button class="btn btn-outline-danger" onclick="unsubscribeFromObservations()">Unsubscribe</button>
+                            </div>
+                            <small class="text-muted">Receive observations from oracles for this stream</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="material-icons align-middle me-2">how_to_reg</i>
+                                Register as Oracle
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="registerOracleStreamId" placeholder="Stream ID">
+                                <div class="input-group-text">
+                                    <input class="form-check-input mt-0" type="checkbox" id="registerOraclePrimary">
+                                    <label class="form-check-label ms-1" for="registerOraclePrimary">Primary</label>
+                                </div>
+                                <button class="btn btn-success" onclick="registerAsOracle()">Register</button>
+                            </div>
+                            <small class="text-muted">Register yourself as an oracle to publish observations</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- OBSERVATIONS TAB -->
+        <!-- ============================================================== -->
+        <div class="tab-pane fade" id="observationsTab">
+            <!-- Recent Observations -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">update</i>
+                                Recent Observations
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadLatestObservations()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Stream</th>
+                                            <th>Value</th>
+                                            <th>Oracle</th>
+                                            <th>Timestamp</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="observationsTable">
+                                        <tr><td colspan="4" class="text-center text-muted py-3">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Publish Observation -->
+            <div class="row g-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#publishObservationCollapse">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">publish</i>
+                                Publish Observation
+                                <i class="material-icons align-middle float-end">expand_more</i>
+                            </h5>
+                        </div>
+                        <div class="collapse" id="publishObservationCollapse">
+                            <div class="card-body">
+                                <p class="text-muted small">You must be registered as an oracle for a stream to publish observations.</p>
+                                <form id="observationForm" onsubmit="publishObservation(event)">
+                                    <div class="row g-3">
+                                        <div class="col-md-5">
+                                            <label class="form-label">Stream ID</label>
+                                            <input type="text" class="form-control" id="pubObsStreamId" placeholder="Stream ID" required>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">Observed Value</label>
+                                            <input type="number" class="form-control" id="pubObsValue" placeholder="Value" step="any" required>
+                                        </div>
+                                        <div class="col-md-3">
+                                            <label class="form-label">Timestamp (optional)</label>
+                                            <input type="number" class="form-control" id="pubObsTimestamp" placeholder="Unix (now if empty)">
+                                        </div>
+                                    </div>
+                                    <div class="mt-3">
+                                        <button type="submit" class="btn btn-success">
+                                            <i class="material-icons align-middle" style="font-size: 16px;">send</i>
+                                            Publish
+                                        </button>
+                                        <span id="publishResult" class="ms-3"></span>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// =========================================================================
+// PAGE INITIALIZATION
+// =========================================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize theme
+    const storedTheme = localStorage.getItem('satori-theme') || 'dark';
+    const themeIcon = document.getElementById('themeIcon');
+    if (themeIcon) {
+        themeIcon.textContent = storedTheme === 'dark' ? 'light_mode' : 'dark_mode';
+    }
+
+    // Load initial data
+    loadStreamStats();
+    loadOracleStats();
+    loadDiscoveredStreams();
+    loadMyClaimedStreams();
+    loadRegisteredOracles();
+    loadLatestObservations();
+
+    // Set up periodic refresh
+    setInterval(loadStreamStats, 30000);
+    setInterval(loadOracleStats, 30000);
+    setInterval(loadLatestObservations, 15000);
+});
+
+// =========================================================================
+// API HELPER
+// =========================================================================
+
+async function apiCall(endpoint, method = 'GET', data = null) {
+    const options = {
+        method: method,
+        headers: { 'Content-Type': 'application/json' }
+    };
+    if (data) {
+        options.body = JSON.stringify(data);
+    }
+    const response = await fetch('/api' + endpoint, options);
+    return response.json();
+}
+
+// =========================================================================
+// STREAM REGISTRY FUNCTIONS
+// =========================================================================
+
+async function loadStreamStats() {
+    try {
+        const stats = await apiCall('/p2p/streams/stats');
+        document.getElementById('knownStreams').textContent = stats.known_streams || 0;
+        document.getElementById('myClaims').textContent = stats.my_claims || 0;
+        document.getElementById('totalClaims').textContent = stats.total_claims || 0;
+        document.getElementById('streamRegistryStatus').textContent = stats.started ? 'Active' : 'Offline';
+        document.getElementById('streamRegistryStatus').className = stats.started ? 'mb-1 text-success' : 'mb-1 text-danger';
+    } catch (e) {
+        console.error('Failed to load stream stats:', e);
+    }
+}
+
+async function loadDiscoveredStreams() {
+    const container = document.getElementById('discoveredStreamsList');
+    try {
+        const result = await apiCall('/p2p/streams/discover?limit=20');
+        if (result.streams && result.streams.length > 0) {
+            container.innerHTML = result.streams.map(stream => {
+                const streamIdShort = stream.stream_id.substring(0, 12) + '...';
+                return `<div class="p-3 border-bottom">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <strong>${stream.source}/${stream.stream}</strong>
+                            <br><small class="text-muted">Target: ${stream.target} | ${stream.datatype}</small>
+                            <br><small class="text-muted" title="${stream.stream_id}">ID: ${streamIdShort}</small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-secondary">${stream.predictor_slots} slots</span>
+                            <br><button class="btn btn-outline-primary btn-sm mt-1" onclick="document.getElementById('claimStreamId').value='${stream.stream_id}'">
+                                Select
+                            </button>
+                        </div>
+                    </div>
+                    ${stream.description ? `<small class="text-muted">${stream.description}</small>` : ''}
+                </div>`;
+            }).join('');
+        } else {
+            container.innerHTML = '<div class="text-center text-muted py-5">No streams discovered. Register a stream or wait for network announcements.</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load streams:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load streams</div>';
+    }
+}
+
+async function loadMyClaimedStreams() {
+    const container = document.getElementById('myClaimedStreamsList');
+    try {
+        const result = await apiCall('/p2p/streams/my');
+        if (result.claims && result.claims.length > 0) {
+            container.innerHTML = result.claims.map(claim => {
+                const streamIdShort = claim.stream_id.substring(0, 16) + '...';
+                const expires = claim.expires ? new Date(claim.expires * 1000).toLocaleDateString() : 'Never';
+                const statusBadge = claim.is_expired ? '<span class="badge bg-danger">Expired</span>' : '<span class="badge bg-success">Active</span>';
+                return `<div class="p-3 border-bottom">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <span title="${claim.stream_id}">${streamIdShort}</span>
+                            <br><small class="text-muted">Slot #${claim.slot_index} | Expires: ${expires}</small>
+                        </div>
+                        <div>
+                            ${statusBadge}
+                            <br><button class="btn btn-outline-danger btn-sm mt-1" onclick="document.getElementById('claimStreamId').value='${claim.stream_id}'; releaseStreamClaim()">
+                                Release
+                            </button>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('');
+        } else {
+            container.innerHTML = '<div class="text-center text-muted py-5">No claimed streams. Claim a stream to start making predictions.</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load my claims:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load claims</div>';
+    }
+}
+
+async function claimStream() {
+    const streamId = document.getElementById('claimStreamId').value.trim();
+    if (!streamId) { alert('Please enter a stream ID'); return; }
+
+    try {
+        const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Claimed slot #' + (result.claim?.slot_index || 0));
+            document.getElementById('claimStreamId').value = '';
+            loadStreamStats();
+            loadMyClaimedStreams();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function releaseStreamClaim() {
+    const streamId = document.getElementById('claimStreamId').value.trim();
+    if (!streamId) { alert('Please enter a stream ID'); return; }
+
+    try {
+        const result = await apiCall('/p2p/streams/release', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Released claim on stream');
+            document.getElementById('claimStreamId').value = '';
+            loadStreamStats();
+            loadMyClaimedStreams();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function registerStream() {
+    const source = document.getElementById('regStreamSource').value.trim();
+    const stream = document.getElementById('regStreamName').value.trim();
+    const target = document.getElementById('regStreamTarget').value.trim();
+    const datatype = document.getElementById('regStreamDatatype').value;
+    const cadence = parseInt(document.getElementById('regStreamCadence').value) || 60;
+    const slots = parseInt(document.getElementById('regStreamSlots').value) || 10;
+    const resultSpan = document.getElementById('registerStreamResult');
+
+    if (!source || !stream || !target) {
+        resultSpan.innerHTML = '<span class="text-danger">Fill source, stream, target</span>';
+        return;
+    }
+
+    try {
+        resultSpan.innerHTML = '<span class="text-info">Registering...</span>';
+        const result = await apiCall('/p2p/streams/register', 'POST', {
+            source, stream, target, datatype, cadence, predictor_slots: slots
+        });
+        if (result.success) {
+            resultSpan.innerHTML = '<span class="text-success">Registered!</span>';
+            loadStreamStats();
+            loadDiscoveredStreams();
+        } else {
+            resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';
+        }
+    } catch (e) {
+        resultSpan.innerHTML = '<span class="text-danger">Error</span>';
+    }
+}
+
+// =========================================================================
+// ORACLE FUNCTIONS
+// =========================================================================
+
+async function loadOracleStats() {
+    try {
+        const stats = await apiCall('/p2p/oracle/stats');
+        document.getElementById('oracleSubscribedStreams').textContent = stats.subscribed_streams || 0;
+        document.getElementById('myOracleRegistrations').textContent = stats.my_oracle_registrations || 0;
+        document.getElementById('knownOracles').textContent = stats.known_oracles || 0;
+        document.getElementById('cachedObservations').textContent = stats.cached_observations || 0;
+    } catch (e) {
+        console.error('Failed to load oracle stats:', e);
+    }
+}
+
+async function loadRegisteredOracles() {
+    const tbody = document.getElementById('oraclesTable');
+    try {
+        const result = await apiCall('/p2p/oracle/oracles');
+        if (result.oracles && result.oracles.length > 0) {
+            tbody.innerHTML = result.oracles.map(o => {
+                const addrShort = o.oracle.length > 12 ? o.oracle.substring(0, 6) + '...' + o.oracle.substring(o.oracle.length - 4) : o.oracle;
+                const peerShort = o.peer_id ? (o.peer_id.substring(0, 12) + '...') : '--';
+                return `<tr>
+                    <td>${o.stream_id.substring(0, 20)}...</td>
+                    <td><code title="${o.oracle}">${addrShort}</code></td>
+                    <td title="${o.peer_id}">${peerShort}</td>
+                    <td>${o.reputation || 0}</td>
+                    <td>${o.is_primary ? '<span class="badge bg-primary">Primary</span>' : '<span class="badge bg-secondary">Secondary</span>'}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No oracles registered</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load oracles:', e);
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Failed to load</td></tr>';
+    }
+}
+
+async function subscribeToObservations() {
+    const streamId = document.getElementById('oracleSubscribeStreamId').value.trim();
+    if (!streamId) { alert('Please enter a stream ID'); return; }
+
+    try {
+        const result = await apiCall('/p2p/oracle/subscribe', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Subscribed to observations');
+            document.getElementById('oracleSubscribeStreamId').value = '';
+            loadOracleStats();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown'));
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function unsubscribeFromObservations() {
+    const streamId = document.getElementById('oracleSubscribeStreamId').value.trim();
+    if (!streamId) { alert('Please enter a stream ID'); return; }
+
+    try {
+        const result = await apiCall('/p2p/oracle/unsubscribe', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Unsubscribed');
+            document.getElementById('oracleSubscribeStreamId').value = '';
+            loadOracleStats();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown'));
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function registerAsOracle() {
+    const streamId = document.getElementById('registerOracleStreamId').value.trim();
+    const isPrimary = document.getElementById('registerOraclePrimary').checked;
+    if (!streamId) { alert('Please enter a stream ID'); return; }
+
+    try {
+        const result = await apiCall('/p2p/oracle/register', 'POST', { stream_id: streamId, is_primary: isPrimary });
+        if (result.success) {
+            alert('Registered as oracle!');
+            document.getElementById('registerOracleStreamId').value = '';
+            loadOracleStats();
+            loadRegisteredOracles();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown'));
+        }
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+// =========================================================================
+// OBSERVATIONS FUNCTIONS
+// =========================================================================
+
+async function loadLatestObservations() {
+    const tbody = document.getElementById('observationsTable');
+    try {
+        const result = await apiCall('/p2p/oracle/observations/latest');
+        if (result.observations && result.observations.length > 0) {
+            tbody.innerHTML = result.observations.map(obs => {
+                const date = new Date(obs.timestamp * 1000);
+                const streamShort = obs.stream_id.length > 25 ? obs.stream_id.substring(0, 25) + '...' : obs.stream_id;
+                const oracleShort = obs.oracle.length > 12 ? obs.oracle.substring(0, 6) + '...' + obs.oracle.substring(obs.oracle.length - 4) : obs.oracle;
+                return `<tr>
+                    <td title="${obs.stream_id}">${streamShort}</td>
+                    <td><strong>${obs.value}</strong></td>
+                    <td><code title="${obs.oracle}">${oracleShort}</code></td>
+                    <td>${date.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No observations yet. Subscribe to streams to see observations.</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load observations:', e);
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger py-3">Failed to load</td></tr>';
+    }
+}
+
+async function publishObservation(event) {
+    event.preventDefault();
+
+    const streamId = document.getElementById('pubObsStreamId').value.trim();
+    const value = parseFloat(document.getElementById('pubObsValue').value);
+    const timestamp = document.getElementById('pubObsTimestamp').value;
+    const resultSpan = document.getElementById('publishResult');
+
+    resultSpan.innerHTML = '<span class="text-info">Publishing...</span>';
+
+    try {
+        const payload = { stream_id: streamId, value: value };
+        if (timestamp) payload.timestamp = parseInt(timestamp);
+
+        const result = await apiCall('/p2p/oracle/publish', 'POST', payload);
+        if (result.success) {
+            resultSpan.innerHTML = '<span class="text-success">Published!</span>';
+            document.getElementById('observationForm').reset();
+            loadLatestObservations();
+            setTimeout(() => { resultSpan.innerHTML = ''; }, 3000);
+        } else {
+            resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';
+        }
+    } catch (e) {
+        resultSpan.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
+    }
+}
+</script>
+{% endblock %}

@@ -91,5 +91,18 @@ def electrumxServers():
 
 
 def path(of='data'):
-    ''' used to get the data or model path '''
+    '''
+    Get a path (data, model, wallet, etc.)
+
+    Priority order (same pattern as SATORI_NETWORKING_MODE):
+    1. Environment variable: SATORI_{TYPE}_PATH (e.g., SATORI_WALLET_PATH)
+    2. Config file setting
+    3. Default: root(./{type})
+    '''
+    # Check environment variable first (e.g., SATORI_WALLET_PATH, SATORI_DATA_PATH)
+    env_var = f'SATORI_{of.upper()}_PATH'
+    env_path = os.environ.get(env_var)
+    if env_path:
+        return env_path
+    # Fall back to config file, then default
     return get().get(verbose(f'{of}Path'), root(f'./{of}'))

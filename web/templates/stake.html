@@ -6,13 +6,24 @@
 <!-- Navigation -->
 <nav class="navbar navbar-expand-lg px-4">
     <span class="navbar-brand">
-        Satori - Stake Management
-        <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
+        <i class="material-icons align-middle me-2">handshake</i>
+        Satori - Stake
     </span>
     <div class="ms-auto d-flex align-items-center">
         <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
-            <i class="material-icons align-middle" style="font-size: 16px;">arrow_back</i>
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
             Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+            Governance
+        </a>
+        <a href="{{ url_for('restart_neuron') }}" class="btn btn-outline-light btn-sm me-2" title="Restart Node" onclick="return confirm('Restart your Satori node?');">
+            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
         </a>
         <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
         <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
@@ -200,8 +211,13 @@
             const response = await fetch(API_URL + endpoint, options);
 
             if (!response.ok) {
-                const errorData = await response.json();
-                showToast(errorData.detail || 'API request failed', true);
+                try {
+                    const errorData = await response.json();
+                    const errorMsg = errorData.detail || errorData.error || errorData.message || JSON.stringify(errorData);
+                    showToast(errorMsg, true);
+                } catch (e) {
+                    showToast(`API request failed (${response.status})`, true);
+                }
                 return null;
             }
             return await response.json();

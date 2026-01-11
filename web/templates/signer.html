@@ -1,0 +1,1623 @@
+{% extends "base.html" %}
+
+{% block title %}Signer Dashboard - Satori Lite{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <!-- Signer Status Banner -->
+    <div id="signer-status-banner" class="alert alert-warning" style="display: none;">
+        <i class="bi bi-shield-exclamation"></i> You are not currently a signer. This page is for authorized signers only.
+    </div>
+
+    <div id="signer-content" style="display: none;">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="bi bi-shield-check"></i> Signer Dashboard</h2>
+            <div>
+                <span class="badge bg-success" id="signer-status-badge">Active Signer</span>
+                <span class="badge bg-primary ms-2" id="signer-position">Position: --</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats Row -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card bg-primary text-white">
+                    <div class="card-body text-center">
+                        <h3 id="pending-actions-count">0</h3>
+                        <small>Pending Actions</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-success text-white">
+                    <div class="card-body text-center">
+                        <h3 id="signed-today-count">0</h3>
+                        <small>Signed Today</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-info text-white">
+                    <div class="card-body text-center">
+                        <h3 id="curator-actions-count">0</h3>
+                        <small>Curator Actions</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card bg-warning text-dark">
+                    <div class="card-body text-center">
+                        <h3 id="governance-pending-count">0</h3>
+                        <small>Gov. Pending</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Tabs -->
+        <ul class="nav nav-tabs mb-3" id="signerTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="signing-tab" data-bs-toggle="tab" data-bs-target="#signing" type="button">
+                    <i class="bi bi-pen"></i> Signing Queue
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="curator-tab" data-bs-toggle="tab" data-bs-target="#curator" type="button">
+                    <i class="bi bi-clipboard-check"></i> Curator
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="archiver-tab" data-bs-toggle="tab" data-bs-target="#archiver" type="button">
+                    <i class="bi bi-archive"></i> Archiver
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="governance-admin-tab" data-bs-toggle="tab" data-bs-target="#governance-admin" type="button">
+                    <i class="bi bi-gear"></i> Governance Admin
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="consensus-tab" data-bs-toggle="tab" data-bs-target="#consensus" type="button">
+                    <i class="bi bi-people"></i> Consensus
+                </button>
+            </li>
+        </ul>
+
+        <div class="tab-content" id="signerTabContent">
+            <!-- Signing Queue Tab -->
+            <div class="tab-pane fade show active" id="signing" role="tabpanel">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-pen"></i> Pending Signing Requests</span>
+                        <button class="btn btn-sm btn-outline-primary" onclick="refreshSigningQueue()">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="signing-queue-list">
+                            <div class="text-center text-muted py-4">
+                                <i class="bi bi-inbox fs-1"></i>
+                                <p>No pending signing requests</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Signatures -->
+                <div class="card mt-3">
+                    <div class="card-header">
+                        <i class="bi bi-clock-history"></i> Recent Signatures
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Type</th>
+                                        <th>Details</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="recent-signatures-table">
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">No recent signatures</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Curator Tab -->
+            <div class="tab-pane fade" id="curator" role="tabpanel">
+                <div class="row">
+                    <!-- Pending Curator Votes -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="bi bi-clipboard-check"></i> Pending Stream Votes
+                            </div>
+                            <div class="card-body">
+                                <div id="pending-stream-votes">
+                                    <div class="text-center text-muted py-3">
+                                        <p>No pending stream quality votes</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Oracle Approvals -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-person-check"></i> Oracle Approvals
+                            </div>
+                            <div class="card-body">
+                                <div id="oracle-approvals-list">
+                                    <div class="text-center text-muted py-3">
+                                        <p>No pending oracle approvals</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Flagged Content -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-flag"></i> Flagged Oracles</span>
+                                <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#flagOracleModal">
+                                    <i class="bi bi-plus"></i> Flag Oracle
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div id="flagged-oracles-list">
+                                    <div class="text-center text-muted py-3">
+                                        <p>No flagged oracles</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Curator Stats -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-graph-up"></i> Curator Stats
+                            </div>
+                            <div class="card-body">
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <h4 id="curator-votes-cast">0</h4>
+                                        <small class="text-muted">Votes Cast</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="curator-flags-raised">0</h4>
+                                        <small class="text-muted">Flags Raised</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="curator-approvals">0</h4>
+                                        <small class="text-muted">Approvals</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Archiver Tab -->
+            <div class="tab-pane fade" id="archiver" role="tabpanel">
+                <div class="row">
+                    <!-- Archive Status -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="bi bi-archive"></i> Archive Status
+                            </div>
+                            <div class="card-body">
+                                <div class="row text-center mb-3">
+                                    <div class="col-4">
+                                        <h4 id="archive-rounds-count">0</h4>
+                                        <small class="text-muted">Rounds Archived</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="archive-size">0 MB</h4>
+                                        <small class="text-muted">Storage Used</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="archive-integrity">100%</h4>
+                                        <small class="text-muted">Integrity</small>
+                                    </div>
+                                </div>
+                                <div class="progress mb-2" style="height: 20px;">
+                                    <div class="progress-bar bg-success" id="archive-progress" style="width: 0%">0%</div>
+                                </div>
+                                <small class="text-muted">Archive completeness</small>
+                            </div>
+                        </div>
+
+                        <!-- Archive Actions -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-tools"></i> Archive Actions
+                            </div>
+                            <div class="card-body">
+                                <div class="d-grid gap-2">
+                                    <button class="btn btn-outline-primary" onclick="archiveCurrentRound()">
+                                        <i class="bi bi-download"></i> Archive Current Round
+                                    </button>
+                                    <button class="btn btn-outline-secondary" onclick="verifyAllArchives()">
+                                        <i class="bi bi-shield-check"></i> Verify All Archives
+                                    </button>
+                                    <button class="btn btn-outline-info" onclick="announceArchives()">
+                                        <i class="bi bi-broadcast"></i> Announce to Network
+                                    </button>
+                                    <button class="btn btn-outline-warning" onclick="syncMissingArchives()">
+                                        <i class="bi bi-cloud-download"></i> Sync Missing Archives
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Archives -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="bi bi-clock-history"></i> Recent Archives
+                            </div>
+                            <div class="card-body" style="max-height: 400px; overflow-y: auto;">
+                                <div id="recent-archives-list">
+                                    <div class="text-center text-muted py-3">
+                                        <p>No recent archives</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Archive Requests -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-inbox"></i> Pending Archive Requests
+                            </div>
+                            <div class="card-body">
+                                <div id="archive-requests-list">
+                                    <div class="text-center text-muted py-3">
+                                        <p>No pending archive requests</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Governance Admin Tab -->
+            <div class="tab-pane fade" id="governance-admin" role="tabpanel">
+                <div class="row">
+                    <!-- Proposals Browser -->
+                    <div class="col-md-5">
+                        <div class="card">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-list-task"></i> All Proposals</span>
+                                <select class="form-select form-select-sm" id="gov-admin-filter" style="width: auto;" onchange="loadGovernanceAdmin()">
+                                    <option value="all">All</option>
+                                    <option value="active">Active</option>
+                                    <option value="passed">Passed</option>
+                                    <option value="executed">Executed</option>
+                                </select>
+                            </div>
+                            <div class="card-body p-0" style="max-height: 500px; overflow-y: auto;">
+                                <div id="gov-admin-proposals-list">
+                                    <div class="text-center text-muted py-4">Loading proposals...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-lightning"></i> Quick Actions
+                            </div>
+                            <div class="card-body">
+                                <h6 class="small text-muted">Pending Execution</h6>
+                                <div id="pending-execution-list" class="mb-3">
+                                    <div class="text-muted small">No proposals awaiting execution</div>
+                                </div>
+                                <h6 class="small text-muted">Emergency Cancel Votes</h6>
+                                <div id="emergency-cancel-list">
+                                    <div class="text-muted small">No emergency cancel requests</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Selected Proposal Details -->
+                    <div class="col-md-7">
+                        <div class="card" id="gov-admin-details" style="display: none;">
+                            <div class="card-header d-flex justify-content-between align-items-center">
+                                <span><i class="bi bi-file-text"></i> <span id="gov-admin-title">Proposal Details</span></span>
+                                <div>
+                                    <span id="gov-admin-status-badge" class="badge bg-secondary">--</span>
+                                    <span id="gov-admin-type-badge" class="badge bg-info ms-1">--</span>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div id="gov-admin-description" class="mb-3"></div>
+                                <hr>
+                                <div class="row small mb-3">
+                                    <div class="col-6">
+                                        <strong>Proposer:</strong> <code id="gov-admin-proposer">--</code><br>
+                                        <strong>Created:</strong> <span id="gov-admin-created">--</span><br>
+                                        <strong>Voting Ends:</strong> <span id="gov-admin-ends">--</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <strong>Quorum:</strong> <span id="gov-admin-quorum">--</span><br>
+                                        <strong>Yes Votes:</strong> <span id="gov-admin-yes" class="text-success">0</span><br>
+                                        <strong>No Votes:</strong> <span id="gov-admin-no" class="text-danger">0</span>
+                                    </div>
+                                </div>
+
+                                <!-- Vote Progress -->
+                                <div class="progress mb-3" style="height: 20px;">
+                                    <div class="progress-bar bg-success" id="gov-admin-yes-bar" style="width: 0%">0%</div>
+                                    <div class="progress-bar bg-danger" id="gov-admin-no-bar" style="width: 0%">0%</div>
+                                </div>
+
+                                <!-- Signer Controls -->
+                                <div class="card bg-light">
+                                    <div class="card-header py-2">
+                                        <i class="bi bi-shield-check"></i> Signer Controls
+                                    </div>
+                                    <div class="card-body py-2">
+                                        <div class="row g-2">
+                                            <div class="col-6">
+                                                <button class="btn btn-outline-warning btn-sm w-100" id="gov-admin-pin-btn" onclick="togglePin()">
+                                                    <i class="bi bi-pin-angle"></i> Pin
+                                                </button>
+                                            </div>
+                                            <div class="col-6">
+                                                <button class="btn btn-outline-success btn-sm w-100" id="gov-admin-execute-btn" onclick="markProposalExecuted()" style="display: none;">
+                                                    <i class="bi bi-check-circle"></i> Mark Executed
+                                                </button>
+                                            </div>
+                                            <div class="col-6">
+                                                <button class="btn btn-outline-info btn-sm w-100" onclick="showStatusUpdateModal()">
+                                                    <i class="bi bi-megaphone"></i> Status Update
+                                                </button>
+                                            </div>
+                                            <div class="col-6">
+                                                <button class="btn btn-outline-danger btn-sm w-100" onclick="voteEmergencyCancel()">
+                                                    <i class="bi bi-exclamation-triangle"></i> Emergency Cancel
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Comments / Status Updates -->
+                                <div class="mt-3">
+                                    <h6><i class="bi bi-chat-dots"></i> Comments & Status Updates</h6>
+                                    <div id="gov-admin-comments" style="max-height: 200px; overflow-y: auto;">
+                                        <div class="text-muted small text-center py-2">No comments</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- No Proposal Selected -->
+                        <div class="card" id="gov-admin-empty">
+                            <div class="card-body text-center text-muted py-5">
+                                <i class="bi bi-arrow-left fs-1"></i>
+                                <p class="mt-2">Select a proposal to view details and manage</p>
+                            </div>
+                        </div>
+
+                        <!-- Pinned Proposals -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-pin-angle-fill text-warning"></i> Pinned Proposals
+                            </div>
+                            <div class="card-body py-2">
+                                <div id="pinned-proposals-admin-list">
+                                    <div class="text-muted small text-center">No pinned proposals</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Consensus Tab -->
+            <div class="tab-pane fade" id="consensus" role="tabpanel">
+                <div class="row">
+                    <!-- Other Signers -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="bi bi-people"></i> Signer Network (5 of 5)
+                            </div>
+                            <div class="card-body">
+                                <div id="signer-list">
+                                    <!-- Signer entries will be populated here -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Consensus Status -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                <i class="bi bi-shield-check"></i> Consensus Status
+                            </div>
+                            <div class="card-body">
+                                <div class="row text-center mb-3">
+                                    <div class="col-4">
+                                        <h4 id="consensus-online">5/5</h4>
+                                        <small class="text-muted">Online</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="consensus-threshold">3/5</h4>
+                                        <small class="text-muted">Threshold</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <h4 id="consensus-health" class="text-success">Healthy</h4>
+                                        <small class="text-muted">Status</small>
+                                    </div>
+                                </div>
+
+                                <h6>Pending Multi-Sig Actions</h6>
+                                <div id="pending-multisig-actions">
+                                    <div class="text-muted small">No pending multi-sig actions</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Multi-Sig History -->
+                        <div class="card mt-3">
+                            <div class="card-header">
+                                <i class="bi bi-clock-history"></i> Recent Multi-Sig Actions
+                            </div>
+                            <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                                <div id="multisig-history">
+                                    <div class="text-muted small">No recent multi-sig actions</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Distribution Controls Row (Signer Only) -->
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <div class="card border-warning">
+                            <div class="card-header bg-warning text-dark d-flex justify-content-between align-items-center">
+                                <span>
+                                    <i class="bi bi-cash-coin"></i> Reward Distribution Control
+                                </span>
+                                <button class="btn btn-sm btn-outline-dark" onclick="refreshDistributionControl()">
+                                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <!-- Distribution Status -->
+                                <div class="row mb-4">
+                                    <div class="col-md-3 text-center">
+                                        <h4 id="dist-pool-amount" class="text-warning">0.00</h4>
+                                        <small class="text-muted">Pool Amount (SATORI)</small>
+                                    </div>
+                                    <div class="col-md-3 text-center">
+                                        <h4 id="dist-eligible-count" class="text-info">0</h4>
+                                        <small class="text-muted">Eligible Recipients</small>
+                                    </div>
+                                    <div class="col-md-3 text-center">
+                                        <h4 id="dist-consensus-round" class="text-primary">--</h4>
+                                        <small class="text-muted">Consensus Round</small>
+                                    </div>
+                                    <div class="col-md-3 text-center">
+                                        <span id="dist-status-badge" class="badge bg-secondary fs-6">Not Ready</span>
+                                        <br><small class="text-muted">Status</small>
+                                    </div>
+                                </div>
+
+                                <!-- Trigger Controls -->
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="card bg-light">
+                                            <div class="card-body">
+                                                <h6><i class="bi bi-play-circle"></i> Trigger Distribution</h6>
+                                                <p class="text-muted small mb-3">
+                                                    Execute reward distribution for the completed consensus round.
+                                                    Requires multi-sig approval from signers.
+                                                </p>
+                                                <div class="d-flex gap-2">
+                                                    <button id="dist-trigger-btn" class="btn btn-success" onclick="triggerDistribution()" disabled>
+                                                        <i class="bi bi-cash-coin"></i> Trigger Distribution
+                                                    </button>
+                                                    <button class="btn btn-outline-secondary" onclick="previewDistribution()">
+                                                        <i class="bi bi-eye"></i> Preview
+                                                    </button>
+                                                </div>
+                                                <div id="dist-trigger-result" class="mt-2" style="display: none;"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="card bg-light">
+                                            <div class="card-body">
+                                                <h6><i class="bi bi-hourglass-split"></i> Pending Distribution</h6>
+                                                <div id="dist-pending-info">
+                                                    <p class="text-muted small">No distribution pending signature.</p>
+                                                </div>
+                                                <div id="dist-sign-controls" style="display: none;">
+                                                    <div class="d-flex gap-2">
+                                                        <button class="btn btn-primary" onclick="signDistribution()">
+                                                            <i class="bi bi-pen"></i> Sign
+                                                        </button>
+                                                        <button class="btn btn-outline-danger" onclick="rejectDistribution()">
+                                                            <i class="bi bi-x-circle"></i> Reject
+                                                        </button>
+                                                    </div>
+                                                    <div class="mt-2">
+                                                        <small class="text-muted">Signatures: <span id="dist-sig-count">0/3</span></small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Recent Distributions -->
+                                <div class="mt-4">
+                                    <h6><i class="bi bi-clock-history"></i> Recent Distributions</h6>
+                                    <div id="dist-history-list" style="max-height: 200px; overflow-y: auto;">
+                                        <div class="text-muted small">Loading distribution history...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Flag Oracle Modal -->
+<div class="modal fade" id="flagOracleModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-flag"></i> Flag Oracle</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Oracle Address</label>
+                    <input type="text" class="form-control" id="flag-oracle-address" placeholder="Enter oracle address">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Reason</label>
+                    <select class="form-select" id="flag-oracle-reason">
+                        <option value="bad_data">Bad Data Quality</option>
+                        <option value="manipulation">Data Manipulation</option>
+                        <option value="inactive">Inactive/Unresponsive</option>
+                        <option value="spam">Spam/Abuse</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Evidence/Details</label>
+                    <textarea class="form-control" id="flag-oracle-evidence" rows="3" placeholder="Provide evidence or details..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="submitOracleFlag()">
+                    <i class="bi bi-flag"></i> Submit Flag
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Status Update Modal -->
+<div class="modal fade" id="statusUpdateModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-megaphone"></i> Post Status Update</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Post an official signer status update for: <strong id="status-update-proposal-title">--</strong></p>
+                <div class="mb-3">
+                    <label class="form-label">Status Update</label>
+                    <textarea class="form-control" id="status-update-content" rows="4" placeholder="Enter your official status update..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitStatusUpdate()">
+                    <i class="bi bi-send"></i> Post Update
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Global state
+let signerStatus = null;
+let selectedProposalId = null;
+let allProposals = [];
+
+// Initialize page
+document.addEventListener('DOMContentLoaded', function() {
+    checkSignerStatus();
+});
+
+// Check if current user is a signer
+async function checkSignerStatus() {
+    try {
+        const response = await fetch('/api/p2p/signer/status');
+        const data = await response.json();
+
+        if (data.is_signer) {
+            document.getElementById('signer-content').style.display = 'block';
+            document.getElementById('signer-status-banner').style.display = 'none';
+            document.getElementById('signer-position').textContent = `Position: ${data.position}/5`;
+            signerStatus = data;
+
+            // Load all data
+            refreshSigningQueue();
+            loadCuratorData();
+            loadArchiverData();
+            loadGovernanceAdmin();
+            loadConsensusData();
+            refreshDistributionControl();
+        } else {
+            document.getElementById('signer-content').style.display = 'none';
+            document.getElementById('signer-status-banner').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error checking signer status:', error);
+        // For demo, show content anyway
+        document.getElementById('signer-content').style.display = 'block';
+        document.getElementById('signer-status-banner').style.display = 'none';
+        refreshSigningQueue();
+    }
+}
+
+// Signing Queue Functions
+async function refreshSigningQueue() {
+    try {
+        const response = await fetch('/api/p2p/signer/pending');
+        const data = await response.json();
+
+        const container = document.getElementById('signing-queue-list');
+        if (data.pending && data.pending.length > 0) {
+            container.innerHTML = data.pending.map(item => `
+                <div class="card mb-2">
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${item.type}</strong>
+                                <small class="text-muted ms-2">${item.id.substring(0, 8)}...</small>
+                            </div>
+                            <div>
+                                <span class="badge bg-warning">${item.signatures || 0}/3 signatures</span>
+                                <button class="btn btn-sm btn-success ms-2" onclick="signAction('${item.id}')">
+                                    <i class="bi bi-pen"></i> Sign
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('pending-actions-count').textContent = data.pending.length;
+        } else {
+            container.innerHTML = `
+                <div class="text-center text-muted py-4">
+                    <i class="bi bi-inbox fs-1"></i>
+                    <p>No pending signing requests</p>
+                </div>
+            `;
+            document.getElementById('pending-actions-count').textContent = '0';
+        }
+    } catch (error) {
+        console.error('Error loading signing queue:', error);
+    }
+}
+
+async function signAction(actionId) {
+    try {
+        const response = await fetch('/api/p2p/signer/sign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action_id: actionId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Action signed successfully', 'success');
+            refreshSigningQueue();
+        } else {
+            showToast(data.error || 'Failed to sign action', 'danger');
+        }
+    } catch (error) {
+        showToast('Error signing action', 'danger');
+    }
+}
+
+// Curator Functions
+async function loadCuratorData() {
+    try {
+        const response = await fetch('/api/p2p/curator/status');
+        const data = await response.json();
+
+        document.getElementById('curator-votes-cast').textContent = data.votes_cast || 0;
+        document.getElementById('curator-flags-raised').textContent = data.flags_raised || 0;
+        document.getElementById('curator-approvals').textContent = data.approvals || 0;
+        document.getElementById('curator-actions-count').textContent =
+            (data.pending_votes || 0) + (data.pending_flags || 0);
+
+        // Load pending votes
+        if (data.pending_votes_list && data.pending_votes_list.length > 0) {
+            document.getElementById('pending-stream-votes').innerHTML = data.pending_votes_list.map(vote => `
+                <div class="card mb-2">
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong>${vote.stream_id.substring(0, 16)}...</strong>
+                                <br><small class="text-muted">Current: ${vote.current_quality}/5</small>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-success" onclick="voteStreamQuality('${vote.stream_id}', 5)">
+                                    <i class="bi bi-hand-thumbs-up"></i>
+                                </button>
+                                <button class="btn btn-sm btn-danger" onclick="voteStreamQuality('${vote.stream_id}', 1)">
+                                    <i class="bi bi-hand-thumbs-down"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Load flagged oracles
+        if (data.flagged_oracles && data.flagged_oracles.length > 0) {
+            document.getElementById('flagged-oracles-list').innerHTML = data.flagged_oracles.map(flag => `
+                <div class="card mb-2 border-danger">
+                    <div class="card-body py-2">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <strong class="text-danger">${flag.oracle_address.substring(0, 12)}...</strong>
+                                <br><small class="text-muted">${flag.reason}</small>
+                            </div>
+                            <div>
+                                <span class="badge bg-warning">${flag.confirmations}/3</span>
+                                <button class="btn btn-sm btn-outline-danger" onclick="confirmFlag('${flag.flag_id}')">
+                                    Confirm
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } catch (error) {
+        console.error('Error loading curator data:', error);
+    }
+}
+
+async function voteStreamQuality(streamId, quality) {
+    try {
+        const response = await fetch('/api/p2p/curator/vote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stream_id: streamId, quality: quality })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Vote submitted', 'success');
+            loadCuratorData();
+        }
+    } catch (error) {
+        showToast('Error submitting vote', 'danger');
+    }
+}
+
+async function submitOracleFlag() {
+    const address = document.getElementById('flag-oracle-address').value;
+    const reason = document.getElementById('flag-oracle-reason').value;
+    const evidence = document.getElementById('flag-oracle-evidence').value;
+
+    if (!address) {
+        showToast('Please enter oracle address', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/p2p/curator/flag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                oracle_address: address,
+                reason: reason,
+                evidence: evidence
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Oracle flagged', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('flagOracleModal')).hide();
+            loadCuratorData();
+        }
+    } catch (error) {
+        showToast('Error flagging oracle', 'danger');
+    }
+}
+
+async function confirmFlag(flagId) {
+    try {
+        const response = await fetch('/api/p2p/curator/confirm-flag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ flag_id: flagId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Flag confirmed', 'success');
+            loadCuratorData();
+        }
+    } catch (error) {
+        showToast('Error confirming flag', 'danger');
+    }
+}
+
+// Archiver Functions
+async function loadArchiverData() {
+    try {
+        const response = await fetch('/api/p2p/archiver/status');
+        const data = await response.json();
+
+        document.getElementById('archive-rounds-count').textContent = data.rounds_archived || 0;
+        document.getElementById('archive-size').textContent = formatBytes(data.storage_used || 0);
+        document.getElementById('archive-integrity').textContent = `${data.integrity || 100}%`;
+
+        const completeness = data.completeness || 0;
+        document.getElementById('archive-progress').style.width = `${completeness}%`;
+        document.getElementById('archive-progress').textContent = `${completeness}%`;
+
+        // Load recent archives
+        if (data.recent_archives && data.recent_archives.length > 0) {
+            document.getElementById('recent-archives-list').innerHTML = data.recent_archives.map(archive => `
+                <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                    <div>
+                        <strong>Round ${archive.round_number}</strong>
+                        <br><small class="text-muted">${new Date(archive.timestamp * 1000).toLocaleString()}</small>
+                    </div>
+                    <div>
+                        <span class="badge ${archive.verified ? 'bg-success' : 'bg-warning'}">
+                            ${archive.verified ? 'Verified' : 'Pending'}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } catch (error) {
+        console.error('Error loading archiver data:', error);
+    }
+}
+
+async function archiveCurrentRound() {
+    try {
+        const response = await fetch('/api/p2p/archiver/archive-round', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Round archived successfully', 'success');
+            loadArchiverData();
+        }
+    } catch (error) {
+        showToast('Error archiving round', 'danger');
+    }
+}
+
+async function verifyAllArchives() {
+    showToast('Verifying archives...', 'info');
+    try {
+        const response = await fetch('/api/p2p/archiver/verify-all', { method: 'POST' });
+        const data = await response.json();
+        showToast(`Verified ${data.verified}/${data.total} archives`,
+            data.verified === data.total ? 'success' : 'warning');
+        loadArchiverData();
+    } catch (error) {
+        showToast('Error verifying archives', 'danger');
+    }
+}
+
+async function announceArchives() {
+    try {
+        const response = await fetch('/api/p2p/archiver/announce', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Archives announced to network', 'success');
+        }
+    } catch (error) {
+        showToast('Error announcing archives', 'danger');
+    }
+}
+
+async function syncMissingArchives() {
+    showToast('Syncing missing archives...', 'info');
+    try {
+        const response = await fetch('/api/p2p/archiver/sync', { method: 'POST' });
+        const data = await response.json();
+        showToast(`Synced ${data.synced} missing archives`, 'success');
+        loadArchiverData();
+    } catch (error) {
+        showToast('Error syncing archives', 'danger');
+    }
+}
+
+// Governance Admin Functions
+async function loadGovernanceAdmin() {
+    try {
+        const filter = document.getElementById('gov-admin-filter')?.value || 'all';
+        const response = await fetch('/api/p2p/governance/proposals');
+        const data = await response.json();
+
+        if (data.proposals) {
+            allProposals = data.proposals;
+
+            // Filter proposals
+            let filtered = allProposals;
+            if (filter !== 'all') {
+                filtered = allProposals.filter(p => p.status === filter);
+            }
+
+            // Count pending governance items
+            const pendingCount = allProposals.filter(p => p.status === 'passed' && !p.executed_at).length;
+            document.getElementById('governance-pending-count').textContent = pendingCount;
+
+            // Render proposals list
+            const listContainer = document.getElementById('gov-admin-proposals-list');
+            if (filtered.length > 0) {
+                listContainer.innerHTML = filtered.map(p => `
+                    <div class="p-2 border-bottom proposal-row ${selectedProposalId === p.proposal_id ? 'bg-primary bg-opacity-10' : ''}"
+                         onclick="selectProposal('${p.proposal_id}')" style="cursor: pointer;">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <strong class="small">${p.pinned ? '<i class="bi bi-pin-angle-fill text-warning"></i> ' : ''}${p.title}</strong>
+                                <br><small class="text-muted">${p.proposer_address.substring(0, 8)}...</small>
+                            </div>
+                            <span class="badge ${getStatusBadgeClass(p.status)}">${p.status}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                listContainer.innerHTML = '<div class="text-center text-muted py-4">No proposals found</div>';
+            }
+
+            // Load pending execution
+            const pendingExec = allProposals.filter(p => p.status === 'passed' && !p.executed_at);
+            if (pendingExec.length > 0) {
+                document.getElementById('pending-execution-list').innerHTML = pendingExec.map(p => `
+                    <div class="d-flex justify-content-between align-items-center py-1">
+                        <small class="text-truncate" style="max-width: 150px;">${p.title}</small>
+                        <button class="btn btn-sm btn-success py-0 px-1" onclick="selectProposal('${p.proposal_id}'); markProposalExecuted();">
+                            <i class="bi bi-check"></i>
+                        </button>
+                    </div>
+                `).join('');
+            } else {
+                document.getElementById('pending-execution-list').innerHTML = '<div class="text-muted small">No proposals awaiting execution</div>';
+            }
+
+            // Load pinned proposals
+            const pinned = allProposals.filter(p => p.pinned);
+            if (pinned.length > 0) {
+                document.getElementById('pinned-proposals-admin-list').innerHTML = pinned.map(p => `
+                    <div class="d-flex justify-content-between align-items-center py-1">
+                        <small class="text-truncate" style="max-width: 180px;">${p.title}</small>
+                        <button class="btn btn-sm btn-outline-warning py-0 px-1" onclick="selectProposal('${p.proposal_id}');">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+                `).join('');
+            } else {
+                document.getElementById('pinned-proposals-admin-list').innerHTML = '<div class="text-muted small text-center">No pinned proposals</div>';
+            }
+        }
+    } catch (error) {
+        console.error('Error loading governance admin:', error);
+    }
+}
+
+function getStatusBadgeClass(status) {
+    const classes = {
+        'draft': 'bg-secondary',
+        'active': 'bg-warning',
+        'passed': 'bg-success',
+        'rejected': 'bg-danger',
+        'expired': 'bg-secondary',
+        'executed': 'bg-primary',
+        'cancelled': 'bg-dark',
+    };
+    return classes[status] || 'bg-secondary';
+}
+
+async function selectProposal(proposalId) {
+    selectedProposalId = proposalId;
+    loadGovernanceAdmin(); // Refresh to show selection
+
+    try {
+        const response = await fetch(`/api/p2p/governance/proposal/${proposalId}`);
+        const data = await response.json();
+
+        if (!data.proposal) return;
+
+        const p = data.proposal;
+        const t = data.tally || {};
+
+        // Show details panel, hide empty state
+        document.getElementById('gov-admin-details').style.display = 'block';
+        document.getElementById('gov-admin-empty').style.display = 'none';
+
+        // Populate details
+        document.getElementById('gov-admin-title').textContent = p.title;
+        document.getElementById('gov-admin-description').innerHTML = `<p>${p.description}</p>`;
+        document.getElementById('gov-admin-status-badge').textContent = p.status;
+        document.getElementById('gov-admin-status-badge').className = `badge ${getStatusBadgeClass(p.status)}`;
+        document.getElementById('gov-admin-type-badge').textContent = p.proposal_type;
+        document.getElementById('gov-admin-proposer').textContent = p.proposer_address.substring(0, 12) + '...';
+        document.getElementById('gov-admin-created').textContent = new Date(p.created_at * 1000).toLocaleDateString();
+        document.getElementById('gov-admin-ends').textContent = new Date(p.voting_ends * 1000).toLocaleString();
+        document.getElementById('gov-admin-quorum').innerHTML = t.quorum_reached ?
+            '<span class="text-success">Reached</span>' : '<span class="text-warning">Not reached</span>';
+        document.getElementById('gov-admin-yes').textContent = t.yes_votes || 0;
+        document.getElementById('gov-admin-no').textContent = t.no_votes || 0;
+
+        // Update progress bar
+        const total = (t.yes_votes || 0) + (t.no_votes || 0) + (t.abstain_votes || 0);
+        const yesPct = total > 0 ? ((t.yes_votes / total) * 100).toFixed(1) : 0;
+        const noPct = total > 0 ? ((t.no_votes / total) * 100).toFixed(1) : 0;
+        document.getElementById('gov-admin-yes-bar').style.width = `${yesPct}%`;
+        document.getElementById('gov-admin-yes-bar').textContent = `${yesPct}%`;
+        document.getElementById('gov-admin-no-bar').style.width = `${noPct}%`;
+        document.getElementById('gov-admin-no-bar').textContent = `${noPct}%`;
+
+        // Update signer control buttons
+        const pinBtn = document.getElementById('gov-admin-pin-btn');
+        pinBtn.innerHTML = p.pinned ?
+            '<i class="bi bi-pin-angle-fill"></i> Unpin' :
+            '<i class="bi bi-pin-angle"></i> Pin';
+
+        const execBtn = document.getElementById('gov-admin-execute-btn');
+        execBtn.style.display = (p.status === 'passed' && !p.executed_at) ? 'block' : 'none';
+
+        // Load comments
+        loadProposalComments(proposalId);
+
+    } catch (error) {
+        console.error('Error loading proposal details:', error);
+    }
+}
+
+async function loadProposalComments(proposalId) {
+    try {
+        const response = await fetch(`/api/p2p/governance/comments/${proposalId}`);
+        const data = await response.json();
+        const comments = data.comments || [];
+
+        const container = document.getElementById('gov-admin-comments');
+        if (comments.length > 0) {
+            container.innerHTML = comments.map(c => `
+                <div class="p-2 border-bottom ${c.is_status_update ? 'bg-info bg-opacity-10' : ''}">
+                    <div class="d-flex justify-content-between">
+                        <small>
+                            ${c.is_signer ? '<span class="badge bg-warning me-1">Signer</span>' : ''}
+                            ${c.is_status_update ? '<span class="badge bg-info me-1">Status</span>' : ''}
+                            <code>${c.author_address.substring(0, 8)}...</code>
+                        </small>
+                        <small class="text-muted">${new Date(c.timestamp * 1000).toLocaleString()}</small>
+                    </div>
+                    <p class="mb-0 small mt-1">${c.content}</p>
+                </div>
+            `).join('');
+        } else {
+            container.innerHTML = '<div class="text-muted small text-center py-2">No comments</div>';
+        }
+    } catch (error) {
+        console.error('Error loading comments:', error);
+    }
+}
+
+async function togglePin() {
+    if (!selectedProposalId) return;
+    const proposal = allProposals.find(p => p.proposal_id === selectedProposalId);
+    const newPinned = !proposal?.pinned;
+
+    try {
+        const response = await fetch('/api/p2p/governance/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: selectedProposalId, pinned: newPinned })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast(newPinned ? 'Proposal pinned' : 'Proposal unpinned', 'success');
+            loadGovernanceAdmin();
+            selectProposal(selectedProposalId);
+        }
+    } catch (error) {
+        showToast('Error updating pin status', 'danger');
+    }
+}
+
+async function markProposalExecuted() {
+    if (!selectedProposalId) return;
+    if (!confirm('Mark this proposal as executed?')) return;
+
+    try {
+        const response = await fetch('/api/p2p/governance/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: selectedProposalId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Proposal marked as executed', 'success');
+            loadGovernanceAdmin();
+            selectProposal(selectedProposalId);
+        }
+    } catch (error) {
+        showToast('Error marking proposal executed', 'danger');
+    }
+}
+
+function showStatusUpdateModal() {
+    if (!selectedProposalId) {
+        showToast('Please select a proposal first', 'warning');
+        return;
+    }
+    const proposal = allProposals.find(p => p.proposal_id === selectedProposalId);
+    document.getElementById('status-update-proposal-title').textContent = proposal?.title || '--';
+    document.getElementById('status-update-content').value = '';
+    const modal = new bootstrap.Modal(document.getElementById('statusUpdateModal'));
+    modal.show();
+}
+
+async function submitStatusUpdate() {
+    if (!selectedProposalId) return;
+    const content = document.getElementById('status-update-content').value.trim();
+
+    if (!content) {
+        showToast('Please enter a status update', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/p2p/governance/comment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                proposal_id: selectedProposalId,
+                content: content,
+                is_status_update: true
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Status update posted', 'success');
+            bootstrap.Modal.getInstance(document.getElementById('statusUpdateModal')).hide();
+            loadProposalComments(selectedProposalId);
+        }
+    } catch (error) {
+        showToast('Error posting status update', 'danger');
+    }
+}
+
+async function voteEmergencyCancel() {
+    if (!selectedProposalId) return;
+    if (!confirm('Vote to EMERGENCY CANCEL this proposal? This requires 3 of 5 signers to agree.')) return;
+
+    try {
+        const response = await fetch('/api/p2p/governance/emergency-cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: selectedProposalId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Emergency cancel vote recorded', 'success');
+            loadGovernanceAdmin();
+            selectProposal(selectedProposalId);
+        }
+    } catch (error) {
+        showToast('Error voting for emergency cancel', 'danger');
+    }
+}
+
+// Legacy function for quick action buttons
+async function markExecuted(proposalId) {
+    selectedProposalId = proposalId;
+    await markProposalExecuted();
+}
+
+async function unpinProposal(proposalId) {
+    try {
+        const response = await fetch('/api/p2p/governance/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: proposalId, pinned: false })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Proposal unpinned', 'success');
+            loadGovernanceAdmin();
+        }
+    } catch (error) {
+        showToast('Error unpinning proposal', 'danger');
+    }
+}
+
+// LEGACY - kept for backwards compatibility but no longer used
+async function postStatusUpdate() {
+    const proposalId = document.getElementById('status-update-proposal')?.value;
+    const content = document.getElementById('status-update-content')?.value;
+
+    if (!proposalId || !content) {
+        showToast('Please select a proposal and enter a status update', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/p2p/governance/comment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                proposal_id: proposalId,
+                content: content,
+                is_status_update: true
+            })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Status update posted', 'success');
+            document.getElementById('status-update-content').value = '';
+            loadGovernanceAdmin();
+        }
+    } catch (error) {
+        showToast('Error posting status update', 'danger');
+    }
+}
+
+async function markExecuted(proposalId) {
+    try {
+        const response = await fetch('/api/p2p/governance/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: proposalId })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Proposal marked as executed', 'success');
+            loadGovernanceAdmin();
+        }
+    } catch (error) {
+        showToast('Error marking proposal executed', 'danger');
+    }
+}
+
+async function unpinProposal(proposalId) {
+    try {
+        const response = await fetch('/api/p2p/governance/pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ proposal_id: proposalId, pinned: false })
+        });
+        const data = await response.json();
+        if (data.success) {
+            showToast('Proposal unpinned', 'success');
+            loadGovernanceAdmin();
+        }
+    } catch (error) {
+        showToast('Error unpinning proposal', 'danger');
+    }
+}
+
+// Consensus Functions
+async function loadConsensusData() {
+    try {
+        const response = await fetch('/api/p2p/signer/consensus');
+        const data = await response.json();
+
+        if (data.signers) {
+            document.getElementById('signer-list').innerHTML = data.signers.map((signer, i) => `
+                <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                    <div>
+                        <span class="badge ${signer.is_self ? 'bg-primary' : 'bg-secondary'} me-2">${i + 1}</span>
+                        <strong>${signer.address.substring(0, 12)}...</strong>
+                        ${signer.is_self ? '<small class="text-muted">(You)</small>' : ''}
+                    </div>
+                    <div>
+                        <span class="badge ${signer.online ? 'bg-success' : 'bg-danger'}">
+                            ${signer.online ? 'Online' : 'Offline'}
+                        </span>
+                        <small class="text-muted ms-2">${signer.last_seen || 'N/A'}</small>
+                    </div>
+                </div>
+            `).join('');
+
+            const online = data.signers.filter(s => s.online).length;
+            document.getElementById('consensus-online').textContent = `${online}/5`;
+            document.getElementById('consensus-health').textContent = online >= 3 ? 'Healthy' : 'Degraded';
+            document.getElementById('consensus-health').className = online >= 3 ? 'text-success' : 'text-warning';
+        }
+
+        // Load pending multi-sig actions
+        if (data.pending_actions && data.pending_actions.length > 0) {
+            document.getElementById('pending-multisig-actions').innerHTML = data.pending_actions.map(action => `
+                <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                    <div>
+                        <strong>${action.type}</strong>
+                        <br><small class="text-muted">${action.description}</small>
+                    </div>
+                    <div>
+                        <span class="badge bg-warning">${action.signatures}/3</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    } catch (error) {
+        console.error('Error loading consensus data:', error);
+    }
+}
+
+// Utility Functions
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function showToast(message, type = 'info') {
+    // Create toast element
+    const toastContainer = document.getElementById('toast-container') || createToastContainer();
+    const toast = document.createElement('div');
+    toast.className = `toast align-items-center text-white bg-${type} border-0`;
+    toast.setAttribute('role', 'alert');
+    toast.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">${message}</div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    `;
+    toastContainer.appendChild(toast);
+    const bsToast = new bootstrap.Toast(toast);
+    bsToast.show();
+    toast.addEventListener('hidden.bs.toast', () => toast.remove());
+}
+
+function createToastContainer() {
+    const container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container position-fixed top-0 end-0 p-3';
+    container.style.zIndex = '1100';
+    document.body.appendChild(container);
+    return container;
+}
+
+// Auto-refresh every 30 seconds
+setInterval(() => {
+    if (signerStatus && signerStatus.is_signer) {
+        refreshSigningQueue();
+        loadCuratorData();
+        loadArchiverData();
+        loadGovernanceAdmin();
+        loadConsensusData();
+        refreshDistributionControl();
+    }
+}, 30000);
+
+// =========================================================================
+// DISTRIBUTION CONTROL FUNCTIONS (Signer Only)
+// =========================================================================
+
+async function refreshDistributionControl() {
+    try {
+        const response = await fetch('/api/p2p/signer/distribution/status');
+        const data = await response.json();
+
+        // Update stats
+        document.getElementById('dist-pool-amount').textContent =
+            (data.pool_amount || 0).toFixed(2);
+        document.getElementById('dist-eligible-count').textContent =
+            data.eligible_count || 0;
+        document.getElementById('dist-consensus-round').textContent =
+            data.consensus_round ? `#${data.consensus_round}` : '--';
+
+        // Update status badge
+        const statusBadge = document.getElementById('dist-status-badge');
+        const status = data.status || 'not_ready';
+        statusBadge.textContent = status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        statusBadge.className = 'badge fs-6 ' + (
+            status === 'ready' ? 'bg-success' :
+            status === 'pending_signatures' ? 'bg-warning' :
+            status === 'processing' ? 'bg-info' :
+            status === 'completed' ? 'bg-primary' : 'bg-secondary'
+        );
+
+        // Enable/disable trigger button
+        const triggerBtn = document.getElementById('dist-trigger-btn');
+        triggerBtn.disabled = status !== 'ready';
+
+        // Update pending distribution info
+        const pendingInfo = document.getElementById('dist-pending-info');
+        const signControls = document.getElementById('dist-sign-controls');
+
+        if (data.pending_distribution) {
+            const pending = data.pending_distribution;
+            pendingInfo.innerHTML = `
+                <div class="mb-2">
+                    <strong>Round #${pending.round_id}</strong> - ${(pending.amount || 0).toFixed(2)} SATORI
+                </div>
+                <div class="small text-muted">
+                    ${pending.recipient_count || 0} recipients
+                </div>
+            `;
+            signControls.style.display = 'block';
+            document.getElementById('dist-sig-count').textContent =
+                `${pending.signatures || 0}/${pending.required_signatures || 3}`;
+        } else {
+            pendingInfo.innerHTML = '<p class="text-muted small">No distribution pending signature.</p>';
+            signControls.style.display = 'none';
+        }
+
+        // Load distribution history
+        loadDistributionHistory();
+
+    } catch (e) {
+        console.error('Failed to load distribution status:', e);
+    }
+}
+
+async function loadDistributionHistory() {
+    try {
+        const response = await fetch('/api/p2p/signer/distribution/history?limit=10');
+        const data = await response.json();
+        const container = document.getElementById('dist-history-list');
+
+        if (data.distributions && data.distributions.length > 0) {
+            container.innerHTML = data.distributions.map(dist => {
+                const date = new Date(dist.timestamp * 1000);
+                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const statusClass = dist.status === 'completed' ? 'success' :
+                                   dist.status === 'failed' ? 'danger' : 'secondary';
+                return `
+                    <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+                        <div>
+                            <strong>Round #${dist.round_id}</strong>
+                            <span class="badge bg-${statusClass} ms-2">${dist.status}</span>
+                        </div>
+                        <div class="text-end">
+                            <div class="text-warning fw-bold">${(dist.amount || 0).toFixed(2)} SATORI</div>
+                            <small class="text-muted">${dateStr}</small>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } else {
+            container.innerHTML = '<div class="text-muted small">No distribution history</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load distribution history:', e);
+    }
+}
+
+async function triggerDistribution() {
+    const resultDiv = document.getElementById('dist-trigger-result');
+
+    try {
+        resultDiv.innerHTML = '<div class="alert alert-info">Initiating distribution...</div>';
+        resultDiv.style.display = 'block';
+
+        const response = await fetch('/api/p2p/signer/distribution/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            resultDiv.innerHTML = `<div class="alert alert-success">
+                Distribution initiated! Awaiting ${data.required_signatures || 3} signatures.
+                <br>Distribution ID: <code>${data.distribution_id || 'N/A'}</code>
+            </div>`;
+            refreshDistributionControl();
+        } else {
+            resultDiv.innerHTML = `<div class="alert alert-danger">${data.error || 'Failed to trigger distribution'}</div>`;
+        }
+    } catch (e) {
+        resultDiv.innerHTML = `<div class="alert alert-danger">Error: ${e.message}</div>`;
+    }
+}
+
+async function previewDistribution() {
+    try {
+        const response = await fetch('/api/p2p/signer/distribution/preview');
+        const data = await response.json();
+
+        if (data.error) {
+            alert('Preview Error: ' + data.error);
+            return;
+        }
+
+        // Show preview modal or alert
+        const preview = `
+Distribution Preview for Round #${data.round_id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total Pool: ${(data.pool_amount || 0).toFixed(4)} SATORI
+Recipients: ${data.recipient_count || 0}
+
+Top Recipients:
+${(data.top_recipients || []).map((r, i) =>
+    `${i+1}. ${r.address.substring(0, 12)}... → ${r.amount.toFixed(4)} SATORI`
+).join('\n')}
+        `;
+        alert(preview);
+    } catch (e) {
+        alert('Preview failed: ' + e.message);
+    }
+}
+
+async function signDistribution() {
+    try {
+        const response = await fetch('/api/p2p/signer/distribution/sign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('Distribution signed successfully!');
+            refreshDistributionControl();
+        } else {
+            alert('Sign failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Sign error: ' + e.message);
+    }
+}
+
+async function rejectDistribution() {
+    if (!confirm('Are you sure you want to reject this distribution? This action requires signer consensus.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/p2p/signer/distribution/reject', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            alert('Distribution rejection recorded.');
+            refreshDistributionControl();
+        } else {
+            alert('Reject failed: ' + (data.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Reject error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

@@ -3,6 +3,7 @@ disable restart: false
 neuron lock enabled: true
 neuron lock hash: fs1f3se5ffsef1sf
 mining mode: true
+networking mode: hybrid
 reward address: EZDfZiJcvx1Ymrj8otCeiY4eLfPsZkHri9
 logging level: debug
 electrumx servers: [electrum1-mainnet.evrmorecoin.org:50002, evr-electrum.wutup.io:50002]

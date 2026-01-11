@@ -47,6 +47,8 @@ def create_app(testing=False):
     app.config['SATORI_API_URL'] = get_api_url()
 
     # Initialize SocketIO for real-time updates
+    # Using threading mode for compatibility with trio (used by libp2p for P2P networking)
+    # For production deployment, use gunicorn with gevent workers
     socketio = SocketIO(
         app,
         cors_allowed_origins="*",

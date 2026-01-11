@@ -10,6 +10,8 @@ from functools import wraps
 import time
 import logging
 import base64
+import os
+import json
 import requests
 import uuid
 from threading import Lock
@@ -37,6 +39,77 @@ _vault_lock = Lock()
 
 # JWT authentication lock to prevent concurrent login attempts
 _auth_lock = Lock()
+
+# Peer cache for Option D - show cached peers immediately on startup
+_peer_cache = {}
+_peer_cache_lock = Lock()
+_PEER_CACHE_FILE = None  # Set during init
+
+
+def _get_peer_cache_path():
+    """Get the path to the peer cache file."""
+    global _PEER_CACHE_FILE
+    if _PEER_CACHE_FILE:
+        return _PEER_CACHE_FILE
+    try:
+        from satorineuron import config
+        import os
+        cache_dir = os.path.join(os.path.expanduser('~'), '.satori', 'cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        _PEER_CACHE_FILE = os.path.join(cache_dir, 'known_peers.json')
+        return _PEER_CACHE_FILE
+    except Exception:
+        return None
+
+
+def _load_peer_cache():
+    """Load cached peers from disk."""
+    global _peer_cache
+    try:
+        cache_path = _get_peer_cache_path()
+        if cache_path and os.path.exists(cache_path):
+            with open(cache_path, 'r') as f:
+                data = json.load(f)
+                with _peer_cache_lock:
+                    _peer_cache = data
+                logger.debug(f"Loaded {len(data.get('known_peers', []))} cached peers")
+                return data
+    except Exception as e:
+        logger.debug(f"Could not load peer cache: {e}")
+    return {}
+
+
+def _save_peer_cache(known_peers: list):
+    """Save peers to cache file."""
+    global _peer_cache
+    try:
+        cache_path = _get_peer_cache_path()
+        if not cache_path:
+            return
+
+        data = {
+            'timestamp': int(time.time()),
+            'known_peers': known_peers,
+        }
+
+        with open(cache_path, 'w') as f:
+            json.dump(data, f)
+
+        with _peer_cache_lock:
+            _peer_cache = data
+
+        logger.debug(f"Saved {len(known_peers)} peers to cache")
+    except Exception as e:
+        logger.debug(f"Could not save peer cache: {e}")
+
+
+def _get_cached_peers():
+    """Get cached peers (from memory or disk)."""
+    global _peer_cache
+    with _peer_cache_lock:
+        if _peer_cache:
+            return _peer_cache
+    return _load_peer_cache()
 
 
 def check_vault_file_exists():
@@ -81,7 +154,7 @@ def get_or_create_session_vault():
     if not session_id:
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
-        session.permanent = False  # Don't persist sessions indefinitely
+        session.permanent = False  # Session expires when browser closes
         logger.info(f"Generated new session ID: {session_id}")
 
     # Get or create vault for this session
@@ -140,6 +213,48 @@ def encrypt_vault_password(password):
     f = Fernet(session_key)
     encrypted_pw = f.encrypt(password.encode())
     return encrypted_pw.decode(), session_key.decode()
+
+
+def get_p2p_state():
+    """Get P2P identity and peers from web worker or StartupDag.
+
+    Tries web worker first (for gunicorn subprocess), then falls back
+    to StartupDag singleton.
+
+    Returns:
+        tuple: (identity, peers) - either may be None if not available
+    """
+    identity = None
+    peers = None
+
+    # First try web worker state (gunicorn subprocess)
+    try:
+        from web.wsgi import get_web_identity, get_web_p2p_peers, wait_for_p2p_init
+        # Wait briefly for P2P init to complete
+        init_ok = wait_for_p2p_init(timeout=2)
+        identity = get_web_identity()
+        peers = get_web_p2p_peers()
+        logger.debug(f"get_p2p_state: web worker init_ok={init_ok}, identity={identity is not None}, peers={peers is not None}")
+    except ImportError as e:
+        # Not running under gunicorn, try StartupDag
+        logger.debug(f"get_p2p_state: web worker import failed: {e}")
+
+    # Fall back to StartupDag if web worker state not available
+    if identity is None or peers is None:
+        try:
+            from satorineuron.init import start
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                if identity is None and hasattr(startup, 'identity'):
+                    identity = startup.identity
+                if peers is None:
+                    peers = getattr(startup, '_p2p_peers', None)
+                    logger.debug(f"get_p2p_state: StartupDag fallback, peers={peers is not None}")
+        except Exception as e:
+            logger.debug(f"get_p2p_state: StartupDag fallback failed: {e}")
+
+    logger.info(f"get_p2p_state: returning identity={identity is not None}, peers={peers is not None}")
+    return identity, peers
 
 
 def decrypt_vault_password_from_session():
@@ -270,29 +385,61 @@ def login_required(f):
     """Decorator to require login for a route."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        # Helper to return appropriate response based on request type
+        def auth_error_response(message="Authentication required"):
+            # For API endpoints, return JSON error instead of redirect
+            if request.path.startswith('/api/'):
+                return jsonify({'error': message, 'authenticated': False}), 401
+            # For regular pages, redirect to login
+            if not check_vault_file_exists():
+                return redirect(url_for('vault_setup'))
+            return redirect(url_for('login'))
+
         # Ensure session ID exists for tracking
         if not session.get('session_id'):
             session['session_id'] = str(uuid.uuid4())
-            session.permanent = False  # Don't persist sessions indefinitely
+            session.permanent = False  # Session expires when browser closes
 
         # Check if user is logged in via session flag
         if not session.get('vault_open'):
-            # Not logged in - check if vault file exists
-            if not check_vault_file_exists():
-                # No vault file - redirect to create password
-                return redirect(url_for('vault_setup'))
-            # Vault exists but not logged in - redirect to login
-            return redirect(url_for('login'))
+            return auth_error_response("Not logged in")
 
         # Validate that vault actually exists and is open (handles container restart)
         # Check _session_vaults directly - don't call get_or_create (which creates new vault)
         session_id = session.get('session_id')
         if session_id and session_id not in _session_vaults:
-            # Vault doesn't exist (container restarted) - require re-login
-            logger.info(f"Session vault missing for {session_id} - forcing re-login")
-            session.pop('vault_open', None)
-            session['logged_out'] = True  # Prevent auto-login
-            return redirect(url_for('login'))
+            # Vault doesn't exist in memory (container/worker restarted)
+            # Try to automatically recover using encrypted password from session
+            logger.info(f"Session vault missing for {session_id} - attempting auto-recovery")
+            password = decrypt_vault_password_from_session()
+            if password:
+                try:
+                    # Import WalletManager locally (same as get_or_create_session_vault)
+                    from satorineuron.init.wallet import WalletManager
+                    from satorineuron import config
+
+                    # Re-create wallet manager and unlock vault
+                    wallet_manager = WalletManager.create(
+                        config.walletPath('wallet.yaml'),
+                        config.walletPath('vault.yaml'),
+                    )
+                    if wallet_manager and wallet_manager.openVault(password=password):
+                        _session_vaults[session_id] = wallet_manager
+                        logger.info(f"Session vault auto-recovered for {session_id}")
+                    else:
+                        logger.warning(f"Failed to unlock vault during auto-recovery for {session_id}")
+                        session.pop('vault_open', None)
+                        return auth_error_response("Session expired - please log in again")
+                except Exception as e:
+                    logger.warning(f"Auto-recovery failed for {session_id}: {e}")
+                    session.pop('vault_open', None)
+                    return auth_error_response("Session expired - please log in again")
+            else:
+                # No encrypted password in session - require full re-login
+                logger.info(f"No encrypted password for {session_id} - forcing re-login")
+                session.pop('vault_open', None)
+                session['logged_out'] = True  # Prevent auto-login
+                return auth_error_response("Session expired")
 
         # Also validate vault is actually decrypted
         if session_id and session_id in _session_vaults:
@@ -301,7 +448,7 @@ def login_required(f):
                 logger.info(f"Session vault not decrypted for {session_id} - forcing re-login")
                 session.pop('vault_open', None)
                 session['logged_out'] = True  # Prevent auto-login
-                return redirect(url_for('login'))
+                return auth_error_response("Vault locked")
 
         return f(*args, **kwargs)
     return decorated_function
@@ -700,8 +847,32 @@ def register_routes(app):
             except Exception as e:
                 logger.warning(f"P2P lender status failed, trying central: {e}")
 
-        # Fallback to central
-        return proxy_api('/lender/status')
+        # Fallback to central - requires wallet_address param
+        try:
+            from satorineuron.init import start
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if wallet_address:
+                result = proxy_api(f'/lender/status?wallet_address={wallet_address}')
+                # Check if proxy returned an error
+                if hasattr(result, 'status_code') and result.status_code >= 400:
+                    raise Exception(f"Central API returned {result.status_code}")
+                return result
+            else:
+                raise Exception("No wallet address available")
+        except Exception as e:
+            logger.warning(f"Central lender status also failed: {e}")
+            # Return empty/default status
+            return jsonify({
+                'is_lending': False,
+                'lending_to': None,
+                'lent_amount': 0,
+                'available_pools': [],
+                'error': None
+            })
 
     @app.route('/api/lender/lend', methods=['POST', 'DELETE'])
     @login_required
@@ -1019,16 +1190,26 @@ def register_routes(app):
     @app.route('/api/wallet/address')
     @login_required
     def api_wallet_address():
-        """Get wallet and vault addresses."""
+        """Get wallet and vault addresses with public keys."""
         wallet_manager = get_or_create_session_vault()
         if wallet_manager:
             result = {}
-            # Get wallet address
-            if wallet_manager.wallet and hasattr(wallet_manager.wallet, 'address'):
-                result['wallet_address'] = wallet_manager.wallet.address
-            # Get vault address
-            if wallet_manager.vault and hasattr(wallet_manager.vault, 'address'):
-                result['vault_address'] = wallet_manager.vault.address
+            # Get wallet (identity) address and public key
+            if wallet_manager.wallet:
+                if hasattr(wallet_manager.wallet, 'address'):
+                    result['wallet_address'] = wallet_manager.wallet.address
+                if hasattr(wallet_manager.wallet, 'publicKey'):
+                    result['wallet_public_key'] = wallet_manager.wallet.publicKey
+                elif hasattr(wallet_manager.wallet, 'pubkey'):
+                    result['wallet_public_key'] = wallet_manager.wallet.pubkey
+            # Get vault address and public key
+            if wallet_manager.vault:
+                if hasattr(wallet_manager.vault, 'address'):
+                    result['vault_address'] = wallet_manager.vault.address
+                if hasattr(wallet_manager.vault, 'publicKey'):
+                    result['vault_public_key'] = wallet_manager.vault.publicKey
+                elif hasattr(wallet_manager.vault, 'pubkey'):
+                    result['vault_public_key'] = wallet_manager.vault.pubkey
             return jsonify(result)
         return jsonify({'error': 'Wallet not initialized'}), 500
 
@@ -1372,22 +1553,24 @@ def register_routes(app):
             if hasattr(start, '_get_networking_mode'):
                 result['mode'] = start._get_networking_mode()
 
-            # Get P2P peers info
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+            # Get P2P peers info using helper
+            _, peers = get_p2p_state()
+            if peers:
                 result['connected'] = True
-                peers = startup._p2p_peers
                 if hasattr(peers, 'get_peer_count'):
                     result['peer_count'] = peers.get_peer_count()
 
-            # Get uptime tracker info
+            # Get uptime tracker info from StartupDag
+            startup = start.getStart() if hasattr(start, 'getStart') else None
             if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
                 tracker = startup._uptime_tracker
                 if hasattr(tracker, 'get_uptime_percentage'):
+                    # get_uptime_percentage returns 0.0-1.0
                     result['uptime_pct'] = tracker.get_uptime_percentage()
                 if hasattr(tracker, '_last_heartbeat') and tracker._last_heartbeat:
                     result['last_heartbeat_ago'] = int(time.time() - tracker._last_heartbeat)
-                result['relay_eligible'] = result['uptime_pct'] >= 95.0
+                # relay_eligible threshold is 95% (0.95)
+                result['relay_eligible'] = result['uptime_pct'] >= 0.95
 
             return jsonify(result)
         except Exception as e:
@@ -1426,6 +1609,1565 @@ def register_routes(app):
         except Exception as e:
             logger.warning(f"Failed to get heartbeats: {e}")
             return jsonify({'heartbeats': [], 'error': str(e)})
+
+    @app.route('/api/p2p/heartbeat/stats')
+    @login_required
+    def api_p2p_heartbeat_stats():
+        """Get heartbeat statistics for our own node."""
+        try:
+            from satorineuron.init import start
+            import time
+
+            result = {
+                'active': False,
+                'current_round': None,
+                'last_heartbeat': None,
+                'last_heartbeat_ago': None,
+                'heartbeats_expected': 0,
+                'heartbeats_sent': 0,
+                'heartbeats_received': 0,
+                'uptime_percentage': 0.0,
+                'last_status_message': None,
+                'is_heartbeating': False,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+
+                # Check if heartbeat loop is running
+                if hasattr(tracker, '_is_heartbeating'):
+                    result['is_heartbeating'] = tracker._is_heartbeating
+                    result['active'] = tracker._is_heartbeating
+
+                # Current round
+                if hasattr(tracker, '_current_round') and tracker._current_round:
+                    result['current_round'] = tracker._current_round
+
+                # Last heartbeat time
+                if hasattr(tracker, '_last_heartbeat') and tracker._last_heartbeat:
+                    result['last_heartbeat'] = tracker._last_heartbeat
+                    result['last_heartbeat_ago'] = int(time.time() - tracker._last_heartbeat)
+
+                # Count heartbeats sent - use persisted dictionary for accuracy across restarts
+                current_round = getattr(tracker, '_current_round', None)
+                node_id = getattr(tracker, 'node_id', None)
+                if current_round and node_id and hasattr(tracker, '_heartbeats'):
+                    timestamps = tracker._heartbeats.get(current_round, {}).get(node_id, [])
+                    result['heartbeats_sent'] = len(timestamps)
+                elif hasattr(tracker, '_heartbeats_sent'):
+                    # Fallback to counter if dictionary not available
+                    result['heartbeats_sent'] = tracker._heartbeats_sent
+
+                # Count heartbeats received (from tracker counter)
+                if hasattr(tracker, '_heartbeats_received'):
+                    result['heartbeats_received'] = tracker._heartbeats_received
+
+                # Uptime percentage
+                if hasattr(tracker, 'get_uptime_percentage'):
+                    result['uptime_percentage'] = tracker.get_uptime_percentage()
+
+                # Calculate expected heartbeats based on time elapsed in current round
+                # This tells us how many heartbeats SHOULD have been sent if uptime was 100%
+                round_start = getattr(tracker, '_round_start', 0)
+                if round_start > 0:
+                    elapsed = int(time.time()) - round_start
+                    # Heartbeat interval is 60 seconds
+                    result['heartbeats_expected'] = max(1, elapsed // 60)
+                else:
+                    # Fallback: expected = sent
+                    result['heartbeats_expected'] = result['heartbeats_sent']
+
+                # Last status message - get directly from tracker
+                if hasattr(tracker, '_last_status_message') and tracker._last_status_message:
+                    result['last_status_message'] = tracker._last_status_message
+
+                # Heartbeat round (for uptime tracking)
+                if hasattr(tracker, '_current_round') and tracker._current_round:
+                    result['heartbeat_round'] = tracker._current_round
+
+            # Network Epoch and Round (for rewards/badges)
+            # Epoch = week number since Unix epoch (or a simpler calculation)
+            # Round = day of week (1-7, Monday=1)
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            # Calculate epoch as ISO week number of the year
+            iso_cal = now.isocalendar()
+            result['network_epoch'] = f"{iso_cal.year}-W{iso_cal.week:02d}"
+            result['network_round'] = iso_cal.weekday  # 1=Monday to 7=Sunday
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get heartbeat stats: {e}")
+            return jsonify({'error': str(e), 'active': False})
+
+    @app.route('/api/p2p/uptime/streak')
+    @login_required
+    def api_p2p_uptime_streak():
+        """Get our own uptime streak info."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'streak_days': 0,
+                'streak_tier': None,
+                'streak_bonus': 0.0,
+                'longest_streak': 0,
+                'streak_start_date': None,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+                my_node_id = tracker.node_id
+
+                if hasattr(tracker, 'get_uptime_streak_record'):
+                    record = tracker.get_uptime_streak_record(my_node_id)
+                    if record:
+                        result['streak_days'] = record.streak_days
+                        result['longest_streak'] = record.longest_streak
+                        result['streak_start_date'] = record.streak_start_date or None
+
+                        # Get tier and bonus from rewards module
+                        from satorip2p.protocol.rewards import (
+                            get_uptime_streak_tier,
+                            calculate_uptime_streak_bonus
+                        )
+                        result['streak_tier'] = get_uptime_streak_tier(record.streak_days)
+                        result['streak_bonus'] = calculate_uptime_streak_bonus(record.streak_days)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get uptime streak: {e}")
+            return jsonify({'error': str(e), 'streak_days': 0})
+
+    @app.route('/api/p2p/uptime/leaderboard')
+    @login_required
+    def api_p2p_uptime_leaderboard():
+        """Get top uptime streak leaderboard."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 10, type=int)
+            streaks = []
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+
+                if hasattr(tracker, 'get_top_uptime_streaks'):
+                    top_streaks = tracker.get_top_uptime_streaks(limit=limit)
+                    for record in top_streaks:
+                        if record.streak_days > 0:
+                            from satorip2p.protocol.rewards import (
+                                get_uptime_streak_tier,
+                                calculate_uptime_streak_bonus
+                            )
+                            streaks.append({
+                                'node_id': record.node_id,
+                                'streak_days': record.streak_days,
+                                'streak_tier': get_uptime_streak_tier(record.streak_days),
+                                'streak_bonus': calculate_uptime_streak_bonus(record.streak_days),
+                                'longest_streak': record.longest_streak,
+                                'streak_start_date': record.streak_start_date,
+                            })
+
+            return jsonify({'streaks': streaks})
+        except Exception as e:
+            logger.warning(f"Failed to get uptime leaderboard: {e}")
+            return jsonify({'streaks': [], 'error': str(e)})
+
+    @app.route('/api/p2p/titles')
+    @login_required
+    def api_p2p_titles():
+        """Get earned titles for our node."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'titles': [],
+                'all_titles': ['historic', 'friendly', 'charity', 'whale', 'legend'],
+                'title_descriptions': {
+                    'historic': '90+ day uptime streak',
+                    'friendly': 'Diamond referral tier (2000+ referrals)',
+                    'charity': 'Diamond donor tier (500k+ EVR donated)',
+                    'whale': 'Maxed stake bonus (55+ SATORI)',
+                    'legend': 'Maxed ALL multipliers (2.10x)',
+                },
+                'multiplier_breakdown': {},
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Gather data needed to calculate titles
+            uptime_streak_days = 0
+            stake_amount = 50.0  # Default minimum
+            referral_count = 0
+            total_donated_evr = 0.0
+            is_signer = False
+
+            # Get uptime streak
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+                if hasattr(tracker, 'get_uptime_streak'):
+                    uptime_streak_days = tracker.get_uptime_streak(tracker.node_id)
+
+            # Get referral count
+            if startup and hasattr(startup, '_referral_manager') and startup._referral_manager:
+                manager = startup._referral_manager
+                if hasattr(manager, 'get_my_referral_count'):
+                    import asyncio
+                    try:
+                        loop = asyncio.new_event_loop()
+                        referral_count = loop.run_until_complete(manager.get_my_referral_count())
+                    except:
+                        pass
+                    finally:
+                        loop.close()
+
+            # Get donation total
+            if startup and hasattr(startup, '_donation_manager') and startup._donation_manager:
+                manager = startup._donation_manager
+                if hasattr(manager, 'get_my_total_donated'):
+                    import asyncio
+                    try:
+                        loop = asyncio.new_event_loop()
+                        total_donated_evr = loop.run_until_complete(manager.get_my_total_donated())
+                    except:
+                        pass
+                    finally:
+                        loop.close()
+
+            # Calculate titles using rewards module
+            try:
+                from satorip2p.protocol.rewards import (
+                    NodeRoles,
+                    calculate_stake_bonus,
+                    calculate_uptime_streak_bonus,
+                    calculate_referral_bonus,
+                    calculate_donation_bonus,
+                    get_uptime_streak_tier,
+                    get_referral_tier,
+                    get_donation_tier,
+                    STAKE_BONUS_CAP,
+                    UPTIME_STREAK_TIER_5,
+                    REFERRAL_TIER_DIAMOND,
+                    DONATION_TIER_DIAMOND,
+                )
+
+                # Build NodeRoles to get titles
+                node_roles = NodeRoles(
+                    node_id='self',
+                    uptime_streak_days=uptime_streak_days,
+                    stake_amount=stake_amount,
+                    referral_count=referral_count,
+                    total_donated_evr=total_donated_evr,
+                    signer_qualified=is_signer,
+                )
+                result['titles'] = node_roles.get_earned_titles()
+
+                # Add multiplier breakdown
+                result['multiplier_breakdown'] = {
+                    'stake': {
+                        'bonus': calculate_stake_bonus(stake_amount),
+                        'amount': stake_amount,
+                        'maxed': calculate_stake_bonus(stake_amount) >= STAKE_BONUS_CAP,
+                    },
+                    'uptime_streak': {
+                        'bonus': calculate_uptime_streak_bonus(uptime_streak_days),
+                        'days': uptime_streak_days,
+                        'tier': get_uptime_streak_tier(uptime_streak_days),
+                        'maxed': uptime_streak_days >= UPTIME_STREAK_TIER_5,
+                    },
+                    'referral': {
+                        'bonus': calculate_referral_bonus(referral_count),
+                        'count': referral_count,
+                        'tier': get_referral_tier(referral_count),
+                        'maxed': referral_count >= REFERRAL_TIER_DIAMOND,
+                    },
+                    'donation': {
+                        'bonus': calculate_donation_bonus(total_donated_evr),
+                        'total_evr': total_donated_evr,
+                        'tier': get_donation_tier(total_donated_evr),
+                        'maxed': total_donated_evr >= DONATION_TIER_DIAMOND,
+                    },
+                }
+            except ImportError as e:
+                logger.warning(f"Could not import rewards module: {e}")
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get titles: {e}")
+            return jsonify({'titles': [], 'error': str(e)})
+
+    # ========================================================================
+    # CURATOR PROTOCOL ENDPOINTS (status endpoint moved to line ~2048)
+    # ========================================================================
+
+    @app.route('/api/p2p/curator/streams')
+    @login_required
+    def api_p2p_curator_streams():
+        """Get all curated streams."""
+        try:
+            from satorineuron.init import start
+
+            result = {'streams': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_curator') and startup._curator:
+                curator = startup._curator
+                if hasattr(curator, 'get_all_curated_streams'):
+                    streams = curator.get_all_curated_streams()
+                    result['streams'] = [s.to_dict() for s in streams.values()]
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get curated streams: {e}")
+            return jsonify({'streams': [], 'error': str(e)})
+
+    @app.route('/api/p2p/curator/stream/<stream_id>')
+    @login_required
+    def api_p2p_curator_stream(stream_id):
+        """Get curation status for a specific stream."""
+        try:
+            from satorineuron.init import start
+
+            result = {'stream': None}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_curator') and startup._curator:
+                curator = startup._curator
+                if hasattr(curator, 'get_stream_status'):
+                    curation = curator.get_stream_status(stream_id)
+                    if curation:
+                        result['stream'] = curation.to_dict()
+                        result['votes'] = curator.get_vote_summary(stream_id)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get stream curation: {e}")
+            return jsonify({'stream': None, 'error': str(e)})
+
+    @app.route('/api/p2p/curator/flags')
+    @login_required
+    def api_p2p_curator_flags():
+        """Get all flagged oracles."""
+        try:
+            from satorineuron.init import start
+
+            result = {'flags': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_curator') and startup._curator:
+                curator = startup._curator
+                if hasattr(curator, 'get_flagged_oracles'):
+                    flags = curator.get_flagged_oracles(unresolved_only=True)
+                    result['flags'] = [f.to_dict() for f in flags]
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get flags: {e}")
+            return jsonify({'flags': [], 'error': str(e)})
+
+    @app.route('/api/p2p/curator/oracle/<oracle_address>')
+    @login_required
+    def api_p2p_curator_oracle(oracle_address):
+        """Get reputation for a specific oracle."""
+        try:
+            from satorineuron.init import start
+
+            result = {'reputation': None}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_curator') and startup._curator:
+                curator = startup._curator
+                if hasattr(curator, 'get_oracle_reputation'):
+                    rep = curator.get_oracle_reputation(oracle_address)
+                    if rep:
+                        result['reputation'] = rep.to_dict()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get oracle reputation: {e}")
+            return jsonify({'reputation': None, 'error': str(e)})
+
+    @app.route('/api/p2p/curator/vote', methods=['POST'])
+    @login_required
+    def api_p2p_curator_vote():
+        """Vote on a stream's quality (curators only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id', '')
+            vote_value = data.get('vote', 'abstain')
+            comment = data.get('comment', '')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_curator') or not startup._curator:
+                return jsonify({'success': False, 'error': 'Curator protocol not available'})
+
+            curator = startup._curator
+            if not curator.is_curator:
+                return jsonify({'success': False, 'error': 'Not authorized as curator'})
+
+            from satorip2p.protocol.curator import QualityVote
+            vote = QualityVote(vote_value)
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    curator.vote_stream_quality(stream_id, vote, comment)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to vote: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/curator/flag', methods=['POST'])
+    @login_required
+    def api_p2p_curator_flag():
+        """Flag an oracle (curators only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            oracle_address = data.get('oracle_address', '')
+            stream_id = data.get('stream_id', '')
+            reason = data.get('reason', 'other')
+            evidence = data.get('evidence', '')
+
+            if not oracle_address or not stream_id:
+                return jsonify({'success': False, 'error': 'oracle_address and stream_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_curator') or not startup._curator:
+                return jsonify({'success': False, 'error': 'Curator protocol not available'})
+
+            curator = startup._curator
+            if not curator.is_curator:
+                return jsonify({'success': False, 'error': 'Not authorized as curator'})
+
+            from satorip2p.protocol.curator import FlagReason
+            flag_reason = FlagReason(reason)
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    curator.flag_oracle(oracle_address, stream_id, flag_reason, evidence)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to flag oracle: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/curator/confirm-flag', methods=['POST'])
+    @login_required
+    def api_p2p_curator_confirm_flag():
+        """Confirm/resolve a flag on an oracle (curators only).
+
+        This endpoint allows curators to vote to confirm or dismiss a flag.
+        When enough curators (3-of-5) confirm a flag, the oracle is rejected.
+        """
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            oracle_address = data.get('oracle_address', '')
+            stream_id = data.get('stream_id', '')
+            confirmed = data.get('confirmed', True)  # True = confirm flag, False = dismiss
+            resolution = data.get('resolution', '')
+
+            if not oracle_address or not stream_id:
+                return jsonify({'success': False, 'error': 'oracle_address and stream_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_curator') or not startup._curator:
+                return jsonify({'success': False, 'error': 'Curator protocol not available'})
+
+            curator = startup._curator
+            if not curator.is_curator:
+                return jsonify({'success': False, 'error': 'Not authorized as curator'})
+
+            async def do_confirm():
+                # If confirmed, reject the oracle; if dismissed, approve
+                if confirmed:
+                    success = await curator.reject_oracle(oracle_address, stream_id)
+                else:
+                    success = await curator.approve_oracle(oracle_address, stream_id)
+
+                # Mark the flag as resolved if we have access to stream curation
+                if success:
+                    curation = curator._stream_curations.get(stream_id)
+                    if curation:
+                        for flag in curation.flags:
+                            if flag.oracle_address == oracle_address and not flag.resolved:
+                                flag.resolved = True
+                                flag.resolution = resolution or ('confirmed' if confirmed else 'dismissed')
+                                break
+
+                return success
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(do_confirm())
+            finally:
+                loop.close()
+
+            return jsonify({
+                'success': success,
+                'action': 'rejected' if confirmed else 'approved',
+                'oracle_address': oracle_address,
+                'stream_id': stream_id
+            })
+        except Exception as e:
+            logger.warning(f"Failed to confirm flag: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # ========================================================================
+    # CURATOR PROTOCOL ENDPOINTS
+    # ========================================================================
+
+    @app.route('/api/p2p/curator/status')
+    @login_required
+    def api_p2p_curator_status():
+        """Get curator protocol status and statistics.
+
+        Note: Curators are the multi-sig signers - they perform curation as one of their jobs.
+        The number of active curators equals the number of signers online.
+        """
+        try:
+            from satorineuron.init import start
+
+            # Get signer count for active_curators (signers do curation)
+            signer_count = 0
+            _, peers = get_p2p_state()
+            if peers and hasattr(peers, 'get_connected_signers'):
+                signer_count = len(peers.get_connected_signers())
+
+            result = {
+                'is_curator': False,
+                'started': False,
+                'curated_streams': 0,
+                'tracked_oracles': 0,
+                'unresolved_flags': 0,
+                'avg_quality_score': None,
+                'active_curators': signer_count,  # Curators = signers
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_curator') and startup._curator:
+                curator = startup._curator
+                if hasattr(curator, 'get_stats'):
+                    stats = curator.get_stats()
+                    result.update(stats)
+                    # Ensure we don't override signer-based counts with zeros
+                    if result['active_curators'] == 0:
+                        result['active_curators'] = signer_count
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get curator status: {e}")
+            return jsonify({'error': str(e)})
+
+    # ========================================================================
+    # ARCHIVER PROTOCOL ENDPOINTS
+    # ========================================================================
+
+    @app.route('/api/p2p/archiver/status')
+    @login_required
+    def api_p2p_archiver_status():
+        """Get archiver protocol status and statistics.
+
+        Note: Archivers are the multi-sig signers - they perform archival as one of their jobs.
+        The number of archivers online equals the number of signers online.
+
+        Returns different integrity data based on node type:
+        - Signers/Archivers: See their local_integrity (their own archive health)
+        - Non-signers: See network_integrity (average across all archivers)
+
+        The 'integrity' field is set to the appropriate value based on node type,
+        and 'integrity_label' indicates what the value represents.
+        """
+        try:
+            from satorineuron.init import start
+
+            # Get signer count for network_archivers (signers do archival)
+            signer_count = 0
+            _, peers = get_p2p_state()
+            if peers and hasattr(peers, 'get_connected_signers'):
+                signer_count = len(peers.get_connected_signers())
+
+            result = {
+                'is_archiver': False,
+                'started': False,
+                'local_archives': 0,
+                'total_size_mb': 0,
+                'network_archivers': signer_count,  # Archivers = signers
+                'redundancy': signer_count,  # Redundancy level = signer count
+                # Integrity fields
+                'integrity': None,  # Primary display value (local or network depending on node type)
+                'integrity_label': 'Network Integrity',  # Label for the integrity value
+                'local_integrity': None,  # This node's archive integrity (signers only)
+                'network_integrity': None,  # Average integrity across all archivers
+                'valid_archives': 0,
+                'invalid_archives': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_archiver') and startup._archiver:
+                archiver = startup._archiver
+                if hasattr(archiver, 'get_stats'):
+                    stats = archiver.get_stats()
+                    result.update(stats)
+                    # Ensure we don't override signer-based counts with zeros
+                    if result['network_archivers'] == 0:
+                        result['network_archivers'] = signer_count
+                    if result.get('redundancy', 0) == 0:
+                        result['redundancy'] = signer_count
+
+                # Get network integrity from announcements
+                if hasattr(archiver, 'get_network_integrity'):
+                    network_data = archiver.get_network_integrity()
+                    result['network_integrity'] = network_data.get('network_integrity')
+
+                # Calculate local integrity for archivers
+                if result['is_archiver']:
+                    if hasattr(archiver, 'get_available_rounds') and hasattr(archiver, 'verify_archive_integrity'):
+                        rounds = archiver.get_available_rounds()
+                        if rounds:
+                            valid_count = 0
+                            for round_id in rounds:
+                                try:
+                                    if archiver.verify_archive_integrity(round_id):
+                                        valid_count += 1
+                                except Exception:
+                                    pass  # Count as invalid
+                            result['valid_archives'] = valid_count
+                            result['invalid_archives'] = len(rounds) - valid_count
+                            result['local_integrity'] = round((valid_count / len(rounds)) * 100, 1) if rounds else 100.0
+                        else:
+                            result['local_integrity'] = 100.0  # No archives = 100% integrity
+
+                    # For archivers, show local integrity
+                    result['integrity'] = result['local_integrity']
+                    result['integrity_label'] = 'Local Integrity'
+                else:
+                    # For non-archivers, show network integrity
+                    result['integrity'] = result['network_integrity']
+                    result['integrity_label'] = 'Network Integrity'
+
+            # Fallback if no archiver initialized
+            if result['integrity'] is None:
+                result['integrity'] = result.get('network_integrity') or 100.0
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get archiver status: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/archiver/rounds')
+    @login_required
+    def api_p2p_archiver_rounds():
+        """Get list of available archived rounds."""
+        try:
+            from satorineuron.init import start
+
+            result = {'rounds': [], 'metadata': {}}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_archiver') and startup._archiver:
+                archiver = startup._archiver
+                if hasattr(archiver, 'get_available_rounds'):
+                    rounds = archiver.get_available_rounds()
+                    result['rounds'] = rounds
+
+                    # Get metadata for each round
+                    if hasattr(archiver, 'get_archive_metadata'):
+                        for round_id in rounds[:50]:  # Limit to 50 for performance
+                            meta = archiver.get_archive_metadata(round_id)
+                            if meta:
+                                result['metadata'][round_id] = meta.to_dict()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get archived rounds: {e}")
+            return jsonify({'rounds': [], 'error': str(e)})
+
+    @app.route('/api/p2p/archiver/round/<round_id>')
+    @login_required
+    def api_p2p_archiver_round(round_id):
+        """Get archived data for a specific round."""
+        try:
+            from satorineuron.init import start
+
+            result = {'round': None, 'metadata': None}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_archiver') and startup._archiver:
+                archiver = startup._archiver
+                if hasattr(archiver, 'get_local_archive'):
+                    archived = archiver.get_local_archive(round_id)
+                    if archived:
+                        result['round'] = archived.to_dict()
+                        # Don't include full data in list view, just summary
+                        result['round']['predictions'] = len(archived.predictions)
+                        result['round']['observations'] = len(archived.observations)
+                        result['round']['rewards'] = len(archived.rewards)
+
+                if hasattr(archiver, 'get_archive_metadata'):
+                    meta = archiver.get_archive_metadata(round_id)
+                    if meta:
+                        result['metadata'] = meta.to_dict()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get round archive: {e}")
+            return jsonify({'round': None, 'error': str(e)})
+
+    @app.route('/api/p2p/archiver/verify/<round_id>')
+    @login_required
+    def api_p2p_archiver_verify(round_id):
+        """Verify integrity of an archived round."""
+        try:
+            from satorineuron.init import start
+
+            result = {'valid': False, 'round_id': round_id}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_archiver') and startup._archiver:
+                archiver = startup._archiver
+                if hasattr(archiver, 'verify_archive_integrity'):
+                    result['valid'] = archiver.verify_archive_integrity(round_id)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to verify archive: {e}")
+            return jsonify({'valid': False, 'error': str(e)})
+
+    @app.route('/api/p2p/archiver/network/<round_id>')
+    @login_required
+    def api_p2p_archiver_network(round_id):
+        """Get list of archivers that have a round."""
+        try:
+            from satorineuron.init import start
+
+            result = {'archivers': [], 'round_id': round_id}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_archiver') and startup._archiver:
+                archiver = startup._archiver
+                if hasattr(archiver, 'get_network_availability'):
+                    result['archivers'] = archiver.get_network_availability(round_id)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get network availability: {e}")
+            return jsonify({'archivers': [], 'error': str(e)})
+
+    @app.route('/api/p2p/archiver/archive-round', methods=['POST'])
+    @login_required
+    def api_p2p_archiver_archive_round():
+        """Archive the current round's data (signers only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            # Check if user is authorized signer
+            from satorip2p.protocol.signer import is_authorized_signer
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address or not is_authorized_signer(wallet_address):
+                return jsonify({'success': False, 'error': 'Only authorized signers can archive'}), 403
+
+            if not startup or not hasattr(startup, '_archiver') or not startup._archiver:
+                return jsonify({'success': False, 'error': 'Archiver not initialized'}), 500
+
+            archiver = startup._archiver
+            data = request.get_json(silent=True) or {}
+            round_id = data.get('round_id')
+
+            if not round_id:
+                # Use current round
+                from satorip2p.protocol.uptime import get_current_round
+                round_id, _ = get_current_round()
+
+            # Get data to archive (from engine/neuron)
+            predictions = data.get('predictions', [])
+            observations = data.get('observations', [])
+            rewards = data.get('rewards', [])
+
+            async def do_archive():
+                return await archiver.archive_round(
+                    round_id=round_id,
+                    predictions=predictions,
+                    observations=observations,
+                    rewards=rewards
+                )
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(do_archive())
+                return jsonify({'success': success, 'round_id': round_id})
+            finally:
+                loop.close()
+
+        except Exception as e:
+            logger.warning(f"Failed to archive round: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/archiver/verify-all', methods=['POST'])
+    @login_required
+    def api_p2p_archiver_verify_all():
+        """Verify integrity of all local archives."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_archiver') or not startup._archiver:
+                return jsonify({'success': False, 'error': 'Archiver not initialized'}), 500
+
+            archiver = startup._archiver
+            results = {
+                'total': 0,
+                'valid': 0,
+                'invalid': 0,
+                'invalid_rounds': [],
+                'integrity_percentage': 100.0
+            }
+
+            if hasattr(archiver, 'get_available_rounds') and hasattr(archiver, 'verify_archive_integrity'):
+                rounds = archiver.get_available_rounds()
+                results['total'] = len(rounds)
+
+                for round_id in rounds:
+                    if archiver.verify_archive_integrity(round_id):
+                        results['valid'] += 1
+                    else:
+                        results['invalid'] += 1
+                        results['invalid_rounds'].append(round_id)
+
+                if results['total'] > 0:
+                    results['integrity_percentage'] = (results['valid'] / results['total']) * 100
+
+            return jsonify({'success': True, **results})
+
+        except Exception as e:
+            logger.warning(f"Failed to verify archives: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/archiver/announce', methods=['POST'])
+    @login_required
+    def api_p2p_archiver_announce():
+        """Announce our archives to the network (signers only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            # Check if user is authorized signer
+            from satorip2p.protocol.signer import is_authorized_signer
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address or not is_authorized_signer(wallet_address):
+                return jsonify({'success': False, 'error': 'Only authorized signers can announce'}), 403
+
+            if not startup or not hasattr(startup, '_archiver') or not startup._archiver:
+                return jsonify({'success': False, 'error': 'Archiver not initialized'}), 500
+
+            archiver = startup._archiver
+
+            async def do_announce():
+                await archiver.announce_archives()
+                return True
+
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(do_announce())
+                return jsonify({'success': True, 'message': 'Archives announced to network'})
+            finally:
+                loop.close()
+
+        except Exception as e:
+            logger.warning(f"Failed to announce archives: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/archiver/sync', methods=['POST'])
+    @login_required
+    def api_p2p_archiver_sync():
+        """Sync missing archives from other archivers (signers only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            # Check if user is authorized signer
+            from satorip2p.protocol.signer import is_authorized_signer
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address or not is_authorized_signer(wallet_address):
+                return jsonify({'success': False, 'error': 'Only authorized signers can sync'}), 403
+
+            if not startup or not hasattr(startup, '_archiver') or not startup._archiver:
+                return jsonify({'success': False, 'error': 'Archiver not initialized'}), 500
+
+            archiver = startup._archiver
+
+            # Get list of rounds we're missing that others have
+            missing_rounds = []
+            synced_rounds = []
+
+            if hasattr(archiver, '_network_archives') and hasattr(archiver, '_local_archives'):
+                local_rounds = set(archiver._local_archives.keys())
+                network_rounds = set(archiver._network_archives.keys())
+                missing_rounds = list(network_rounds - local_rounds)
+
+                # TODO: Actually request and download missing archives
+                # For now, just report what's missing
+
+            return jsonify({
+                'success': True,
+                'missing_rounds': missing_rounds,
+                'synced_rounds': synced_rounds,
+                'message': f'Found {len(missing_rounds)} missing rounds'
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to sync archives: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    # ========================================================================
+    # GOVERNANCE PROTOCOL ENDPOINTS
+    # ========================================================================
+
+    @app.route('/api/p2p/governance/status')
+    @login_required
+    def api_p2p_governance_status():
+        """Get governance protocol status and statistics."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'started': False,
+                'total_proposals': 0,
+                'active_proposals': 0,
+                'passed_proposals': 0,
+                'rejected_proposals': 0,
+                'my_stake': 0,
+                'my_voting_power': 0,
+                'can_propose': False,
+                'can_vote': False,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+                if hasattr(governance, 'get_stats'):
+                    result.update(governance.get_stats())
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get governance status: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/governance/proposals')
+    @login_required
+    def api_p2p_governance_proposals():
+        """Get all governance proposals."""
+        try:
+            from satorineuron.init import start
+
+            result = {'proposals': [], 'active': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+                if hasattr(governance, 'get_all_proposals'):
+                    proposals = governance.get_all_proposals()
+                    result['proposals'] = [p.to_dict() for p in proposals.values()]
+
+                if hasattr(governance, 'get_active_proposals'):
+                    active = governance.get_active_proposals()
+                    result['active'] = [p.to_dict() for p in active]
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get proposals: {e}")
+            return jsonify({'proposals': [], 'error': str(e)})
+
+    @app.route('/api/p2p/governance/proposal/<proposal_id>')
+    @login_required
+    def api_p2p_governance_proposal(proposal_id):
+        """Get a specific proposal with tally."""
+        try:
+            from satorineuron.init import start
+
+            result = {'proposal': None, 'tally': None, 'my_vote': None}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+
+                if hasattr(governance, 'get_proposal'):
+                    proposal = governance.get_proposal(proposal_id)
+                    if proposal:
+                        result['proposal'] = proposal.to_dict()
+
+                if hasattr(governance, 'get_proposal_tally'):
+                    tally = governance.get_proposal_tally(proposal_id)
+                    if tally:
+                        result['tally'] = tally.to_dict()
+
+                if hasattr(governance, 'get_my_vote'):
+                    vote = governance.get_my_vote(proposal_id)
+                    if vote:
+                        result['my_vote'] = vote.to_dict()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get proposal: {e}")
+            return jsonify({'proposal': None, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/propose', methods=['POST'])
+    @login_required
+    def api_p2p_governance_propose():
+        """Create a new governance proposal."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            title = data.get('title', '')
+            description = data.get('description', '')
+            proposal_type = data.get('proposal_type', 'community')
+            changes = data.get('changes', {})
+            voting_period_days = data.get('voting_period_days', 7)
+
+            if not title or not description:
+                return jsonify({'success': False, 'error': 'title and description required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            from satorip2p.protocol.governance import ProposalType
+            ptype = ProposalType(proposal_type)
+
+            loop = asyncio.new_event_loop()
+            try:
+                proposal = loop.run_until_complete(
+                    governance.create_proposal(title, description, ptype, changes, voting_period_days)
+                )
+            finally:
+                loop.close()
+
+            if proposal:
+                return jsonify({'success': True, 'proposal_id': proposal.proposal_id})
+            else:
+                return jsonify({'success': False, 'error': 'Failed to create proposal'})
+        except Exception as e:
+            logger.warning(f"Failed to create proposal: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/vote', methods=['POST'])
+    @login_required
+    def api_p2p_governance_vote():
+        """Vote on a proposal."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            choice = data.get('choice', 'abstain')
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            from satorip2p.protocol.governance import VoteChoice
+            vote_choice = VoteChoice(choice)
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    governance.vote(proposal_id, vote_choice)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to vote: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/comment', methods=['POST'])
+    @login_required
+    def api_p2p_governance_comment():
+        """Add a comment to a proposal."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            content = data.get('content', '')
+            is_status_update = data.get('is_status_update', False)
+
+            if not proposal_id or not content:
+                return jsonify({'success': False, 'error': 'proposal_id and content required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            loop = asyncio.new_event_loop()
+            try:
+                comment = loop.run_until_complete(
+                    governance.add_comment(proposal_id, content, is_status_update)
+                )
+            finally:
+                loop.close()
+
+            if comment:
+                return jsonify({'success': True, 'comment_id': comment.comment_id})
+            else:
+                return jsonify({'success': False, 'error': 'Failed to add comment'})
+        except Exception as e:
+            logger.warning(f"Failed to add comment: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/comments/<proposal_id>')
+    @login_required
+    def api_p2p_governance_comments(proposal_id):
+        """Get comments for a proposal."""
+        try:
+            from satorineuron.init import start
+
+            result = {'comments': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+                if hasattr(governance, 'get_comments'):
+                    comments = governance.get_comments(proposal_id)
+                    result['comments'] = [c.to_dict() for c in comments]
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get comments: {e}")
+            return jsonify({'comments': [], 'error': str(e)})
+
+    @app.route('/api/p2p/governance/pin', methods=['POST'])
+    @login_required
+    def api_p2p_governance_pin():
+        """Pin or unpin a proposal (signers only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            pinned = data.get('pinned', True)
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    governance.pin_proposal(proposal_id, pinned)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to pin proposal: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/execute', methods=['POST'])
+    @login_required
+    def api_p2p_governance_execute():
+        """Mark a proposal as executed (signers only)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    governance.mark_executed(proposal_id)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to execute proposal: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/emergency-cancel', methods=['POST'])
+    @login_required
+    def api_p2p_governance_emergency_cancel():
+        """Vote to emergency cancel a proposal (signers only, 3-of-5)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_governance') or not startup._governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not available'})
+
+            governance = startup._governance
+
+            loop = asyncio.new_event_loop()
+            try:
+                success = loop.run_until_complete(
+                    governance.emergency_cancel_vote(proposal_id)
+                )
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+        except Exception as e:
+            logger.warning(f"Failed to emergency cancel: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/governance/pinned')
+    @login_required
+    def api_p2p_governance_pinned():
+        """Get all pinned proposals."""
+        try:
+            from satorineuron.init import start
+
+            result = {'proposals': []}
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+                if hasattr(governance, 'get_pinned_proposals'):
+                    pinned = governance.get_pinned_proposals()
+                    result['proposals'] = [p.to_dict() for p in pinned]
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get pinned: {e}")
+            return jsonify({'proposals': [], 'error': str(e)})
+
+    @app.route('/api/p2p/governance/voting-power')
+    @login_required
+    def api_p2p_governance_voting_power():
+        """Get detailed voting power breakdown for the current user."""
+        try:
+            from satorineuron.init import start
+            from satorip2p.protocol.governance import (
+                STAKE_WEIGHT, UPTIME_BONUS_90_DAYS, SIGNER_BONUS,
+                MIN_STAKE_TO_VOTE
+            )
+            from satorip2p.protocol.signer import is_authorized_signer
+
+            result = {
+                'success': True,
+                'base_stake': 0.0,
+                'stake_weight': STAKE_WEIGHT,
+                'uptime_days': 0,
+                'uptime_bonus_pct': 0,
+                'is_signer': False,
+                'signer_bonus_pct': 0,
+                'total_voting_power': 0.0,
+                'network_total_power': 0.0,
+                'active_voters': 0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup:
+                return jsonify(result)
+
+            evrmore_address = ""
+            if hasattr(startup, '_identity_bridge') and startup._identity_bridge:
+                evrmore_address = startup._identity_bridge.evrmore_address or ""
+
+            # Get base stake
+            base_stake = 50.0  # Default
+            if hasattr(startup, 'identity') and startup.identity:
+                try:
+                    balances = startup.identity.getBalances()
+                    if balances and 'SATORI' in balances:
+                        base_stake = float(balances['SATORI'])
+                except Exception:
+                    pass
+            result['base_stake'] = base_stake
+
+            # Get uptime days
+            uptime_days = 0
+            if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                uptime_tracker = startup._uptime_tracker
+                if hasattr(uptime_tracker, 'get_uptime_streak_days'):
+                    uptime_days = uptime_tracker.get_uptime_streak_days(evrmore_address)
+            result['uptime_days'] = uptime_days
+            result['uptime_bonus_pct'] = int(UPTIME_BONUS_90_DAYS * 100) if uptime_days >= 90 else 0
+
+            # Check if signer
+            is_signer = is_authorized_signer(evrmore_address)
+            result['is_signer'] = is_signer
+            result['signer_bonus_pct'] = int(SIGNER_BONUS * 100) if is_signer else 0
+
+            # Calculate total voting power
+            power = base_stake * STAKE_WEIGHT
+            if uptime_days >= 90:
+                power *= (1 + UPTIME_BONUS_90_DAYS)
+            if is_signer:
+                power *= (1 + SIGNER_BONUS)
+            result['total_voting_power'] = power
+
+            # Get network total from governance
+            if hasattr(startup, '_governance') and startup._governance:
+                governance = startup._governance
+                if hasattr(governance, '_get_total_voting_power'):
+                    result['network_total_power'] = governance._get_total_voting_power()
+                # Count active voters from uptime tracker
+                if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                    if hasattr(startup._uptime_tracker, 'get_active_node_count'):
+                        result['active_voters'] = startup._uptime_tracker.get_active_node_count()
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get voting power: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/uptime/details')
+    @login_required
+    def api_p2p_uptime_details():
+        """Get detailed uptime information for the current user."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'success': True,
+                'streak_days': 0,
+                'heartbeats_sent': 0,
+                'heartbeats_received': 0,
+                'current_round': '--',
+                'is_relay_qualified': False,
+                'uptime_percentage': 0.0,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup:
+                return jsonify(result)
+
+            evrmore_address = ""
+            if hasattr(startup, '_identity_bridge') and startup._identity_bridge:
+                evrmore_address = startup._identity_bridge.evrmore_address or ""
+
+            if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                uptime_tracker = startup._uptime_tracker
+
+                # Streak days
+                if hasattr(uptime_tracker, 'get_uptime_streak_days'):
+                    result['streak_days'] = uptime_tracker.get_uptime_streak_days(evrmore_address)
+
+                # Heartbeat counts
+                if hasattr(uptime_tracker, '_heartbeats_sent'):
+                    result['heartbeats_sent'] = uptime_tracker._heartbeats_sent
+                if hasattr(uptime_tracker, '_heartbeats_received'):
+                    result['heartbeats_received'] = uptime_tracker._heartbeats_received
+
+                # Current round
+                if hasattr(uptime_tracker, '_current_round') and uptime_tracker._current_round:
+                    result['current_round'] = uptime_tracker._current_round
+
+                # Relay qualification (95% uptime threshold)
+                if hasattr(uptime_tracker, 'is_relay_qualified'):
+                    result['is_relay_qualified'] = uptime_tracker.is_relay_qualified(evrmore_address)
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get uptime details: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/infrastructure')
+    @login_required
+    def api_p2p_infrastructure():
+        """Get network infrastructure information (rendezvous, bootstrap peers, etc.)."""
+        try:
+            from satorineuron.init import start
+
+            result = {
+                'success': True,
+                'rendezvous_peer': '--',
+                'rendezvous_latency_ms': None,
+                'bootstrap_peers': [],
+                'dht_nodes': 0,
+                'mesh_peers': 0,
+                'relay_enabled': None,
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup:
+                return jsonify(result)
+
+            if hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+                peers = startup._p2p_peers
+
+                # Rendezvous status
+                if hasattr(peers, 'get_rendezvous_status'):
+                    rendezvous_status = peers.get_rendezvous_status()
+                    if rendezvous_status:
+                        result['rendezvous_peer'] = rendezvous_status.get('current_peer', '--')
+                        result['rendezvous_latency_ms'] = rendezvous_status.get('latency_ms')
+
+                # Bootstrap peers with latencies
+                if hasattr(peers, '_rendezvous_peers_by_latency'):
+                    bootstrap_peers = []
+                    current_rendezvous = result.get('rendezvous_peer', '')
+                    for peer_id, latency in peers._rendezvous_peers_by_latency:
+                        bootstrap_peers.append({
+                            'peer_id': peer_id,
+                            'latency_ms': latency,
+                            'is_rendezvous': peer_id == current_rendezvous,
+                        })
+                    result['bootstrap_peers'] = bootstrap_peers
+
+                # DHT nodes (from peer registry)
+                if hasattr(peers, '_peer_info'):
+                    result['dht_nodes'] = len(peers._peer_info)
+
+                # Mesh peers
+                if hasattr(peers, '_pubsub') and peers._pubsub:
+                    try:
+                        mesh_count = len(peers._pubsub.mesh) if hasattr(peers._pubsub, 'mesh') else 0
+                        result['mesh_peers'] = mesh_count
+                    except Exception:
+                        pass
+
+                # Relay status
+                if hasattr(peers, '_relay_enabled'):
+                    result['relay_enabled'] = peers._relay_enabled
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get infrastructure: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # GOVERNANCE PAGE
+    # =========================================================================
+
+    @app.route('/governance')
+    @login_required
+    def governance():
+        """Render the Governance page."""
+        return render_template('governance.html')
+
+    # =========================================================================
+    # PREDICTIONS PAGE
+    # =========================================================================
+
+    @app.route('/predictions')
+    @login_required
+    def predictions_page():
+        """Render the Predictions page."""
+        return render_template('predictions.html')
+
+    # =========================================================================
+    # ORACLE PAGE (Oracles + Streams)
+    # =========================================================================
+
+    @app.route('/oracle')
+    @login_required
+    def oracle_page():
+        """Render the Oracle/Streams page."""
+        return render_template('oracle.html')
+
+    # =========================================================================
+    # SIGNER PAGE
+    # =========================================================================
+
+    @app.route('/signer')
+    @login_required
+    def signer_dashboard():
+        """Render the Signer Dashboard page (signers only)."""
+        return render_template('signer.html')
+
+    @app.route('/api/p2p/signer/status')
+    @login_required
+    def api_p2p_signer_status():
+        """Get signer status - whether user is a signer."""
+        try:
+            from satorip2p.protocol.signer import is_authorized_signer
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            evrmore_address = ""
+            if startup and hasattr(startup, '_identity_bridge') and startup._identity_bridge:
+                evrmore_address = startup._identity_bridge.evrmore_address or ""
+
+            is_signer = is_authorized_signer(evrmore_address)
+
+            return jsonify({
+                'is_signer': is_signer,
+                'evrmore_address': evrmore_address,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to get signer status: {e}")
+            return jsonify({'is_signer': False, 'error': str(e)})
 
     @app.route('/api/p2p/delegations')
     @login_required
@@ -1553,35 +3295,81 @@ def register_routes(app):
             if hasattr(start, '_get_networking_mode'):
                 result['networking_mode'] = start._get_networking_mode()
 
+            # Get P2P peers info using helper
+            identity, peers = get_p2p_state()
+            if peers:
+                if hasattr(peers, 'get_peer_count'):
+                    result['peer_count'] = peers.get_peer_count()
+                # Try peer_id first (satorip2p), then node_id for compatibility
+                if hasattr(peers, 'peer_id') and peers.peer_id:
+                    result['peer_id'] = str(peers.peer_id)
+                elif hasattr(peers, 'node_id') and peers.node_id:
+                    result['peer_id'] = str(peers.node_id)
+                if hasattr(peers, 'get_connected_peers'):
+                    connected = peers.get_connected_peers()
+                    for p in connected[:20]:  # Limit to 20
+                        result['peers'].append({
+                            'id': str(getattr(p, 'peer_id', str(p))),
+                            'latency': getattr(p, 'latency', None),
+                            'location': getattr(p, 'location', None),
+                            'streams': getattr(p, 'stream_count', 0),
+                            'role': getattr(p, 'role', 'Predictor'),
+                        })
+            # Also add evrmore_address from identity
+            if identity and hasattr(identity, 'address'):
+                result['evrmore_address'] = identity.address
+
+            # Add multiaddress for sharing with friends
+            if peers and hasattr(peers, 'public_addresses'):
+                addrs = peers.public_addresses
+                if addrs and result.get('peer_id'):
+                    # Build full multiaddress with peer ID
+                    # Format: /ip4/x.x.x.x/tcp/24600/p2p/<peer_id>
+                    full_addrs = []
+                    for addr in addrs:
+                        if '/p2p/' not in addr:
+                            full_addrs.append(f"{addr}/p2p/{result['peer_id']}")
+                        else:
+                            full_addrs.append(addr)
+                    result['multiaddrs'] = full_addrs
+                    # Primary multiaddress (first one) for display
+                    if full_addrs:
+                        result['multiaddr'] = full_addrs[0]
+
+            # Get NAT type from peers object (satorip2p has nat_type property)
+            nat_determined = False
+            if peers and hasattr(peers, 'nat_type'):
+                nat = peers.nat_type
+                # Convert satorip2p format (PUBLIC/PRIVATE/UNKNOWN) to display format
+                if nat == "PUBLIC":
+                    result['nat_type'] = "Public"
+                    nat_determined = True
+                elif nat == "PRIVATE":
+                    result['nat_type'] = "Private (NAT)"
+                    nat_determined = True
+
+            # Fallback: detect Docker environment directly
+            if not nat_determined:
+                try:
+                    from satorip2p.nat.docker import detect_docker_environment
+                    docker_info = detect_docker_environment()
+                    if docker_info.in_container:
+                        if docker_info.is_bridge_mode:
+                            result['nat_type'] = "Private (Docker)"
+                        elif docker_info.is_host_mode:
+                            result['nat_type'] = "Host Mode"
+                        else:
+                            result['nat_type'] = "Docker"
+                except Exception:
+                    pass
+
+            # Get uptime tracker info from StartupDag
             startup = start.getStart() if hasattr(start, 'getStart') else None
             if startup:
-                # Get P2P peers info
-                if hasattr(startup, '_p2p_peers') and startup._p2p_peers:
-                    peers = startup._p2p_peers
-                    if hasattr(peers, 'get_peer_count'):
-                        result['peer_count'] = peers.get_peer_count()
-                    if hasattr(peers, 'node_id'):
-                        result['peer_id'] = peers.node_id
-                    if hasattr(peers, 'get_connected_peers'):
-                        connected = peers.get_connected_peers()
-                        for p in connected[:20]:  # Limit to 20
-                            result['peers'].append({
-                                'id': getattr(p, 'peer_id', str(p))[:16] + '...',
-                                'latency': getattr(p, 'latency', None),
-                                'location': getattr(p, 'location', None),
-                                'streams': getattr(p, 'stream_count', 0),
-                                'role': getattr(p, 'role', 'Predictor'),
-                            })
-
-                # Get uptime tracker info
                 if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
                     tracker = startup._uptime_tracker
                     if hasattr(tracker, 'get_uptime_percentage'):
                         result['uptime_pct'] = tracker.get_uptime_percentage()
-
-                # Get NAT info
-                if hasattr(startup, '_nat_type'):
-                    result['nat_type'] = startup._nat_type or 'Unknown'
 
             return jsonify(result)
         except Exception as e:
@@ -1590,6 +3378,232 @@ def register_routes(app):
                 'peer_count': 0,
                 'networking_mode': 'central',
                 'error': str(e)
+            })
+
+    @app.route('/api/p2p/unified-status')
+    @login_required
+    def api_p2p_unified_status():
+        """
+        Get comprehensive P2P status with atomic snapshot of all peer data.
+
+        This is the single source of truth for all P2P stats on the network page.
+        Returns connected peers, known peers, and all counts in one atomic call
+        to prevent inconsistencies from multiple API calls.
+        """
+        try:
+            from satorineuron.init import start
+            identity, peers = get_p2p_state()
+
+            # Get connected peer IDs first (atomic snapshot)
+            connected_peer_ids = set()
+            if peers and hasattr(peers, 'get_connected_peers'):
+                connected_peer_ids = set(str(p) for p in peers.get_connected_peers())
+
+            # Get known peer identities
+            known_peers = []
+            role_counts = {
+                'predictor': 0, 'oracle': 0, 'signer': 0,
+                'relay': 0, 'pool-operator': 0, 'delegate': 0, 'charity': 0
+            }
+
+            # Get peer latencies if available
+            peer_latencies = {}
+            if peers and hasattr(peers, 'get_all_peer_latencies'):
+                peer_latencies = peers.get_all_peer_latencies()
+
+            # Track which peer IDs we've added to known_peers
+            known_peer_ids = set()
+
+            if peers and hasattr(peers, 'get_known_peer_identities'):
+                identities = peers.get_known_peer_identities()
+                for peer_id, ident in identities.items():
+                    peer_id_str = str(peer_id)
+                    known_peer_ids.add(peer_id_str)
+                    is_connected = peer_id_str in connected_peer_ids
+
+                    roles = getattr(ident, 'roles', [])
+                    role = roles[0] if roles else 'predictor'
+
+                    # Count by role
+                    role_key = role.lower().replace(' ', '-')
+                    if role_key in role_counts:
+                        role_counts[role_key] += 1
+                    else:
+                        role_counts['predictor'] += 1
+
+                    # Get latency for this peer
+                    latency_ms = peer_latencies.get(peer_id_str)
+
+                    known_peers.append({
+                        'peer_id': peer_id_str,
+                        'evrmore_address': getattr(ident, 'evrmore_address', ''),
+                        'roles': roles,
+                        'role': role,
+                        'protocols': getattr(ident, 'protocols', []),
+                        'agent_version': getattr(ident, 'agent_version', ''),
+                        'timestamp': getattr(ident, 'timestamp', 0),
+                        'connected': is_connected,
+                        'listen_addresses': getattr(ident, 'listen_addresses', []),
+                        'latency': latency_ms,  # RTT in milliseconds
+                    })
+
+            # Add connected peers that don't have identities yet
+            # Try to fill in from cache if available
+            cached_data = _get_cached_peers()
+            cached_peers_by_id = {p['peer_id']: p for p in cached_data.get('known_peers', [])}
+
+            for peer_id_str in connected_peer_ids:
+                if peer_id_str not in known_peer_ids:
+                    latency_ms = peer_latencies.get(peer_id_str)
+
+                    # Check if we have cached identify data for this peer
+                    cached_peer = cached_peers_by_id.get(peer_id_str)
+                    if cached_peer and cached_peer.get('evrmore_address'):
+                        # Use cached data but mark as connected and update latency
+                        role = cached_peer.get('role', 'predictor')
+                        role_counts[role] = role_counts.get(role, 0) + 1
+                        known_peers.append({
+                            'peer_id': peer_id_str,
+                            'evrmore_address': cached_peer.get('evrmore_address', ''),
+                            'roles': cached_peer.get('roles', ['predictor']),
+                            'role': role,
+                            'protocols': cached_peer.get('protocols', []),
+                            'agent_version': cached_peer.get('agent_version', ''),
+                            'timestamp': cached_peer.get('timestamp', 0),
+                            'connected': True,
+                            'listen_addresses': cached_peer.get('listen_addresses', []),
+                            'latency': latency_ms,
+                            'from_cache': True,  # Flag to indicate data is from cache
+                        })
+                    else:
+                        # No cached data, use skeleton with pending flag
+                        role_counts['predictor'] += 1
+                        known_peers.append({
+                            'peer_id': peer_id_str,
+                            'evrmore_address': '',
+                            'roles': ['predictor'],
+                            'role': 'predictor',
+                            'protocols': [],
+                            'agent_version': '',
+                            'timestamp': 0,
+                            'connected': True,
+                            'listen_addresses': [],
+                            'latency': latency_ms,
+                            'pending_identify': True,  # Flag for UI to show loading
+                        })
+
+            # Build result with atomic counts
+            connected_count = len(connected_peer_ids)
+            known_count = len(known_peers)
+
+            result = {
+                'success': True,
+                'timestamp': int(time.time() * 1000),  # For cache busting
+
+                # Counts (single source of truth)
+                'connected_count': connected_count,
+                'known_count': known_count,
+                'role_counts': role_counts,
+
+                # Connected peer IDs (for Peer Tools section)
+                'connected_peers': list(connected_peer_ids),
+
+                # Full known peer list with connected status
+                'known_peers': known_peers,
+
+                # My identity info
+                'my_peer_id': str(peers.peer_id) if peers and hasattr(peers, 'peer_id') else None,
+                'my_evrmore_address': identity.address if identity and hasattr(identity, 'address') else None,
+            }
+
+            # Add public key with multiple fallbacks
+            public_key = None
+            # Try identity.pubkey first
+            if identity and hasattr(identity, 'pubkey'):
+                public_key = identity.pubkey
+            # Try peers.public_key second
+            if not public_key and peers and hasattr(peers, 'public_key'):
+                public_key = peers.public_key
+            # Try vault.publicKey third
+            if not public_key:
+                try:
+                    if start.StartupDag.vault and hasattr(start.StartupDag.vault, 'publicKey'):
+                        public_key = start.StartupDag.vault.publicKey
+                except Exception:
+                    pass
+            if public_key:
+                result['my_public_key'] = public_key
+
+            # Add multiaddress if available
+            if peers and hasattr(peers, 'public_addresses') and result['my_peer_id']:
+                addrs = peers.public_addresses
+                if addrs:
+                    full_addrs = []
+                    for addr in addrs:
+                        if '/p2p/' not in addr:
+                            full_addrs.append(f"{addr}/p2p/{result['my_peer_id']}")
+                        else:
+                            full_addrs.append(addr)
+                    result['multiaddrs'] = full_addrs
+                    if full_addrs:
+                        result['multiaddr'] = full_addrs[0]
+
+            # Add uptime info
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                tracker = startup._uptime_tracker
+                if hasattr(tracker, 'get_uptime_percentage'):
+                    result['uptime_pct'] = tracker.get_uptime_percentage()
+                if hasattr(tracker, '_last_status_message'):
+                    result['last_heartbeat_message'] = tracker._last_status_message
+
+            # Add network average latency
+            if peers and hasattr(peers, 'get_network_avg_latency'):
+                avg_latency = peers.get_network_avg_latency()
+                if avg_latency is not None:
+                    result['avg_latency'] = round(avg_latency, 1)
+
+            # Add mesh peer count from GossipSub
+            if peers and hasattr(peers, 'get_pubsub_debug'):
+                try:
+                    debug_info = peers.get_pubsub_debug()
+                    mesh_info = debug_info.get('mesh', {})
+                    # Count unique peers across all topic meshes
+                    all_mesh_peers = set()
+                    for topic, peer_list in mesh_info.items():
+                        all_mesh_peers.update(peer_list)
+                    result['mesh_peer_count'] = len(all_mesh_peers)
+                    logger.info(f"Mesh peer count from pubsub: {len(all_mesh_peers)}")
+                except Exception as e:
+                    logger.warning(f"Failed to get mesh peer count: {e}")
+                    result['mesh_peer_count'] = 0
+            else:
+                logger.warning(f"Cannot get mesh peers: peers={peers is not None}, has_method={hasattr(peers, 'get_pubsub_debug') if peers else False}")
+
+            # Save peers to cache for Option D (instant display on restart)
+            if known_peers:
+                _save_peer_cache(known_peers)
+
+            return jsonify(result)
+
+        except Exception as e:
+            logger.warning(f"Unified P2P status failed: {e}")
+            # Try to use cached peers on failure (Option D)
+            cached = _get_cached_peers()
+            cached_peers = cached.get('known_peers', [])
+            # Mark all cached peers as disconnected since we can't verify
+            for peer in cached_peers:
+                peer['connected'] = False
+                peer['cached'] = True  # Flag to indicate stale data
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'connected_count': 0,
+                'known_count': len(cached_peers),
+                'connected_peers': [],
+                'known_peers': cached_peers,
+                'from_cache': True,
+                'cache_timestamp': cached.get('timestamp', 0),
             })
 
     @app.route('/api/network/stats')
@@ -1638,6 +3652,46 @@ def register_routes(app):
         except Exception as e:
             logger.warning(f"Network stats failed: {e}")
             return jsonify(result)
+
+    @app.route('/api/network/activity')
+    @login_required
+    def api_network_activity():
+        """Get hourly network activity data for charts.
+
+        Returns real-time activity counts from the P2P WebSocket bridge.
+        """
+        try:
+            from web.p2p_bridge import get_bridge
+
+            bridge = get_bridge()
+            activity = bridge.get_hourly_activity(hours=24)
+            counts = bridge.get_counts()
+
+            return jsonify({
+                'success': True,
+                'activity': activity,
+                'counts': counts,
+            })
+        except Exception as e:
+            logger.warning(f"Network activity failed: {e}")
+            # Return empty data structure on error
+            return jsonify({
+                'success': False,
+                'activity': {
+                    'labels': [],
+                    'predictions': [],
+                    'observations': [],
+                    'heartbeats': [],
+                    'consensus': [],
+                },
+                'counts': {
+                    'predictions': 0,
+                    'observations': 0,
+                    'heartbeats': 0,
+                    'consensus_votes': 0,
+                },
+                'error': str(e)
+            })
 
     @app.route('/api/peers/list')
     @login_required
@@ -1822,28 +3876,106 @@ def register_routes(app):
             if new_mode not in ('central', 'hybrid', 'p2p'):
                 return jsonify({'success': False, 'error': 'Invalid mode. Must be central, hybrid, or p2p'})
 
-            # Save to config
+            # Use the proper setter function
             if hasattr(start, '_set_networking_mode'):
-                start._set_networking_mode(new_mode)
-                return jsonify({'success': True, 'mode': new_mode})
+                success = start._set_networking_mode(new_mode)
+                if success:
+                    return jsonify({
+                        'success': True,
+                        'mode': new_mode,
+                        'message': 'Mode updated. Restart required for full effect.',
+                        'restart_required': True
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Failed to set mode'})
             else:
-                # Fallback: try to save to config file
+                # Fallback: save to YAML config file
                 import os
-                import json
-                config_path = os.path.expanduser('~/.satori/config.json')
-                config = {}
+                import yaml
+                from satorineuron import config as neuron_config
+                config_path = neuron_config.root('config', 'config.yaml')
+                cfg = {}
                 if os.path.exists(config_path):
                     with open(config_path, 'r') as f:
-                        config = json.load(f)
-                config['networking_mode'] = new_mode
+                        cfg = yaml.safe_load(f) or {}
+                cfg['networking mode'] = new_mode
                 os.makedirs(os.path.dirname(config_path), exist_ok=True)
                 with open(config_path, 'w') as f:
-                    json.dump(config, f, indent=2)
-                return jsonify({'success': True, 'mode': new_mode})
+                    yaml.dump(cfg, f, default_flow_style=False)
+                return jsonify({
+                    'success': True,
+                    'mode': new_mode,
+                    'message': 'Mode saved. Restart required for full effect.',
+                    'restart_required': True
+                })
 
         except Exception as e:
             logger.error(f"Networking mode failed: {e}")
             return jsonify({'success': False, 'error': str(e)})
+
+    # =========================================================================
+    # RESTART ENDPOINT
+    # =========================================================================
+
+    @app.route('/restart')
+    @login_required
+    def restart_neuron():
+        """Restart the neuron to apply configuration changes.
+
+        Shows a restart page then triggers system exit so Docker can restart.
+        """
+        import threading
+        import os
+        import signal
+
+        def do_restart():
+            import time
+            time.sleep(1)  # Give time for response to be sent
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        # Start restart in background thread
+        threading.Thread(target=do_restart, daemon=True).start()
+
+        return '''<!DOCTYPE html>
+<html>
+<head>
+    <title>Restarting...</title>
+    <meta http-equiv="refresh" content="5;url=/">
+    <style>
+        body {
+            background: #0d0d0d;
+            color: #fff;
+            font-family: Inter, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container { text-align: center; }
+        .spinner {
+            border: 4px solid #333;
+            border-top: 4px solid #5a5aff;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="spinner"></div>
+        <h2>Restarting Satori Neuron...</h2>
+        <p>This page will refresh automatically.</p>
+    </div>
+</body>
+</html>'''
 
     # =========================================================================
     # AI ENGINE TRAINING DELAY CONTROL (from upstream)
@@ -2124,17 +4256,110 @@ def register_routes(app):
                     if hasattr(tracker, 'get_upgrade_progress'):
                         result['upgrade_progress'] = tracker.get_upgrade_progress()
 
-                # Get current features
+                # Get current features from versioning module or detect from enabled protocols
                 try:
                     from satorip2p.protocol.versioning import get_current_features
                     result['features'] = get_current_features()
                 except ImportError:
-                    pass
+                    # Build feature list from detected capabilities
+                    features = []
+                    if hasattr(startup, 'peers') and startup.peers:
+                        peers = startup.peers
+                        if peers.enable_pubsub:
+                            features.append({'name': 'pubsub_gossipsub', 'enabled': True})
+                        if peers.enable_dht:
+                            features.append({'name': 'dht_kademlia', 'enabled': True})
+                        if peers.enable_ping:
+                            features.append({'name': 'ping_protocol', 'enabled': True})
+                        if peers.enable_identify:
+                            features.append({'name': 'identify_protocol', 'enabled': True})
+                        if peers.enable_relay:
+                            features.append({'name': 'circuit_relay', 'enabled': True})
+                        if peers.enable_mdns:
+                            features.append({'name': 'mdns_discovery', 'enabled': True})
+                        if peers.enable_rendezvous:
+                            features.append({'name': 'rendezvous', 'enabled': True})
+                        if peers.enable_upnp:
+                            features.append({'name': 'upnp_nat', 'enabled': True})
+                    # Add satori-specific protocols
+                    if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
+                        features.append({'name': 'heartbeat_uptime', 'enabled': True})
+                    if hasattr(startup, '_consensus_manager') and startup._consensus_manager:
+                        features.append({'name': 'consensus', 'enabled': True})
+                    if hasattr(startup, '_treasury_alerts') and startup._treasury_alerts:
+                        features.append({'name': 'treasury_alerts', 'enabled': True})
+                    if hasattr(startup, '_lending_manager') and startup._lending_manager:
+                        features.append({'name': 'lending_protocol', 'enabled': True})
+                    if hasattr(startup, '_delegation_manager') and startup._delegation_manager:
+                        features.append({'name': 'delegation', 'enabled': True})
+                    result['features'] = features
 
             return jsonify(result)
         except Exception as e:
             logger.warning(f"Version info failed: {e}")
             return jsonify({'error': str(e), 'current_version': '1.0.0'})
+
+    @app.route('/api/p2p/protocols/descriptions')
+    @login_required
+    def api_p2p_protocol_descriptions():
+        """Get protocol descriptions for UI tooltips."""
+        try:
+            from satorip2p.protocol import get_all_protocol_descriptions
+            descriptions = get_all_protocol_descriptions()
+            return jsonify({
+                'descriptions': descriptions,
+                'count': len(descriptions)
+            })
+        except ImportError:
+            # Fallback if satorip2p not available
+            return jsonify({
+                'descriptions': {},
+                'count': 0,
+                'error': 'Protocol registry not available'
+            })
+        except Exception as e:
+            logger.warning(f"Protocol descriptions failed: {e}")
+            return jsonify({'descriptions': {}, 'error': str(e)})
+
+    @app.route('/api/p2p/protocols/info')
+    @login_required
+    def api_p2p_protocol_info():
+        """Get full protocol info including categories and required flags."""
+        try:
+            from satorip2p.protocol import (
+                ALL_PROTOCOLS,
+                get_required_protocols,
+                get_satori_protocols
+            )
+
+            protocols = {}
+            for proto_id, proto in ALL_PROTOCOLS.items():
+                protocols[proto_id] = {
+                    'id': proto.id,
+                    'name': proto.name,
+                    'version': proto.version,
+                    'description': proto.description,
+                    'category': proto.category,
+                    'required': proto.required,
+                }
+
+            return jsonify({
+                'protocols': protocols,
+                'required': get_required_protocols(),
+                'satori_protocols': get_satori_protocols(),
+                'count': len(protocols)
+            })
+        except ImportError:
+            return jsonify({
+                'protocols': {},
+                'required': [],
+                'satori_protocols': [],
+                'count': 0,
+                'error': 'Protocol registry not available'
+            })
+        except Exception as e:
+            logger.warning(f"Protocol info failed: {e}")
+            return jsonify({'protocols': {}, 'error': str(e)})
 
     # =========================================================================
     # PING & IDENTIFY PROTOCOL ENDPOINTS
@@ -2145,20 +4370,26 @@ def register_routes(app):
     def api_p2p_ping(peer_id):
         """Ping a peer to test connectivity and measure latency."""
         try:
-            from satorineuron.init import start
-            import trio
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+            _, peers = get_p2p_state()
+            if not peers:
                 return jsonify({'error': 'P2P not initialized', 'success': False}), 503
 
-            peers = startup._p2p_peers
             count = request.json.get('count', 3) if request.json else 3
 
-            async def do_ping():
-                return await peers.ping_peer(peer_id, count=count)
+            # Run ping in the P2P trio context (not a new context)
+            try:
+                from web.wsgi import run_in_p2p_context
 
-            latencies = trio.from_thread.run_sync(lambda: trio.run(do_ping))
+                async def do_ping():
+                    return await peers.ping_peer(peer_id, count=count)
+
+                latencies = run_in_p2p_context(do_ping)
+            except RuntimeError as e:
+                # Fallback to new trio context if token not available
+                import trio
+                async def do_ping():
+                    return await peers.ping_peer(peer_id, count=count)
+                latencies = trio.run(do_ping)
 
             if latencies:
                 return jsonify({
@@ -2187,13 +4418,9 @@ def register_routes(app):
     def api_p2p_ping_stats():
         """Get ping protocol statistics."""
         try:
-            from satorineuron.init import start
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+            _, peers = get_p2p_state()
+            if not peers:
                 return jsonify({'error': 'P2P not initialized'}), 503
-
-            peers = startup._p2p_peers
             if hasattr(peers, '_ping_service') and peers._ping_service:
                 stats = peers._ping_service.get_stats()
                 return jsonify({
@@ -2209,36 +4436,252 @@ def register_routes(app):
             logger.warning(f"Ping stats failed: {e}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/p2p/connect', methods=['POST'])
+    @login_required
+    def api_p2p_connect():
+        """Connect to a peer by multiaddress."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            data = request.json or {}
+            multiaddr = data.get('multiaddr')
+
+            if not multiaddr:
+                return jsonify({'error': 'multiaddr is required', 'success': False}), 400
+
+            # Run connect in the P2P trio context
+            try:
+                from web.wsgi import run_in_p2p_context
+
+                async def do_connect():
+                    return await peers.connect_peer(multiaddr)
+
+                success = run_in_p2p_context(do_connect)
+            except RuntimeError:
+                # Fallback to new trio context if token not available
+                import trio
+                async def do_connect():
+                    return await peers.connect_peer(multiaddr)
+                success = trio.run(do_connect)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': 'Connected to peer',
+                    'multiaddr': multiaddr,
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to connect to peer',
+                    'multiaddr': multiaddr,
+                })
+
+        except Exception as e:
+            logger.warning(f"Connect failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/disconnect', methods=['POST'])
+    @login_required
+    def api_p2p_disconnect():
+        """Disconnect from a peer."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            data = request.json or {}
+            peer_id = data.get('peer_id')
+
+            if not peer_id:
+                return jsonify({'error': 'peer_id is required', 'success': False}), 400
+
+            # Run disconnect in the P2P trio context
+            try:
+                from web.wsgi import run_in_p2p_context
+
+                async def do_disconnect():
+                    return await peers.disconnect_peer(peer_id)
+
+                success = run_in_p2p_context(do_disconnect)
+            except RuntimeError:
+                # Fallback to new trio context if token not available
+                import trio
+                async def do_disconnect():
+                    return await peers.disconnect_peer(peer_id)
+                success = trio.run(do_disconnect)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': 'Disconnected from peer',
+                    'peer_id': peer_id,
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to disconnect from peer',
+                    'peer_id': peer_id,
+                })
+
+        except Exception as e:
+            logger.warning(f"Disconnect failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/debug')
+    @login_required
+    def api_p2p_debug():
+        """Get detailed GossipSub/Pubsub debug information."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            if hasattr(peers, 'get_pubsub_debug'):
+                debug_info = peers.get_pubsub_debug()
+                return jsonify(debug_info)
+            else:
+                return jsonify({'error': 'Debug method not available'}), 501
+
+        except Exception as e:
+            logger.warning(f"P2P debug failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/p2p/identify/stats')
+    @login_required
+    def api_p2p_identify_stats():
+        """Get our own identity info including peer_id, evrmore_address, protocols, and prediction stats."""
+        try:
+            from satorineuron.init import start
+            identity, peers = get_p2p_state()
+
+            result = {
+                'peer_id': None,
+                'evrmore_address': None,
+                'public_key': None,
+                'multiaddr': None,
+                'protocols': [],
+                'active_predictions': 0,
+                'consensus_participation': 0,
+            }
+
+            # Get peer ID
+            if peers:
+                if hasattr(peers, 'peer_id') and peers.peer_id:
+                    result['peer_id'] = str(peers.peer_id)
+                elif hasattr(peers, 'node_id') and peers.node_id:
+                    result['peer_id'] = str(peers.node_id)
+
+                # Get protocols from identify handler
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    if hasattr(peers._identify_handler, '_get_supported_protocols'):
+                        result['protocols'] = peers._identify_handler._get_supported_protocols()
+                # Fallback: construct from peers capabilities
+                if not result['protocols']:
+                    protocols = ["/satori/stream/1.0.0", "/satori/ping/1.0.0", "/satori/identify/1.0.0"]
+                    if hasattr(peers, 'enable_dht') and peers.enable_dht:
+                        protocols.append("/ipfs/kad/1.0.0")
+                    if hasattr(peers, 'enable_pubsub') and peers.enable_pubsub:
+                        protocols.extend(["/meshsub/1.1.0", "/floodsub/1.0.0"])
+                    if hasattr(peers, 'enable_relay') and peers.enable_relay:
+                        protocols.append("/libp2p/circuit/relay/0.2.0/hop")
+                    result['protocols'] = protocols
+
+            # Get evrmore address
+            if identity and hasattr(identity, 'address'):
+                result['evrmore_address'] = identity.address
+
+            # Get public key
+            if identity and hasattr(identity, 'pubkey'):
+                result['public_key'] = identity.pubkey
+            elif peers and hasattr(peers, 'public_key'):
+                result['public_key'] = peers.public_key
+
+            # Get multiaddress
+            if peers and hasattr(peers, 'public_addresses') and result['peer_id']:
+                addrs = peers.public_addresses
+                if addrs:
+                    addr = addrs[0]
+                    if '/p2p/' not in addr:
+                        result['multiaddr'] = f"{addr}/p2p/{result['peer_id']}"
+                    else:
+                        result['multiaddr'] = addr
+
+            # Get prediction stats from startup
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup:
+                # Active predictions - get from prediction manager if available
+                if hasattr(startup, '_prediction_protocol') and startup._prediction_protocol:
+                    pred_proto = startup._prediction_protocol
+                    if hasattr(pred_proto, 'get_active_count'):
+                        result['active_predictions'] = pred_proto.get_active_count()
+
+                # Consensus participation
+                if hasattr(startup, '_consensus_manager') and startup._consensus_manager:
+                    consensus = startup._consensus_manager
+                    if hasattr(consensus, 'participation_count'):
+                        result['consensus_participation'] = consensus.participation_count
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Get identify stats failed: {e}")
+            return jsonify({'error': str(e)}), 500
+
     @app.route('/api/p2p/identify/peers')
     @login_required
     def api_p2p_identify_peers():
         """Get known peer identities from the Identify protocol."""
         try:
-            from satorineuron.init import start
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+            _, peers = get_p2p_state()
+            if not peers:
                 return jsonify({'error': 'P2P not initialized'}), 503
-
-            peers = startup._p2p_peers
             identities = peers.get_known_peer_identities()
+
+            # Get list of currently connected peers
+            connected_peers = set()
+            if hasattr(peers, 'get_connected_peers'):
+                connected_peers = set(str(p) for p in peers.get_connected_peers())
+
+            # Track which peer IDs we've added
+            known_peer_ids = set()
 
             peer_list = []
             for peer_id, identity in identities.items():
+                peer_id_str = str(peer_id)
+                known_peer_ids.add(peer_id_str)
                 peer_info = {
-                    'peer_id': peer_id,
+                    'peer_id': peer_id_str,
                     'evrmore_address': getattr(identity, 'evrmore_address', ''),
                     'roles': getattr(identity, 'roles', []),
                     'protocols': getattr(identity, 'protocols', []),
                     'agent_version': getattr(identity, 'agent_version', ''),
                     'timestamp': getattr(identity, 'timestamp', 0),
+                    'connected': peer_id_str in connected_peers,
+                    'listen_addresses': getattr(identity, 'listen_addresses', []),
                 }
                 peer_list.append(peer_info)
+
+            # Add connected peers that don't have identities yet (with default predictor role)
+            for peer_id_str in connected_peers:
+                if peer_id_str not in known_peer_ids:
+                    peer_list.append({
+                        'peer_id': peer_id_str,
+                        'evrmore_address': '',
+                        'roles': ['predictor'],
+                        'protocols': [],
+                        'agent_version': '',
+                        'timestamp': 0,
+                        'connected': True,
+                        'listen_addresses': [],
+                    })
 
             return jsonify({
                 'success': True,
                 'peers': peer_list,
                 'count': len(peer_list),
+                'connected_count': len(connected_peers),
             })
 
         except Exception as e:
@@ -2250,13 +4693,9 @@ def register_routes(app):
     def api_p2p_identify_by_role(role):
         """Get peers with a specific role (predictor, relay, oracle, signer)."""
         try:
-            from satorineuron.init import start
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+            _, peers = get_p2p_state()
+            if not peers:
                 return jsonify({'error': 'P2P not initialized'}), 503
-
-            peers = startup._p2p_peers
             role_peers = peers.get_peers_by_role(role)
 
             peer_list = []
@@ -2285,19 +4724,21 @@ def register_routes(app):
     def api_p2p_identify_announce():
         """Announce our identity to the network."""
         try:
-            from satorineuron.init import start
-            import trio
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
+            _, peers = get_p2p_state()
+            if not peers:
                 return jsonify({'error': 'P2P not initialized', 'success': False}), 503
-
-            peers = startup._p2p_peers
 
             async def do_announce():
                 await peers.announce_identity()
 
-            trio.from_thread.run_sync(lambda: trio.run(do_announce))
+            # Run in the P2P trio context (not a new context)
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_announce)
+            except RuntimeError as e:
+                # Fallback to new trio context if token not available
+                import trio
+                trio.run(do_announce)
 
             return jsonify({
                 'success': True,
@@ -2308,33 +4749,268 @@ def register_routes(app):
             logger.warning(f"Identity announce failed: {e}")
             return jsonify({'error': str(e), 'success': False}), 500
 
-    @app.route('/api/p2p/identify/stats')
+    # ============================================
+    # IDENTITY BROADCAST ENDPOINTS (Send OUR identity)
+    # ============================================
+
+    # Already have: /api/p2p/identify/announce - broadcasts to whole network
+
+    @app.route('/api/p2p/identify/broadcast/known', methods=['POST'])
     @login_required
-    def api_p2p_identify_stats():
-        """Get identify protocol statistics."""
+    def api_p2p_identify_broadcast_known():
+        """Broadcast our identity to all known peers only."""
         try:
-            from satorineuron.init import start
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_p2p_peers') or not startup._p2p_peers:
-                return jsonify({'error': 'P2P not initialized'}), 503
+            result = {'success': False, 'count': 0}
 
-            peers = startup._p2p_peers
-            if hasattr(peers, '_identify_handler') and peers._identify_handler:
-                stats = peers._identify_handler.get_stats()
-                return jsonify({
-                    'success': True,
-                    'started': stats.get('started', False),
-                    'known_peers': stats.get('known_peers', 0),
-                    'version': stats.get('version', '1.0.0'),
-                    'roles_seen': stats.get('roles_seen', []),
-                })
-            else:
-                return jsonify({'success': False, 'error': 'Identify protocol not initialized'})
+            async def do_broadcast():
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    count = await peers._identify_handler.announce_to_known_peers()
+                    result['count'] = count
+                    result['success'] = True
+                else:
+                    logger.warning("No identify handler available")
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_broadcast)
+            except RuntimeError:
+                import trio
+                trio.run(do_broadcast)
+
+            return jsonify({
+                'success': result['success'],
+                'message': f'Identity broadcast to {result["count"]} known peers',
+                'count': result['count'],
+            })
 
         except Exception as e:
-            logger.warning(f"Identify stats failed: {e}")
-            return jsonify({'error': str(e)}), 500
+            logger.warning(f"Identity broadcast to known peers failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/broadcast/<peer_id>', methods=['POST'])
+    @login_required
+    def api_p2p_identify_broadcast_peer(peer_id):
+        """Broadcast our identity to a specific peer."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            if not peer_id:
+                return jsonify({'error': 'peer_id is required', 'success': False}), 400
+
+            result = {'success': False}
+
+            async def do_broadcast():
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    result['success'] = await peers._identify_handler.announce_to_peer(peer_id)
+                else:
+                    logger.warning("No identify handler available")
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_broadcast)
+            except RuntimeError:
+                import trio
+                trio.run(do_broadcast)
+
+            return jsonify({
+                'success': result['success'],
+                'message': f'Identity {"sent to" if result["success"] else "failed to send to"} peer {peer_id}',
+                'peer_id': peer_id,
+            })
+
+        except Exception as e:
+            logger.warning(f"Identity broadcast to peer {peer_id} failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    # ============================================
+    # IDENTITY REQUEST ENDPOINTS (Request THEIR identity)
+    # ============================================
+
+    @app.route('/api/p2p/identify/request/network', methods=['POST'])
+    @login_required
+    def api_p2p_identify_request_network():
+        """Request identity from whole network via GossipSub broadcast."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            async def do_request():
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    await peers._identify_handler.request_identity(None)  # None = broadcast
+                else:
+                    logger.warning("No identify handler available")
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_request)
+            except RuntimeError:
+                import trio
+                trio.run(do_request)
+
+            return jsonify({
+                'success': True,
+                'message': 'Identity request broadcast to network',
+            })
+
+        except Exception as e:
+            logger.warning(f"Identity request to network failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/request/known', methods=['POST'])
+    @login_required
+    def api_p2p_identify_request_known():
+        """Request identity from all known peers only."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            result = {'success': False, 'count': 0}
+
+            async def do_request():
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    count = await peers._identify_handler.request_identity_from_known_peers()
+                    result['count'] = count
+                    result['success'] = True
+                else:
+                    logger.warning("No identify handler available")
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_request)
+            except RuntimeError:
+                import trio
+                trio.run(do_request)
+
+            return jsonify({
+                'success': result['success'],
+                'message': f'Identity requested from {result["count"]} known peers',
+                'count': result['count'],
+            })
+
+        except Exception as e:
+            logger.warning(f"Identity request from known peers failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/request/<peer_id>', methods=['POST'])
+    @login_required
+    def api_p2p_identify_request_peer(peer_id):
+        """Request identity from a specific peer."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            if not peer_id:
+                return jsonify({'error': 'peer_id is required', 'success': False}), 400
+
+            result = {'success': False}
+
+            async def do_request():
+                if hasattr(peers, '_identify_handler') and peers._identify_handler:
+                    result['success'] = await peers._identify_handler.request_identity_from_peer(peer_id)
+                else:
+                    logger.warning("No identify handler available")
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                run_in_p2p_context(do_request)
+            except RuntimeError:
+                import trio
+                trio.run(do_request)
+
+            return jsonify({
+                'success': result['success'],
+                'message': f'Identity request {"sent to" if result["success"] else "failed for"} peer {peer_id}',
+                'peer_id': peer_id,
+            })
+
+        except Exception as e:
+            logger.warning(f"Identity request from peer {peer_id} failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/forget/<peer_id>', methods=['DELETE'])
+    @login_required
+    def api_p2p_forget_peer(peer_id):
+        """Remove a peer from the known peers list."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            if not hasattr(peers, 'forget_peer'):
+                return jsonify({'error': 'forget_peer not available', 'success': False}), 501
+
+            success = peers.forget_peer(peer_id)
+            if success:
+                return jsonify({'success': True, 'message': f'Forgot peer {peer_id}'})
+            else:
+                return jsonify({'success': False, 'error': 'Peer not found'}), 404
+
+        except Exception as e:
+            logger.warning(f"Forget peer failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
+
+    @app.route('/api/p2p/identify/reconnect/<peer_id>', methods=['POST'])
+    @login_required
+    def api_p2p_reconnect_peer(peer_id):
+        """Attempt to reconnect to a known peer."""
+        try:
+            _, peers = get_p2p_state()
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            # Get the peer's identity to find their listen addresses
+            identities = peers.get_known_peer_identities()
+            if peer_id not in identities:
+                return jsonify({'error': 'Peer not found in known peers', 'success': False}), 404
+
+            identity = identities[peer_id]
+            listen_addrs = getattr(identity, 'listen_addresses', [])
+            if not listen_addrs:
+                return jsonify({'error': 'No listen addresses for peer', 'success': False}), 400
+
+            # Try to connect using the first available address
+            async def do_connect():
+                for addr in listen_addrs:
+                    try:
+                        success = await peers.connect_peer(addr, timeout=10.0)
+                        if success:
+                            return True, addr
+                    except Exception as e:
+                        logger.debug(f"Failed to connect to {addr}: {e}")
+                        continue
+                return False, None
+
+            try:
+                from web.wsgi import run_in_p2p_context
+                success, used_addr = run_in_p2p_context(do_connect)
+            except RuntimeError:
+                import trio
+                success, used_addr = trio.run(do_connect)
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'message': f'Connected to peer {peer_id}',
+                    'address': used_addr
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to connect to any address'
+                }), 502
+
+        except Exception as e:
+            logger.warning(f"Reconnect peer failed: {e}")
+            return jsonify({'error': str(e), 'success': False}), 500
 
     # =========================================================================
     # STORAGE REDUNDANCY ENDPOINTS
@@ -2415,6 +5091,100 @@ def register_routes(app):
             logger.warning(f"Storage status failed: {e}")
             return jsonify({'status': 'error', 'error': str(e)})
 
+    @app.route('/api/p2p/storage/toggle', methods=['POST'])
+    @login_required
+    def api_p2p_storage_toggle():
+        """Enable or disable a storage backend."""
+        try:
+            from satorineuron.init import start
+
+            data = request.get_json() or {}
+            backend = data.get('backend')  # Only 'dht' is toggleable
+            enabled = data.get('enabled', True)
+
+            # Memory and File storage cannot be toggled - required for operation
+            if backend == 'memory':
+                return jsonify({
+                    'success': False,
+                    'error': 'Memory storage cannot be disabled - required for read/write operations'
+                })
+            if backend == 'file':
+                return jsonify({
+                    'success': False,
+                    'error': 'File storage cannot be disabled - it is the core persistence layer'
+                })
+
+            if backend != 'dht':
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid backend: {backend}. Only DHT can be toggled.'
+                })
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup:
+                return jsonify({
+                    'success': False,
+                    'error': 'P2P not initialized'
+                })
+
+            # Get or create storage manager
+            if not hasattr(startup, '_storage_manager') or not startup._storage_manager:
+                # Initialize storage manager if not exists
+                try:
+                    from satorip2p.protocol import StorageManager
+                    startup._storage_manager = StorageManager()
+                    logger.info("Initialized StorageManager")
+                except ImportError:
+                    return jsonify({
+                        'success': False,
+                        'error': 'StorageManager not available'
+                    })
+
+            manager = startup._storage_manager
+
+            # Toggle the backend
+            if hasattr(manager, 'toggle_backend'):
+                success = manager.toggle_backend(backend, enabled)
+                if success:
+                    logger.info(f"Storage backend '{backend}' {'enabled' if enabled else 'disabled'}")
+                    return jsonify({
+                        'success': True,
+                        'backend': backend,
+                        'enabled': enabled
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Failed to toggle {backend}'
+                    })
+            else:
+                # Fallback: try to enable/disable directly
+                if backend == 'memory':
+                    if enabled and hasattr(manager, 'enable_memory'):
+                        manager.enable_memory()
+                    elif hasattr(manager, 'disable_memory'):
+                        manager.disable_memory()
+                elif backend == 'file':
+                    if enabled and hasattr(manager, 'enable_file'):
+                        manager.enable_file()
+                    elif hasattr(manager, 'disable_file'):
+                        manager.disable_file()
+                elif backend == 'dht':
+                    if enabled and hasattr(manager, 'enable_dht'):
+                        manager.enable_dht()
+                    elif hasattr(manager, 'disable_dht'):
+                        manager.disable_dht()
+
+                return jsonify({
+                    'success': True,
+                    'backend': backend,
+                    'enabled': enabled
+                })
+
+        except Exception as e:
+            logger.warning(f"Storage toggle failed: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
     # =========================================================================
     # BANDWIDTH & QOS ENDPOINTS
     # =========================================================================
@@ -2456,27 +5226,37 @@ def register_routes(app):
                     # Global metrics
                     if hasattr(tracker, 'get_global_metrics'):
                         global_metrics = tracker.get_global_metrics()
-                        if hasattr(global_metrics, 'to_dict'):
-                            result['global'] = global_metrics.to_dict()
-                        elif isinstance(global_metrics, dict):
-                            result['global'] = global_metrics
+                        if isinstance(global_metrics, dict):
+                            # Flatten the nested structure for the UI
+                            cumulative = global_metrics.get('cumulative', {})
+                            rates = global_metrics.get('rates', {})
+                            result['global'] = {
+                                'bytes_sent': cumulative.get('bytes_sent', 0),
+                                'bytes_received': cumulative.get('bytes_received', 0),
+                                'messages_sent': cumulative.get('messages_sent', 0),
+                                'messages_received': cumulative.get('messages_received', 0),
+                                'bytes_per_second': rates.get('bytes_out_1s', 0) + rates.get('bytes_in_1s', 0),
+                                'messages_per_second': rates.get('msgs_out_1s', 0) + rates.get('msgs_in_1s', 0),
+                            }
 
-                    # Per-topic metrics
-                    if hasattr(tracker, 'get_topic_metrics'):
-                        topic_metrics = tracker.get_topic_metrics()
-                        for topic, metrics in topic_metrics.items():
-                            if hasattr(metrics, 'to_dict'):
-                                result['topics'][topic] = metrics.to_dict()
-                            elif isinstance(metrics, dict):
-                                result['topics'][topic] = metrics
+                    # Per-topic metrics (get all topic rates)
+                    if hasattr(tracker, 'get_all_topic_rates'):
+                        topic_rates = tracker.get_all_topic_rates()
+                        for topic, rate in topic_rates.items():
+                            # Get detailed metrics for each topic
+                            if hasattr(tracker, 'get_topic_metrics'):
+                                result['topics'][topic] = tracker.get_topic_metrics(topic)
+                                result['topics'][topic]['rate_bytes_sec'] = rate
 
-                    # Per-peer metrics (summarized)
-                    if hasattr(tracker, 'get_peer_metrics'):
-                        peer_metrics = tracker.get_peer_metrics()
+                    # Per-peer metrics (summarized using get_top_peers)
+                    if hasattr(tracker, 'get_top_peers'):
+                        top_peers = tracker.get_top_peers(20)
                         result['peers'] = {
-                            'count': len(peer_metrics),
-                            'top_senders': [],
-                            'top_receivers': [],
+                            'count': len(top_peers),
+                            'top_by_bandwidth': [
+                                {'peer_id': peer_id[:16] + '...', 'bytes_per_second': rate}
+                                for peer_id, rate in top_peers
+                            ],
                         }
 
                 # Get QoS manager stats
@@ -3342,3 +6122,1669 @@ def register_routes(app):
         except Exception as e:
             logger.warning(f"Get lendings failed: {e}")
             return jsonify({'lendings': [], 'error': str(e)})
+
+    # =========================================================================
+    # SIGNER API ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/signer/pending')
+    @login_required
+    def api_p2p_signer_pending():
+        """Get pending signing actions for this signer."""
+        try:
+            from satorineuron.init import start
+            from satorip2p.protocol.signer import SigningPhase
+
+            result = {
+                'pending': [],
+                'total': 0,
+                'current_round': None,
+                'phase': 'waiting',
+                'signatures_collected': 0,
+                'signatures_required': 3
+            }
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_signer') and startup._signer:
+                signer = startup._signer
+
+                # Get current signing status
+                if hasattr(signer, 'check_signing_status'):
+                    status = signer.check_signing_status()
+                    result['current_round'] = status.round_id
+                    result['phase'] = status.phase.value if status.phase else 'waiting'
+                    result['signatures_collected'] = status.signatures_collected
+                    result['signatures_required'] = status.signatures_required
+
+                    # If there's an active request, add it to pending
+                    if signer._current_request and status.phase == SigningPhase.COLLECTING:
+                        req = signer._current_request
+                        result['pending'].append({
+                            'action_id': req.round_id,
+                            'type': 'distribution',
+                            'round_id': req.round_id,
+                            'merkle_root': req.merkle_root[:16] + '...' if req.merkle_root else '',
+                            'total_reward': req.total_reward,
+                            'num_recipients': req.num_recipients,
+                            'timestamp': req.timestamp,
+                            'signatures': status.signatures_collected,
+                            'required': status.signatures_required,
+                            'signers': status.signers
+                        })
+                        result['total'] = 1
+
+            return jsonify(result)
+        except Exception as e:
+            logger.warning(f"Failed to get signer pending: {e}")
+            return jsonify({'pending': [], 'error': str(e)})
+
+    @app.route('/api/p2p/signer/sign', methods=['POST'])
+    @login_required
+    def api_p2p_signer_sign():
+        """Sign a pending action (for authorized signers only)."""
+        try:
+            from satorineuron.init import start
+            from satorip2p.protocol.signer import is_authorized_signer
+
+            data = request.get_json() or {}
+            action_id = data.get('action_id')
+            if not action_id:
+                return jsonify({'success': False, 'error': 'action_id required'})
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Check if user is authorized signer
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address or not is_authorized_signer(wallet_address):
+                return jsonify({'success': False, 'error': 'Only authorized signers can sign'}), 403
+
+            # Get the signer node and process the current request
+            if not startup or not hasattr(startup, '_signer') or not startup._signer:
+                return jsonify({'success': False, 'error': 'Signer not initialized'}), 500
+
+            signer = startup._signer
+
+            # Verify action_id matches current request
+            if not signer._current_request or signer._current_request.round_id != action_id:
+                return jsonify({'success': False, 'error': 'Action not found or already processed'})
+
+            # Process the signature request (signs and broadcasts)
+            if hasattr(signer, 'process_signature_request'):
+                success = signer.process_signature_request(signer._current_request)
+                if success:
+                    status = signer.check_signing_status()
+                    return jsonify({
+                        'success': True,
+                        'action_id': action_id,
+                        'signatures_collected': status.signatures_collected,
+                        'phase': status.phase.value
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Failed to sign'})
+
+            return jsonify({'success': False, 'error': 'Signing not available'})
+        except Exception as e:
+            logger.warning(f"Failed to sign action: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/signer/consensus')
+    @login_required
+    def api_p2p_signer_consensus():
+        """Get consensus status and other signers."""
+        try:
+            from satorip2p.protocol.signer import AUTHORIZED_SIGNERS, is_authorized_signer
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            my_address = ""
+            if startup and hasattr(startup, '_identity_bridge') and startup._identity_bridge:
+                my_address = startup._identity_bridge.evrmore_address or ""
+
+            # Build signer list
+            signers = []
+            for i, addr in enumerate(AUTHORIZED_SIGNERS):
+                signers.append({
+                    'address': addr,
+                    'position': i + 1,
+                    'is_self': addr == my_address,
+                    'online': True,  # TODO: Check actual online status
+                    'last_seen': 'now'
+                })
+
+            return jsonify({
+                'signers': signers,
+                'online_count': len(signers),
+                'threshold': 3,
+                'pending_actions': []
+            })
+        except Exception as e:
+            logger.warning(f"Failed to get consensus status: {e}")
+            return jsonify({'signers': [], 'error': str(e)})
+
+    # =========================================================================
+    # PREDICTION PROTOCOL API ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/predictions/submit', methods=['POST'])
+    @login_required
+    def api_p2p_predictions_submit():
+        """Submit a prediction for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            value = data.get('value')
+            target_time = data.get('target_time')
+            confidence = data.get('confidence', 0.0)
+            metadata = data.get('metadata', {})
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+            if value is None:
+                return jsonify({'success': False, 'error': 'value is required'}), 400
+            if not target_time:
+                return jsonify({'success': False, 'error': 'target_time is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'success': False, 'error': 'Prediction protocol not initialized'}), 503
+
+            protocol = startup._prediction_protocol
+
+            async def do_publish():
+                return await protocol.publish_prediction(
+                    stream_id=stream_id,
+                    value=value,
+                    target_time=int(target_time),
+                    confidence=float(confidence),
+                    metadata=metadata
+                )
+
+            try:
+                loop = asyncio.new_event_loop()
+                prediction = loop.run_until_complete(do_publish())
+            finally:
+                loop.close()
+
+            if prediction:
+                return jsonify({
+                    'success': True,
+                    'prediction': {
+                        'hash': prediction.hash,
+                        'stream_id': prediction.stream_id,
+                        'value': prediction.value,
+                        'target_time': prediction.target_time,
+                        'predictor': prediction.predictor,
+                        'created_at': prediction.created_at,
+                        'confidence': prediction.confidence,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to publish prediction'})
+
+        except Exception as e:
+            logger.warning(f"Failed to submit prediction: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/predictions/list')
+    @login_required
+    def api_p2p_predictions_list():
+        """List all cached predictions across all subscribed streams."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'predictions': [], 'error': 'Prediction protocol not initialized'})
+
+            protocol = startup._prediction_protocol
+            limit = request.args.get('limit', 100, type=int)
+
+            # Get predictions from all cached streams
+            all_predictions = []
+            if hasattr(protocol, '_prediction_cache'):
+                for stream_id, predictions in protocol._prediction_cache.items():
+                    for pred in predictions[-limit:]:
+                        all_predictions.append({
+                            'hash': pred.hash,
+                            'stream_id': pred.stream_id,
+                            'value': pred.value,
+                            'target_time': pred.target_time,
+                            'predictor': pred.predictor,
+                            'created_at': pred.created_at,
+                            'confidence': pred.confidence,
+                        })
+
+            # Sort by created_at descending
+            all_predictions.sort(key=lambda x: x['created_at'], reverse=True)
+
+            return jsonify({
+                'predictions': all_predictions[:limit],
+                'total': len(all_predictions),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to list predictions: {e}")
+            return jsonify({'predictions': [], 'error': str(e)})
+
+    @app.route('/api/p2p/predictions/stream/<stream_id>')
+    @login_required
+    def api_p2p_predictions_stream(stream_id):
+        """Get predictions for a specific stream."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'predictions': [], 'error': 'Prediction protocol not initialized'})
+
+            protocol = startup._prediction_protocol
+            limit = request.args.get('limit', 100, type=int)
+
+            predictions = protocol.get_cached_predictions(stream_id, limit)
+            result = []
+            for pred in predictions:
+                result.append({
+                    'hash': pred.hash,
+                    'stream_id': pred.stream_id,
+                    'value': pred.value,
+                    'target_time': pred.target_time,
+                    'predictor': pred.predictor,
+                    'created_at': pred.created_at,
+                    'confidence': pred.confidence,
+                })
+
+            return jsonify({
+                'stream_id': stream_id,
+                'predictions': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get stream predictions: {e}")
+            return jsonify({'predictions': [], 'error': str(e)})
+
+    @app.route('/api/p2p/predictions/my')
+    @login_required
+    def api_p2p_predictions_my():
+        """Get my predictions."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'predictions': [], 'error': 'Prediction protocol not initialized'})
+
+            protocol = startup._prediction_protocol
+            stream_id = request.args.get('stream_id')  # Optional filter
+
+            predictions = protocol.get_my_predictions(stream_id)
+            result = []
+            for pred in predictions:
+                result.append({
+                    'hash': pred.hash,
+                    'stream_id': pred.stream_id,
+                    'value': pred.value,
+                    'target_time': pred.target_time,
+                    'predictor': pred.predictor,
+                    'created_at': pred.created_at,
+                    'confidence': pred.confidence,
+                })
+
+            # Sort by created_at descending
+            result.sort(key=lambda x: x['created_at'], reverse=True)
+
+            return jsonify({
+                'predictions': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get my predictions: {e}")
+            return jsonify({'predictions': [], 'error': str(e)})
+
+    @app.route('/api/p2p/predictions/scores')
+    @login_required
+    def api_p2p_predictions_scores():
+        """Get prediction scores (leaderboard)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'scores': [], 'error': 'Prediction protocol not initialized'})
+
+            protocol = startup._prediction_protocol
+            stream_id = request.args.get('stream_id')  # Optional filter
+            limit = request.args.get('limit', 50, type=int)
+
+            # Aggregate scores by predictor
+            predictor_scores = {}
+            if hasattr(protocol, '_score_cache'):
+                for sid, scores in protocol._score_cache.items():
+                    if stream_id and sid != stream_id:
+                        continue
+                    for score in scores:
+                        predictor = score.predictor
+                        if predictor not in predictor_scores:
+                            predictor_scores[predictor] = {
+                                'predictor': predictor,
+                                'total_predictions': 0,
+                                'total_score': 0.0,
+                                'avg_score': 0.0,
+                                'streams': set(),
+                            }
+                        predictor_scores[predictor]['total_predictions'] += 1
+                        predictor_scores[predictor]['total_score'] += score.score
+                        predictor_scores[predictor]['streams'].add(score.stream_id)
+
+            # Calculate averages and format
+            leaderboard = []
+            for predictor, data in predictor_scores.items():
+                if data['total_predictions'] > 0:
+                    data['avg_score'] = data['total_score'] / data['total_predictions']
+                data['streams'] = len(data['streams'])
+                del data['total_score']
+                leaderboard.append(data)
+
+            # Sort by average score descending
+            leaderboard.sort(key=lambda x: x['avg_score'], reverse=True)
+
+            # Add rank
+            for i, entry in enumerate(leaderboard[:limit]):
+                entry['rank'] = i + 1
+
+            return jsonify({
+                'scores': leaderboard[:limit],
+                'total_predictors': len(leaderboard),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get prediction scores: {e}")
+            return jsonify({'scores': [], 'error': str(e)})
+
+    @app.route('/api/p2p/predictions/subscribe', methods=['POST'])
+    @login_required
+    def api_p2p_predictions_subscribe():
+        """Subscribe to predictions for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'success': False, 'error': 'Prediction protocol not initialized'}), 503
+
+            protocol = startup._prediction_protocol
+
+            # Define a callback that will emit to websocket
+            def on_prediction(prediction):
+                try:
+                    from web.p2p_bridge import get_bridge
+                    bridge = get_bridge()
+                    if bridge:
+                        bridge._on_prediction(prediction)
+                except Exception as e:
+                    logger.debug(f"Failed to emit prediction: {e}")
+
+            async def do_subscribe():
+                return await protocol.subscribe_to_predictions(stream_id, on_prediction)
+
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_subscribe())
+            finally:
+                loop.close()
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Subscribed to predictions for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to subscribe'})
+
+        except Exception as e:
+            logger.warning(f"Failed to subscribe to predictions: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/predictions/unsubscribe', methods=['POST'])
+    @login_required
+    def api_p2p_predictions_unsubscribe():
+        """Unsubscribe from predictions for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({'success': False, 'error': 'Prediction protocol not initialized'}), 503
+
+            protocol = startup._prediction_protocol
+
+            async def do_unsubscribe():
+                return await protocol.unsubscribe_from_predictions(stream_id)
+
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_unsubscribe())
+            finally:
+                loop.close()
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Unsubscribed from predictions for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to unsubscribe or not subscribed'})
+
+        except Exception as e:
+            logger.warning(f"Failed to unsubscribe from predictions: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/predictions/stats')
+    @login_required
+    def api_p2p_predictions_stats():
+        """Get prediction protocol statistics."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
+                return jsonify({
+                    'started': False,
+                    'subscribed_streams': 0,
+                    'my_predictions': 0,
+                    'cached_predictions': 0,
+                    'cached_scores': 0,
+                })
+
+            protocol = startup._prediction_protocol
+            stats = protocol.get_stats()
+
+            # Get my average score
+            my_address = ''
+            if hasattr(protocol, 'evrmore_address'):
+                my_address = protocol.evrmore_address
+            my_avg_score = protocol.get_predictor_average_score(my_address) if my_address else 0.0
+
+            return jsonify({
+                'started': stats.get('started', False),
+                'subscribed_streams': stats.get('subscribed_streams', 0),
+                'my_predictions': stats.get('my_predictions', 0),
+                'cached_predictions': stats.get('cached_predictions', 0),
+                'cached_scores': stats.get('cached_scores', 0),
+                'my_average_score': round(my_avg_score, 4),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get prediction stats: {e}")
+            return jsonify({'error': str(e)})
+
+    # =========================================================================
+    # ORACLE/OBSERVATION PROTOCOL API ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/oracle/publish', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_publish():
+        """Publish an observation (must be registered oracle)."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            value = data.get('value')
+            timestamp = data.get('timestamp')
+            metadata = data.get('metadata', {})
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+            if value is None:
+                return jsonify({'success': False, 'error': 'value is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            oracle = startup._oracle_network
+
+            async def do_publish():
+                return await oracle.publish_observation(
+                    stream_id=stream_id,
+                    value=value,
+                    timestamp=int(timestamp) if timestamp else None,
+                    metadata=metadata
+                )
+
+            try:
+                loop = asyncio.new_event_loop()
+                observation = loop.run_until_complete(do_publish())
+            finally:
+                loop.close()
+
+            if observation:
+                return jsonify({
+                    'success': True,
+                    'observation': {
+                        'hash': observation.hash,
+                        'stream_id': observation.stream_id,
+                        'value': observation.value,
+                        'timestamp': observation.timestamp,
+                        'oracle': observation.oracle,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to publish observation'})
+
+        except Exception as e:
+            logger.warning(f"Failed to publish observation: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/oracle/observations/stream/<stream_id>')
+    @login_required
+    def api_p2p_oracle_observations_stream(stream_id):
+        """Get cached observations for a stream."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'observations': [], 'error': 'Oracle network not initialized'})
+
+            oracle = startup._oracle_network
+            limit = request.args.get('limit', 100, type=int)
+
+            observations = oracle.get_cached_observations(stream_id, limit)
+            result = []
+            for obs in observations:
+                result.append({
+                    'hash': obs.hash,
+                    'stream_id': obs.stream_id,
+                    'value': obs.value,
+                    'timestamp': obs.timestamp,
+                    'oracle': obs.oracle,
+                })
+
+            return jsonify({
+                'stream_id': stream_id,
+                'observations': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get stream observations: {e}")
+            return jsonify({'observations': [], 'error': str(e)})
+
+    @app.route('/api/p2p/oracle/observations/latest')
+    @login_required
+    def api_p2p_oracle_observations_latest():
+        """Get latest observations across all subscribed streams."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'observations': [], 'error': 'Oracle network not initialized'})
+
+            oracle = startup._oracle_network
+
+            # Get latest from each cached stream
+            latest = []
+            if hasattr(oracle, '_observation_cache'):
+                for stream_id, obs_list in oracle._observation_cache.items():
+                    if obs_list:
+                        obs = obs_list[-1]
+                        latest.append({
+                            'stream_id': stream_id,
+                            'value': obs.value,
+                            'timestamp': obs.timestamp,
+                            'oracle': obs.oracle,
+                            'hash': obs.hash,
+                        })
+
+            # Sort by timestamp descending
+            latest.sort(key=lambda x: x['timestamp'], reverse=True)
+
+            return jsonify({
+                'observations': latest,
+                'total': len(latest),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get latest observations: {e}")
+            return jsonify({'observations': [], 'error': str(e)})
+
+    @app.route('/api/p2p/oracle/oracles')
+    @login_required
+    def api_p2p_oracle_oracles():
+        """List all registered oracles."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'oracles': [], 'error': 'Oracle network not initialized'})
+
+            oracle = startup._oracle_network
+            stream_id = request.args.get('stream_id')  # Optional filter
+
+            oracles = []
+            if hasattr(oracle, '_oracle_registrations'):
+                for sid, registrations in oracle._oracle_registrations.items():
+                    if stream_id and sid != stream_id:
+                        continue
+                    for oracle_addr, reg in registrations.items():
+                        oracles.append({
+                            'stream_id': sid,
+                            'oracle': oracle_addr,
+                            'peer_id': reg.peer_id,
+                            'timestamp': reg.timestamp,
+                            'reputation': reg.reputation,
+                            'is_primary': reg.is_primary,
+                        })
+
+            return jsonify({
+                'oracles': oracles,
+                'total': len(oracles),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to list oracles: {e}")
+            return jsonify({'oracles': [], 'error': str(e)})
+
+    @app.route('/api/p2p/oracle/register', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_register():
+        """Register as an oracle for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            is_primary = data.get('is_primary', False)
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            oracle = startup._oracle_network
+
+            async def do_register():
+                return await oracle.register_as_oracle(stream_id, is_primary)
+
+            try:
+                loop = asyncio.new_event_loop()
+                registration = loop.run_until_complete(do_register())
+            finally:
+                loop.close()
+
+            if registration:
+                return jsonify({
+                    'success': True,
+                    'registration': {
+                        'stream_id': registration.stream_id,
+                        'oracle': registration.oracle,
+                        'peer_id': registration.peer_id,
+                        'timestamp': registration.timestamp,
+                        'is_primary': registration.is_primary,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to register'})
+
+        except Exception as e:
+            logger.warning(f"Failed to register as oracle: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/oracle/subscribe', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_subscribe():
+        """Subscribe to observations for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            oracle = startup._oracle_network
+
+            # Define a callback that will emit to websocket
+            def on_observation(observation):
+                try:
+                    from web.p2p_bridge import get_bridge
+                    bridge = get_bridge()
+                    if bridge:
+                        bridge._on_observation(observation)
+                except Exception as e:
+                    logger.debug(f"Failed to emit observation: {e}")
+
+            async def do_subscribe():
+                return await oracle.subscribe_to_stream(stream_id, on_observation)
+
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_subscribe())
+            finally:
+                loop.close()
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Subscribed to observations for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to subscribe'})
+
+        except Exception as e:
+            logger.warning(f"Failed to subscribe to observations: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/oracle/unsubscribe', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_unsubscribe():
+        """Unsubscribe from observations for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            oracle = startup._oracle_network
+
+            async def do_unsubscribe():
+                return await oracle.unsubscribe_from_stream(stream_id)
+
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_unsubscribe())
+            finally:
+                loop.close()
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Unsubscribed from observations for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to unsubscribe or not subscribed'})
+
+        except Exception as e:
+            logger.warning(f"Failed to unsubscribe from observations: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/oracle/stats')
+    @login_required
+    def api_p2p_oracle_stats():
+        """Get oracle network statistics."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({
+                    'started': False,
+                    'subscribed_streams': 0,
+                    'my_oracle_registrations': 0,
+                    'known_oracles': 0,
+                    'cached_observations': 0,
+                })
+
+            oracle = startup._oracle_network
+            stats = oracle.get_stats()
+
+            return jsonify({
+                'started': stats.get('started', False),
+                'subscribed_streams': stats.get('subscribed_streams', 0),
+                'my_oracle_registrations': stats.get('my_oracle_registrations', 0),
+                'known_oracles': stats.get('known_oracles', 0),
+                'cached_observations': stats.get('cached_observations', 0),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle stats: {e}")
+            return jsonify({'error': str(e)})
+
+    # =========================================================================
+    # STREAM REGISTRY API ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/streams/discover')
+    @login_required
+    def api_p2p_streams_discover():
+        """Discover available streams."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'streams': [], 'error': 'Stream registry not initialized'})
+
+            registry = startup._stream_registry
+            source = request.args.get('source')
+            datatype = request.args.get('datatype')
+            tags = request.args.getlist('tag')
+            limit = request.args.get('limit', 100, type=int)
+
+            async def do_discover():
+                return await registry.discover_streams(
+                    source=source,
+                    datatype=datatype,
+                    tags=tags if tags else None,
+                    limit=limit
+                )
+
+            try:
+                loop = asyncio.new_event_loop()
+                streams = loop.run_until_complete(do_discover())
+            finally:
+                loop.close()
+
+            result = []
+            for s in streams:
+                result.append({
+                    'stream_id': s.stream_id,
+                    'source': s.source,
+                    'stream': s.stream,
+                    'target': s.target,
+                    'datatype': s.datatype,
+                    'cadence': s.cadence,
+                    'predictor_slots': s.predictor_slots,
+                    'creator': s.creator,
+                    'description': s.description,
+                    'tags': s.tags,
+                })
+
+            return jsonify({
+                'streams': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to discover streams: {e}")
+            return jsonify({'streams': [], 'error': str(e)})
+
+    @app.route('/api/p2p/streams/claim', methods=['POST'])
+    @login_required
+    def api_p2p_streams_claim():
+        """Claim a predictor slot on a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            slot_index = data.get('slot_index')  # Optional
+            ttl = data.get('ttl')  # Optional
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            registry = startup._stream_registry
+
+            async def do_claim():
+                return await registry.claim_stream(
+                    stream_id=stream_id,
+                    slot_index=int(slot_index) if slot_index is not None else None,
+                    ttl=int(ttl) if ttl else None
+                )
+
+            try:
+                loop = asyncio.new_event_loop()
+                claim = loop.run_until_complete(do_claim())
+            finally:
+                loop.close()
+
+            if claim:
+                return jsonify({
+                    'success': True,
+                    'claim': {
+                        'stream_id': claim.stream_id,
+                        'slot_index': claim.slot_index,
+                        'predictor': claim.predictor,
+                        'timestamp': claim.timestamp,
+                        'expires': claim.expires,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to claim stream'})
+
+        except Exception as e:
+            logger.warning(f"Failed to claim stream: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/streams/release', methods=['POST'])
+    @login_required
+    def api_p2p_streams_release():
+        """Release claim on a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            registry = startup._stream_registry
+
+            async def do_release():
+                return await registry.release_claim(stream_id)
+
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_release())
+            finally:
+                loop.close()
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Released claim on {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to release claim or no claim exists'})
+
+        except Exception as e:
+            logger.warning(f"Failed to release claim: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/streams/my')
+    @login_required
+    def api_p2p_streams_my():
+        """Get my claimed streams."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'claims': [], 'error': 'Stream registry not initialized'})
+
+            registry = startup._stream_registry
+
+            async def do_get_my():
+                return await registry.get_my_streams()
+
+            try:
+                loop = asyncio.new_event_loop()
+                claims = loop.run_until_complete(do_get_my())
+            finally:
+                loop.close()
+
+            result = []
+            for c in claims:
+                result.append({
+                    'stream_id': c.stream_id,
+                    'slot_index': c.slot_index,
+                    'timestamp': c.timestamp,
+                    'expires': c.expires,
+                    'is_expired': c.is_expired(),
+                })
+
+            return jsonify({
+                'claims': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get my streams: {e}")
+            return jsonify({'claims': [], 'error': str(e)})
+
+    @app.route('/api/p2p/streams/definition/<stream_id>')
+    @login_required
+    def api_p2p_streams_definition(stream_id):
+        """Get stream definition by ID."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'stream': None, 'error': 'Stream registry not initialized'})
+
+            registry = startup._stream_registry
+
+            async def do_get():
+                return await registry.get_stream(stream_id)
+
+            try:
+                loop = asyncio.new_event_loop()
+                stream = loop.run_until_complete(do_get())
+            finally:
+                loop.close()
+
+            if stream:
+                return jsonify({
+                    'stream': {
+                        'stream_id': stream.stream_id,
+                        'source': stream.source,
+                        'stream': stream.stream,
+                        'target': stream.target,
+                        'datatype': stream.datatype,
+                        'cadence': stream.cadence,
+                        'predictor_slots': stream.predictor_slots,
+                        'creator': stream.creator,
+                        'timestamp': stream.timestamp,
+                        'description': stream.description,
+                        'tags': stream.tags,
+                    }
+                })
+            else:
+                return jsonify({'stream': None, 'error': 'Stream not found'})
+
+        except Exception as e:
+            logger.warning(f"Failed to get stream: {e}")
+            return jsonify({'stream': None, 'error': str(e)})
+
+    @app.route('/api/p2p/streams/predictors/<stream_id>')
+    @login_required
+    def api_p2p_streams_predictors(stream_id):
+        """Get predictors for a stream."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'predictors': [], 'error': 'Stream registry not initialized'})
+
+            registry = startup._stream_registry
+
+            async def do_get():
+                claims = await registry.get_stream_claims(stream_id)
+                return claims
+
+            try:
+                loop = asyncio.new_event_loop()
+                claims = loop.run_until_complete(do_get())
+            finally:
+                loop.close()
+
+            predictors = []
+            for c in claims:
+                predictors.append({
+                    'predictor': c.predictor,
+                    'slot_index': c.slot_index,
+                    'peer_id': c.peer_id,
+                    'timestamp': c.timestamp,
+                    'expires': c.expires,
+                    'stake': c.stake,
+                })
+
+            return jsonify({
+                'stream_id': stream_id,
+                'predictors': predictors,
+                'total': len(predictors),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get stream predictors: {e}")
+            return jsonify({'predictors': [], 'error': str(e)})
+
+    @app.route('/api/p2p/streams/register', methods=['POST'])
+    @login_required
+    def api_p2p_streams_register():
+        """Register a new stream definition."""
+        try:
+            from satorineuron.init import start
+            import asyncio
+
+            data = request.get_json() or {}
+            source = data.get('source')
+            stream = data.get('stream')
+            target = data.get('target')
+            datatype = data.get('datatype', 'numeric')
+            cadence = data.get('cadence', 60)
+            predictor_slots = data.get('predictor_slots', 10)
+            description = data.get('description', '')
+            tags = data.get('tags', [])
+
+            if not source or not stream or not target:
+                return jsonify({'success': False, 'error': 'source, stream, and target are required'}), 400
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            registry = startup._stream_registry
+
+            async def do_register():
+                return await registry.register_stream(
+                    source=source,
+                    stream=stream,
+                    target=target,
+                    datatype=datatype,
+                    cadence=int(cadence),
+                    predictor_slots=int(predictor_slots),
+                    description=description,
+                    tags=tags
+                )
+
+            try:
+                loop = asyncio.new_event_loop()
+                definition = loop.run_until_complete(do_register())
+            finally:
+                loop.close()
+
+            if definition:
+                return jsonify({
+                    'success': True,
+                    'stream': {
+                        'stream_id': definition.stream_id,
+                        'source': definition.source,
+                        'stream': definition.stream,
+                        'target': definition.target,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to register stream'})
+
+        except Exception as e:
+            logger.warning(f"Failed to register stream: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/streams/stats')
+    @login_required
+    def api_p2p_streams_stats():
+        """Get stream registry statistics."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
+                return jsonify({
+                    'started': False,
+                    'known_streams': 0,
+                    'my_claims': 0,
+                    'total_claims': 0,
+                })
+
+            registry = startup._stream_registry
+            stats = registry.get_stats()
+
+            return jsonify({
+                'started': stats.get('started', False),
+                'known_streams': stats.get('known_streams', 0),
+                'my_claims': stats.get('my_claims', 0),
+                'total_claims': stats.get('total_claims', 0),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get stream stats: {e}")
+            return jsonify({'error': str(e)})
+
+    # =========================================================================
+    # CONSENSUS ROUND ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/consensus/status')
+    @login_required
+    def api_p2p_consensus_status():
+        """Get current consensus round status."""
+        try:
+            from satorineuron.init import start
+            import time
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Try to get consensus manager from startup
+            consensus = None
+            if startup:
+                consensus = getattr(startup, '_consensus_manager', None)
+
+            if not consensus:
+                # Return placeholder data when consensus not running
+                return jsonify({
+                    'current_round': 0,
+                    'phase': 'inactive',
+                    'progress_percent': 0,
+                    'start_time': None,
+                    'end_time': None,
+                    'validators': 0,
+                    'total_votes': 0,
+                    'streams_in_round': 0,
+                    'quorum_percent': 0,
+                    'my_participation': None,
+                })
+
+            status = consensus.get_current_status()
+
+            return jsonify({
+                'current_round': status.get('round_id', 0),
+                'phase': status.get('phase', 'unknown'),
+                'progress_percent': status.get('progress_percent', 0),
+                'start_time': status.get('start_time'),
+                'end_time': status.get('end_time'),
+                'validators': status.get('validator_count', 0),
+                'total_votes': status.get('total_votes', 0),
+                'streams_in_round': status.get('streams_count', 0),
+                'quorum_percent': status.get('quorum_percent', 0),
+                'my_participation': status.get('my_participation'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get consensus status: {e}")
+            return jsonify({
+                'error': str(e),
+                'current_round': 0,
+                'phase': 'error',
+            })
+
+    @app.route('/api/p2p/consensus/history')
+    @login_required
+    def api_p2p_consensus_history():
+        """Get recent consensus round history."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 10, type=int)
+            limit = min(limit, 50)  # Cap at 50
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            consensus = None
+            if startup:
+                consensus = getattr(startup, '_consensus_manager', None)
+
+            if not consensus:
+                return jsonify({
+                    'rounds': [],
+                    'total_completed': 0,
+                })
+
+            history = consensus.get_round_history(limit=limit)
+
+            return jsonify({
+                'rounds': history.get('rounds', []),
+                'total_completed': history.get('total_completed', 0),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get consensus history: {e}")
+            return jsonify({
+                'error': str(e),
+                'rounds': [],
+                'total_completed': 0,
+            })
+
+    @app.route('/api/p2p/consensus/vote', methods=['POST'])
+    @login_required
+    def api_p2p_consensus_vote():
+        """Submit a consensus vote for prediction scores."""
+        try:
+            from satorineuron.init import start
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            scores = data.get('scores')  # Dict of predictor_address -> score
+
+            if not stream_id or not scores:
+                return jsonify({
+                    'success': False,
+                    'error': 'stream_id and scores are required',
+                })
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            consensus = None
+            if startup:
+                consensus = getattr(startup, '_consensus_manager', None)
+
+            if not consensus:
+                return jsonify({
+                    'success': False,
+                    'error': 'Consensus manager not available',
+                })
+
+            result = consensus.submit_vote(stream_id=stream_id, scores=scores)
+
+            return jsonify({
+                'success': result.get('success', False),
+                'vote_id': result.get('vote_id'),
+                'error': result.get('error'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to submit consensus vote: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+            })
+
+    # =========================================================================
+    # DISTRIBUTION STATUS ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/distribution/status')
+    @login_required
+    def api_p2p_distribution_status():
+        """Get current distribution status (read-only for all users)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Try to get distribution manager
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                # Return placeholder data when distribution not running
+                return jsonify({
+                    'last_distribution': None,
+                    'pending_distribution': None,
+                    'my_pending_reward': 0,
+                })
+
+            status = distribution.get_status()
+
+            return jsonify({
+                'last_distribution': status.get('last_distribution'),
+                'pending_distribution': status.get('pending_distribution'),
+                'my_pending_reward': status.get('my_pending_reward', 0),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get distribution status: {e}")
+            return jsonify({
+                'error': str(e),
+                'last_distribution': None,
+                'pending_distribution': None,
+                'my_pending_reward': 0,
+            })
+
+    @app.route('/api/p2p/distribution/history')
+    @login_required
+    def api_p2p_distribution_history():
+        """Get distribution history for the current user."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 20, type=int)
+            limit = min(limit, 100)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({
+                    'distributions': [],
+                    'total_earned': 0,
+                })
+
+            history = distribution.get_my_history(limit=limit)
+
+            return jsonify({
+                'distributions': history.get('distributions', []),
+                'total_earned': history.get('total_earned', 0),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get distribution history: {e}")
+            return jsonify({
+                'error': str(e),
+                'distributions': [],
+                'total_earned': 0,
+            })
+
+    # =========================================================================
+    # SIGNER-ONLY DISTRIBUTION ENDPOINTS
+    # =========================================================================
+
+    @app.route('/api/p2p/signer/distribution/status')
+    @login_required
+    def api_p2p_signer_distribution_status():
+        """Get distribution status for signers (includes control info)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # Check if user is a signer
+            # TODO: Add proper signer check
+            is_signer = True  # Placeholder
+
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({
+                    'status': 'not_ready',
+                    'pool_amount': 0,
+                    'eligible_count': 0,
+                    'consensus_round': None,
+                    'pending_distribution': None,
+                })
+
+            status = distribution.get_signer_status()
+
+            return jsonify({
+                'status': status.get('status', 'not_ready'),
+                'pool_amount': status.get('pool_amount', 0),
+                'eligible_count': status.get('eligible_count', 0),
+                'consensus_round': status.get('consensus_round'),
+                'pending_distribution': status.get('pending_distribution'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get signer distribution status: {e}")
+            return jsonify({
+                'error': str(e),
+                'status': 'error',
+            })
+
+    @app.route('/api/p2p/signer/distribution/history')
+    @login_required
+    def api_p2p_signer_distribution_history():
+        """Get distribution history for signers."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 10, type=int)
+            limit = min(limit, 50)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({'distributions': []})
+
+            history = distribution.get_all_history(limit=limit)
+
+            return jsonify({
+                'distributions': history.get('distributions', []),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get signer distribution history: {e}")
+            return jsonify({'error': str(e), 'distributions': []})
+
+    @app.route('/api/p2p/signer/distribution/trigger', methods=['POST'])
+    @login_required
+    def api_p2p_signer_distribution_trigger():
+        """Trigger a new distribution (signer only)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+
+            # TODO: Add proper signer verification
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({
+                    'success': False,
+                    'error': 'Distribution manager not available',
+                })
+
+            result = distribution.trigger_distribution()
+
+            return jsonify({
+                'success': result.get('success', False),
+                'distribution_id': result.get('distribution_id'),
+                'required_signatures': result.get('required_signatures', 3),
+                'error': result.get('error'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to trigger distribution: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+            })
+
+    @app.route('/api/p2p/signer/distribution/preview')
+    @login_required
+    def api_p2p_signer_distribution_preview():
+        """Preview the pending distribution (signer only)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({'error': 'Distribution manager not available'})
+
+            preview = distribution.get_preview()
+
+            return jsonify({
+                'round_id': preview.get('round_id'),
+                'pool_amount': preview.get('pool_amount', 0),
+                'recipient_count': preview.get('recipient_count', 0),
+                'top_recipients': preview.get('top_recipients', []),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get distribution preview: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/signer/distribution/sign', methods=['POST'])
+    @login_required
+    def api_p2p_signer_distribution_sign():
+        """Sign the pending distribution (signer only)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({
+                    'success': False,
+                    'error': 'Distribution manager not available',
+                })
+
+            result = distribution.sign_distribution()
+
+            return jsonify({
+                'success': result.get('success', False),
+                'signatures': result.get('signatures', 0),
+                'required': result.get('required', 3),
+                'error': result.get('error'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to sign distribution: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+            })
+
+    @app.route('/api/p2p/signer/distribution/reject', methods=['POST'])
+    @login_required
+    def api_p2p_signer_distribution_reject():
+        """Reject the pending distribution (signer only)."""
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            distribution = None
+            if startup:
+                distribution = getattr(startup, '_distribution_manager', None)
+
+            if not distribution:
+                return jsonify({
+                    'success': False,
+                    'error': 'Distribution manager not available',
+                })
+
+            result = distribution.reject_distribution()
+
+            return jsonify({
+                'success': result.get('success', False),
+                'error': result.get('error'),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to reject distribution: {e}")
+            return jsonify({
+                'success': False,
+                'error': str(e),
+            })
+

@@ -31,7 +31,7 @@
 #
 # =============================================================================
 
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 LABEL maintainer="Satori Network"
 LABEL description="Satori Lite - Self-contained lightweight neuron"
@@ -46,6 +46,7 @@ RUN apt-get update && \
         build-essential \
         cmake \
         libleveldb-dev \
+        libgmp-dev \
         git \
         curl && \
     apt-get clean && \
@@ -84,10 +85,19 @@ COPY tests /Satori/tests
 # Python Dependencies
 # =============================================================================
 
+# Install requirements first
+WORKDIR /Satori
 COPY requirements.txt /Satori/requirements.txt
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r /Satori/requirements.txt && \
+RUN pip install --upgrade pip setuptools wheel && \
+    grep -v "satorip2p" /Satori/requirements.txt > /tmp/requirements-filtered.txt && \
+    pip install --no-cache-dir -r /tmp/requirements-filtered.txt && \
     pip install pytest
+
+# Install satorip2p from GitHub
+# TODO: Update to SatoriNetwork/satorip2p once merged
+RUN pip install git+https://github.com/rvnminers-A-and-N/satorip2p.git@main && \
+    pip uninstall py-multihash -y 2>/dev/null || true && \
+    pip install pymultihash==0.8.2 --force-reinstall
 
 # =============================================================================
 # Environment Configuration
@@ -96,9 +106,10 @@ RUN pip install --upgrade pip && \
 # Python path - include all components
 ENV PYTHONPATH="/Satori/Lib:/Satori/Neuron:/Satori/Engine:/Satori/Streams:/Satori"
 
-# Default networking mode (can be overridden at runtime)
+# Networking mode is read from config file (/Satori/Neuron/config/config.yaml)
+# Can be overridden at runtime with -e SATORI_NETWORKING_MODE=hybrid
 # Options: central, hybrid, p2p
-ENV SATORI_NETWORKING_MODE="central"
+# ENV SATORI_NETWORKING_MODE is intentionally NOT set here to allow config file control
 
 # Wallet path
 ENV SATORI_WALLET_PATH="/root/.satori/wallet"
@@ -106,6 +117,13 @@ ENV SATORI_WALLET_PATH="/root/.satori/wallet"
 # Data paths
 ENV SATORI_DATA_PATH="/root/.satori/data"
 ENV SATORI_MODELS_PATH="/root/.satori/models"
+
+# =============================================================================
+# Default Configuration
+# =============================================================================
+
+# Copy config template as default config (hybrid mode enabled by default)
+RUN cp /Satori/Neuron/config/config.yaml.template /Satori/Neuron/config/config.yaml
 
 # =============================================================================
 # Symbolic Links for Compatibility

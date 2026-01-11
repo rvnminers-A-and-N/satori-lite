@@ -1,0 +1,485 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Predictions{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        <i class="material-icons align-middle me-2">insights</i>
+        Satori - Predictions
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('oracle_page') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">visibility</i>
+            Oracles
+        </a>
+        <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+            Governance
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <!-- Stats Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="myPredictions" class="mb-1" style="color: #00aaff;">--</h3>
+                    <small class="text-muted">My Predictions</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="cachedPredictions" class="mb-1 text-success">--</h3>
+                    <small class="text-muted">Cached Total</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="subscribedStreams" class="mb-1" style="color: #ffd700;">--</h3>
+                    <small class="text-muted">Subscribed Streams</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h4 id="myAvgScore" class="mb-1">--</h4>
+                    <small class="text-muted">My Average Score</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h4 id="protocolStatus" class="mb-1 text-success">--</h4>
+                    <small class="text-muted">Protocol Status</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Row -->
+    <div class="row g-4">
+        <!-- My Predictions Column -->
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">history</i>
+                        My Predictions
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadMyPredictions()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div id="myPredictionsList" style="max-height: 400px; overflow-y: auto;">
+                        <div class="text-center text-muted py-5">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboard Column -->
+        <div class="col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">leaderboard</i>
+                        Prediction Leaderboard
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadLeaderboard()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div id="leaderboardList" style="max-height: 400px; overflow-y: auto;">
+                        <div class="text-center text-muted py-5">Loading...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stream Subscription Row -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">notifications</i>
+                        Stream Subscriptions
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-8">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="subscribeStreamId" placeholder="Enter stream ID to subscribe to predictions">
+                                <button class="btn btn-primary" onclick="subscribeToPredictions()">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">add</i>
+                                    Subscribe
+                                </button>
+                                <button class="btn btn-outline-danger" onclick="unsubscribeFromPredictions()">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">remove</i>
+                                    Unsubscribe
+                                </button>
+                            </div>
+                            <small class="text-muted">Subscribe to receive real-time predictions from other predictors via P2P network</small>
+                        </div>
+                        <div class="col-md-4">
+                            <div id="subscriptionStatus" class="text-muted small"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Submit Prediction Row -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#submitPredictionCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">send</i>
+                        Submit Prediction
+                        <i class="material-icons align-middle float-end">expand_more</i>
+                    </h5>
+                </div>
+                <div class="collapse" id="submitPredictionCollapse">
+                    <div class="card-body">
+                        <form id="predictionForm" onsubmit="submitPrediction(event)">
+                            <div class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">Stream ID</label>
+                                    <input type="text" class="form-control" id="predStreamId" placeholder="e.g., exchange/binance/BTCUSDT" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Predicted Value</label>
+                                    <input type="number" class="form-control" id="predValue" placeholder="e.g., 45123.50" step="any" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Target Time (Unix)</label>
+                                    <input type="number" class="form-control" id="predTargetTime" placeholder="Unix timestamp" required>
+                                    <small class="text-muted">
+                                        <a href="#" onclick="setTargetTimeNow()">Set to +1 hour</a>
+                                    </small>
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="form-label">Confidence</label>
+                                    <input type="number" class="form-control" id="predConfidence" placeholder="0.0-1.0" min="0" max="1" step="0.01" value="0.5">
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">publish</i>
+                                    Submit Prediction
+                                </button>
+                                <span id="submitResult" class="ms-3"></span>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Network Predictions Row -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">public</i>
+                        Recent Network Predictions
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadAllPredictions()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Stream</th>
+                                    <th>Predictor</th>
+                                    <th>Value</th>
+                                    <th>Target Time</th>
+                                    <th>Confidence</th>
+                                    <th>Submitted</th>
+                                </tr>
+                            </thead>
+                            <tbody id="allPredictionsTable">
+                                <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// =========================================================================
+// PAGE INITIALIZATION
+// =========================================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize theme
+    const storedTheme = localStorage.getItem('satori-theme') || 'dark';
+    const themeIcon = document.getElementById('themeIcon');
+    if (themeIcon) {
+        themeIcon.textContent = storedTheme === 'dark' ? 'light_mode' : 'dark_mode';
+    }
+
+    // Load initial data
+    loadStats();
+    loadMyPredictions();
+    loadLeaderboard();
+    loadAllPredictions();
+
+    // Set up periodic refresh
+    setInterval(loadStats, 30000);
+    setInterval(loadMyPredictions, 60000);
+    setInterval(loadLeaderboard, 60000);
+    setInterval(loadAllPredictions, 30000);
+});
+
+// =========================================================================
+// API HELPER
+// =========================================================================
+
+async function apiCall(endpoint, method = 'GET', data = null) {
+    const options = {
+        method: method,
+        headers: { 'Content-Type': 'application/json' }
+    };
+    if (data) {
+        options.body = JSON.stringify(data);
+    }
+    const response = await fetch('/api' + endpoint, options);
+    return response.json();
+}
+
+// =========================================================================
+// DATA LOADING FUNCTIONS
+// =========================================================================
+
+async function loadStats() {
+    try {
+        const stats = await apiCall('/p2p/predictions/stats');
+        document.getElementById('myPredictions').textContent = stats.my_predictions || 0;
+        document.getElementById('cachedPredictions').textContent = stats.cached_predictions || 0;
+        document.getElementById('subscribedStreams').textContent = stats.subscribed_streams || 0;
+        document.getElementById('myAvgScore').textContent =
+            stats.my_average_score !== undefined ? (stats.my_average_score * 100).toFixed(1) + '%' : '--';
+        document.getElementById('protocolStatus').textContent = stats.started ? 'Active' : 'Offline';
+        document.getElementById('protocolStatus').className = stats.started ? 'mb-1 text-success' : 'mb-1 text-danger';
+    } catch (e) {
+        console.error('Failed to load stats:', e);
+    }
+}
+
+async function loadMyPredictions() {
+    const container = document.getElementById('myPredictionsList');
+    try {
+        const result = await apiCall('/p2p/predictions/my?limit=20');
+        if (result.predictions && result.predictions.length > 0) {
+            container.innerHTML = result.predictions.map(pred => {
+                const date = new Date(pred.created_at * 1000);
+                const targetDate = new Date(pred.target_time * 1000);
+                const streamShort = pred.stream_id.length > 30 ?
+                    pred.stream_id.substring(0, 30) + '...' : pred.stream_id;
+                return `<div class="p-3 border-bottom">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <strong class="text-truncate" title="${pred.stream_id}">${streamShort}</strong>
+                            <br><small class="text-muted">Target: ${targetDate.toLocaleString()}</small>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-primary fs-6">${pred.value}</span>
+                            ${pred.confidence > 0 ? `<br><small class="text-muted">${(pred.confidence * 100).toFixed(0)}% confidence</small>` : ''}
+                        </div>
+                    </div>
+                    <small class="text-muted">Submitted: ${date.toLocaleString()}</small>
+                </div>`;
+            }).join('');
+        } else {
+            container.innerHTML = '<div class="text-center text-muted py-5">No predictions yet. Submit your first prediction above!</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load my predictions:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load predictions</div>';
+    }
+}
+
+async function loadLeaderboard() {
+    const container = document.getElementById('leaderboardList');
+    try {
+        const result = await apiCall('/p2p/predictions/scores?limit=20');
+        if (result.scores && result.scores.length > 0) {
+            container.innerHTML = result.scores.map((entry, index) => {
+                const addrShort = entry.predictor.length > 12 ?
+                    entry.predictor.substring(0, 6) + '...' + entry.predictor.substring(entry.predictor.length - 4) :
+                    entry.predictor;
+                const rankClass = index === 0 ? 'bg-warning' : index === 1 ? 'bg-secondary' : index === 2 ? 'bg-danger' : 'bg-light text-dark';
+                return `<div class="p-3 border-bottom d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="badge ${rankClass} me-2">#${entry.rank}</span>
+                        <span title="${entry.predictor}">${addrShort}</span>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge bg-success fs-6">${(entry.avg_score * 100).toFixed(1)}%</span>
+                        <br><small class="text-muted">${entry.total_predictions} predictions</small>
+                    </div>
+                </div>`;
+            }).join('');
+        } else {
+            container.innerHTML = '<div class="text-center text-muted py-5">No scores yet. Predictions will be scored when actual observations arrive.</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load leaderboard:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load leaderboard</div>';
+    }
+}
+
+async function loadAllPredictions() {
+    const tbody = document.getElementById('allPredictionsTable');
+    try {
+        const result = await apiCall('/p2p/predictions/list?limit=25');
+        if (result.predictions && result.predictions.length > 0) {
+            tbody.innerHTML = result.predictions.map(pred => {
+                const date = new Date(pred.created_at * 1000);
+                const targetDate = new Date(pred.target_time * 1000);
+                const streamShort = pred.stream_id.length > 25 ?
+                    pred.stream_id.substring(0, 25) + '...' : pred.stream_id;
+                const predictorShort = pred.predictor.length > 12 ?
+                    pred.predictor.substring(0, 6) + '...' + pred.predictor.substring(pred.predictor.length - 4) :
+                    pred.predictor;
+                return `<tr>
+                    <td title="${pred.stream_id}">${streamShort}</td>
+                    <td title="${pred.predictor}"><code>${predictorShort}</code></td>
+                    <td><strong>${pred.value}</strong></td>
+                    <td>${targetDate.toLocaleString()}</td>
+                    <td>${pred.confidence > 0 ? (pred.confidence * 100).toFixed(0) + '%' : '--'}</td>
+                    <td>${date.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No predictions in cache. Subscribe to streams to see predictions.</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load all predictions:', e);
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">Failed to load predictions</td></tr>';
+    }
+}
+
+// =========================================================================
+// ACTION FUNCTIONS
+// =========================================================================
+
+async function subscribeToPredictions() {
+    const streamId = document.getElementById('subscribeStreamId').value.trim();
+    if (!streamId) {
+        alert('Please enter a stream ID');
+        return;
+    }
+
+    try {
+        const result = await apiCall('/p2p/predictions/subscribe', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Subscribed to ' + streamId);
+            document.getElementById('subscribeStreamId').value = '';
+            loadStats();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function unsubscribeFromPredictions() {
+    const streamId = document.getElementById('subscribeStreamId').value.trim();
+    if (!streamId) {
+        alert('Please enter a stream ID');
+        return;
+    }
+
+    try {
+        const result = await apiCall('/p2p/predictions/unsubscribe', 'POST', { stream_id: streamId });
+        if (result.success) {
+            alert('Unsubscribed from ' + streamId);
+            document.getElementById('subscribeStreamId').value = '';
+            loadStats();
+        } else {
+            alert('Failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function submitPrediction(event) {
+    event.preventDefault();
+
+    const streamId = document.getElementById('predStreamId').value.trim();
+    const value = parseFloat(document.getElementById('predValue').value);
+    const targetTime = parseInt(document.getElementById('predTargetTime').value);
+    const confidence = parseFloat(document.getElementById('predConfidence').value) || 0;
+
+    const resultSpan = document.getElementById('submitResult');
+    resultSpan.innerHTML = '<span class="text-info">Submitting...</span>';
+
+    try {
+        const result = await apiCall('/p2p/predictions/submit', 'POST', {
+            stream_id: streamId,
+            value: value,
+            target_time: targetTime,
+            confidence: confidence
+        });
+
+        if (result.success) {
+            resultSpan.innerHTML = '<span class="text-success">Prediction submitted!</span>';
+            document.getElementById('predictionForm').reset();
+            loadStats();
+            loadMyPredictions();
+            setTimeout(() => { resultSpan.innerHTML = ''; }, 3000);
+        } else {
+            resultSpan.innerHTML = '<span class="text-danger">Failed: ' + (result.error || 'Unknown') + '</span>';
+        }
+    } catch (e) {
+        resultSpan.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
+    }
+}
+
+function setTargetTimeNow() {
+    const oneHourFromNow = Math.floor(Date.now() / 1000) + 3600;
+    document.getElementById('predTargetTime').value = oneHourFromNow;
+    return false;
+}
+</script>
+{% endblock %}

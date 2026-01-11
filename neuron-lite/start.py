@@ -1,4 +1,7 @@
-from typing import Union
+# Note: No monkey-patching here to maintain compatibility with trio (used by libp2p)
+# Flask-SocketIO will use threading mode which works fine for our use case
+
+from typing import Union, Callable
 import os
 import time
 import json
@@ -54,14 +57,72 @@ SatoriServerClient = _get_server_client_class()
 
 
 def _get_networking_mode() -> str:
-    """Get the current networking mode from environment or config."""
+    """Get the current networking mode from config or environment.
+
+    Priority order:
+    1. Config file (allows runtime switching via UI)
+    2. Environment variable (fallback for Docker override)
+    3. Default: 'hybrid'
+    """
+    # Check config file first (allows UI changes to take effect)
+    try:
+        mode = config.get().get('networking mode')
+        if mode:
+            return mode.lower().strip()
+    except Exception:
+        pass
+
+    # Fallback to environment variable
     mode = os.environ.get('SATORI_NETWORKING_MODE')
-    if mode is None:
-        try:
-            mode = config.get().get('networking mode', 'central')
-        except Exception:
-            mode = 'central'
-    return mode.lower().strip()
+    if mode:
+        return mode.lower().strip()
+
+    return 'hybrid'
+
+
+def _set_networking_mode(new_mode: str) -> bool:
+    """
+    Set the networking mode.
+
+    Updates both the environment variable (for current process) and
+    the config file (for persistence across restarts).
+
+    Note: A full restart is recommended for the change to fully take effect,
+    as P2P components may already be initialized.
+
+    Args:
+        new_mode: One of 'central', 'hybrid', or 'p2p'
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import yaml
+
+    new_mode = new_mode.lower().strip()
+    if new_mode not in ('central', 'hybrid', 'p2p'):
+        logging.warning(f"Invalid networking mode: {new_mode}")
+        return False
+
+    try:
+        # Update environment variable for current process
+        os.environ['SATORI_NETWORKING_MODE'] = new_mode
+
+        # Save to config file for persistence
+        config_path = config.root('config', 'config.yaml')
+        cfg = {}
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                cfg = yaml.safe_load(f) or {}
+        cfg['networking mode'] = new_mode
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        with open(config_path, 'w') as f:
+            yaml.dump(cfg, f, default_flow_style=False)
+
+        logging.info(f"Networking mode set to: {new_mode}", color="cyan")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to set networking mode: {e}")
+        return False
 
 
 # P2P Module Imports (lazy-loaded for optional dependency)
@@ -125,7 +186,7 @@ def _get_p2p_modules():
         )
         from satorip2p.protocol.identify import (
             IdentifyProtocol, PeerIdentity, IdentifyRequest,
-            IDENTIFY_TOPIC, IDENTIFY_REQUEST_TOPIC, IDENTITY_CACHE_TTL,
+            IDENTIFY_TOPIC, IDENTIFY_REQUEST_TOPIC,
         )
         from satorip2p.signing import (
             EvrmoreWallet as P2PEvrmoreWallet,
@@ -235,7 +296,6 @@ def _get_p2p_modules():
             'IdentifyRequest': IdentifyRequest,
             'IDENTIFY_TOPIC': IDENTIFY_TOPIC,
             'IDENTIFY_REQUEST_TOPIC': IDENTIFY_REQUEST_TOPIC,
-            'IDENTITY_CACHE_TTL': IDENTITY_CACHE_TTL,
         }
     except ImportError:
         return {'available': False}
@@ -817,16 +877,19 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             except Exception as e:
                 logging.warning(f"P2P announcement failed: {e}")
 
-        # Run async announcement
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_announce())
-            else:
-                loop.run_until_complete(_announce())
-        except RuntimeError:
-            # No event loop, create one
-            asyncio.run(_announce())
+        # Run P2P announcement in a dedicated thread with trio
+        # satorip2p uses trio internally (via libp2p), so we use trio.run() directly
+        def run_p2p():
+            import trio
+            try:
+                trio.run(_announce)
+            except Exception as e:
+                logging.warning(f"P2P announcement failed: {e}")
+
+        p2p_thread = threading.Thread(target=run_p2p, daemon=True)
+        p2p_thread.start()
+        # Give P2P time to start before continuing
+        p2p_thread.join(timeout=30)
 
     def initializeP2PComponents(self):
         """
@@ -879,7 +942,16 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                             wallet=self.identity,
                         )
                         await self._uptime_tracker.start()
-                        logging.info("P2P uptime tracker initialized", color="cyan")
+                        # Start heartbeat loop as background task (queued until run_forever starts)
+                        if hasattr(self._p2p_peers, 'spawn_background_task'):
+                            self._p2p_peers.spawn_background_task(self._uptime_tracker.run_heartbeat_loop)
+                        logging.info("P2P uptime tracker initialized with heartbeat loop", color="cyan")
+                        # Wire to WebSocket bridge for real-time UI updates
+                        try:
+                            from web.p2p_bridge import get_bridge
+                            get_bridge().wire_protocol('uptime_tracker', self._uptime_tracker)
+                        except Exception:
+                            pass  # Bridge may not be started yet
                     except Exception as e:
                         logging.warning(f"Failed to initialize uptime tracker: {e}")
 
@@ -900,6 +972,12 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         )
                         await self._consensus_manager.start()
                         logging.info("P2P consensus manager initialized", color="cyan")
+                        # Wire to WebSocket bridge for real-time UI updates
+                        try:
+                            from web.p2p_bridge import get_bridge
+                            get_bridge().wire_protocol('consensus_manager', self._consensus_manager)
+                        except Exception:
+                            pass  # Bridge may not be started yet
                     except Exception as e:
                         logging.warning(f"Failed to initialize consensus manager: {e}")
 
@@ -908,10 +986,11 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     try:
                         self._distribution_trigger = DistributionTrigger(
                             peers=self._p2p_peers,
-                            wallet=self.identity,
                             consensus_manager=getattr(self, '_consensus_manager', None),
                         )
                         await self._distribution_trigger.start()
+                        # Alias for routes.py compatibility
+                        self._distribution_manager = self._distribution_trigger
                         logging.info("P2P distribution trigger initialized", color="cyan")
                     except Exception as e:
                         logging.warning(f"Failed to initialize distribution trigger: {e}")
@@ -993,7 +1072,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         from satorip2p.protocol.alerts import TreasuryAlertManager
                         self._alert_manager = TreasuryAlertManager(
                             peers=self._p2p_peers,
-                            wallet=self.identity,
                         )
                         await self._alert_manager.start()
                         logging.info("P2P treasury alert manager initialized", color="cyan")
@@ -1013,12 +1091,17 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 if not hasattr(self, '_donation_manager') or self._donation_manager is None:
                     try:
                         from satorip2p.protocol.donation import DonationManager
-                        self._donation_manager = DonationManager(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._donation_manager.start()
-                        logging.info("P2P donation manager initialized", color="cyan")
+                        # DonationManager requires wallet and treasury_address
+                        treasury_addr = getattr(self, 'treasury_address', None)
+                        if self.identity and treasury_addr:
+                            self._donation_manager = DonationManager(
+                                wallet=self.identity,
+                                treasury_address=treasury_addr,
+                            )
+                            await self._donation_manager.start()
+                            logging.info("P2P donation manager initialized", color="cyan")
+                        else:
+                            logging.debug("Skipping donation manager - no treasury address configured")
                     except Exception as e:
                         logging.warning(f"Failed to initialize donation manager: {e}")
 
@@ -1043,19 +1126,19 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         DeferredRewardsStorage = get_p2p_module('DeferredRewardsStorage')
                         AlertStorage = get_p2p_module('AlertStorage')
                         if StorageManager:
-                            import os
-                            storage_dir = os.path.expanduser('~/.satori/storage')
+                            from pathlib import Path
+                            storage_dir = Path.home() / '.satori' / 'storage'
                             self._storage_manager = StorageManager(storage_dir=storage_dir)
                             # Create specialized storage for deferred rewards and alerts
                             if DeferredRewardsStorage:
                                 self._deferred_rewards_storage = DeferredRewardsStorage(
                                     storage_dir=storage_dir,
-                                    dht_client=getattr(self._p2p_peers, 'dht', None) if self._p2p_peers else None,
+                                    peers=self._p2p_peers,
                                 )
                             if AlertStorage:
                                 self._alert_storage = AlertStorage(
                                     storage_dir=storage_dir,
-                                    dht_client=getattr(self._p2p_peers, 'dht', None) if self._p2p_peers else None,
+                                    peers=self._p2p_peers,
                                 )
                             logging.info("P2P storage manager initialized (redundant storage enabled)", color="cyan")
                     except Exception as e:
@@ -1064,13 +1147,16 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 # 16. Initialize Bandwidth Tracker & QoS Manager
                 if not hasattr(self, '_bandwidth_tracker') or self._bandwidth_tracker is None:
                     try:
-                        BandwidthTracker = get_p2p_module('BandwidthTracker')
                         create_qos_manager = get_p2p_module('create_qos_manager')
-                        if BandwidthTracker:
-                            self._bandwidth_tracker = BandwidthTracker()
-                            if create_qos_manager:
-                                self._qos_manager = create_qos_manager(self._bandwidth_tracker)
+                        if create_qos_manager:
+                            # create_qos_manager returns (BandwidthTracker, QoSManager) tuple
+                            self._bandwidth_tracker, self._qos_manager = create_qos_manager()
+                            # Wire bandwidth tracker to Peers for automatic traffic accounting
+                            if self._p2p_peers and hasattr(self._p2p_peers, 'set_bandwidth_tracker'):
+                                self._p2p_peers.set_bandwidth_tracker(self._bandwidth_tracker)
                             logging.info("P2P bandwidth tracker and QoS manager initialized", color="cyan")
+                        else:
+                            logging.warning("create_qos_manager not available")
                     except Exception as e:
                         logging.warning(f"Failed to initialize bandwidth tracker: {e}")
 
@@ -1152,7 +1238,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
                 logging.info("P2P components initialization complete", color="cyan")
 
-                # 15. Initialize StreamManager (oracle data streams)
+                # 21. Initialize StreamManager (oracle data streams)
                 try:
                     from streams_lite import StreamManager
                     if not hasattr(self, '_stream_manager') or self._stream_manager is None:
@@ -1168,20 +1254,56 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 except Exception as e:
                     logging.warning(f"StreamManager initialization failed: {e}")
 
+                # 22. Initialize Governance Protocol
+                if not hasattr(self, '_governance') or self._governance is None:
+                    try:
+                        from satorip2p.protocol.governance import GovernanceProtocol
+                        self._governance = GovernanceProtocol(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._governance.start()
+                        # Wire uptime tracker for uptime-based voting power
+                        if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
+                            if hasattr(self._governance, 'set_uptime_tracker'):
+                                self._governance.set_uptime_tracker(self._uptime_tracker)
+                        # Wire wallet for stake-based voting power
+                        if self.identity is not None:
+                            if hasattr(self._governance, 'set_wallet'):
+                                self._governance.set_wallet(self.identity)
+                        # Wire activity storage for governance participation tracking
+                        if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
+                            if hasattr(self._uptime_tracker, '_activity_storage') and self._uptime_tracker._activity_storage:
+                                if hasattr(self._governance, 'set_activity_storage'):
+                                    self._governance.set_activity_storage(self._uptime_tracker._activity_storage)
+                        logging.info("P2P governance protocol initialized", color="cyan")
+                        # Wire to WebSocket bridge for real-time UI updates
+                        try:
+                            from web.p2p_bridge import get_bridge
+                            get_bridge().wire_protocol('governance_manager', self._governance)
+                        except Exception:
+                            pass  # Bridge may not be started yet
+                    except Exception as e:
+                        logging.warning(f"Failed to initialize governance protocol: {e}")
+
             except ImportError as e:
                 logging.debug(f"satorip2p not available: {e}")
             except Exception as e:
                 logging.warning(f"P2P component initialization failed: {e}")
 
-        # Run async initialization
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.create_task(_initialize())
-            else:
-                loop.run_until_complete(_initialize())
-        except RuntimeError:
-            asyncio.run(_initialize())
+        # Run P2P initialization in a dedicated thread with trio
+        # satorip2p uses trio internally (via libp2p)
+        def run_p2p_init():
+            import trio
+            try:
+                trio.run(_initialize)
+            except Exception as e:
+                logging.warning(f"P2P component initialization failed: {e}")
+
+        p2p_init_thread = threading.Thread(target=run_p2p_init, daemon=True)
+        p2p_init_thread.start()
+        # Don't block - P2P components initialize in background
+        # They'll be available once initialization completes
 
     def discoverStreams(
         self,
@@ -2267,20 +2389,42 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
         # Connect vault to web routes
         set_vault(startupDag.walletManager)
 
-        # Wire P2P event callbacks to WebSocket emission
-        _wire_p2p_events_to_websocket(startupDag, sendToUI)
+        # Start P2P WebSocket bridge for real-time UI updates
+        try:
+            from web.p2p_bridge import start_bridge
+            start_bridge(
+                peers=getattr(startupDag, '_p2p_peers', None),
+                prediction_protocol=getattr(startupDag, '_prediction_protocol', None),
+                oracle_network=getattr(startupDag, '_oracle_network', None),
+                consensus_manager=getattr(startupDag, '_consensus_manager', None),
+                uptime_tracker=getattr(startupDag, '_uptime_tracker', None),
+                lending_manager=getattr(startupDag, '_lending_manager', None),
+                delegation_manager=getattr(startupDag, '_delegation_manager', None),
+            )
+        except ImportError:
+            logging.debug("P2P WebSocket bridge not available")
+        except Exception as e:
+            logging.warning(f"Failed to start P2P WebSocket bridge: {e}")
 
         def run_flask():
-            # Suppress Flask/werkzeug logging
-            import logging as stdlib_logging
-            werkzeug_logger = stdlib_logging.getLogger('werkzeug')
-            werkzeug_logger.setLevel(stdlib_logging.ERROR)
+            import subprocess
+            import sys
 
-            # Use SocketIO server if available (for real-time updates)
-            if socketio:
-                socketio.run(app, host=host, port=port, debug=False, use_reloader=False)
-            else:
-                app.run(host=host, port=port, debug=False, use_reloader=False)
+            # Use gunicorn for production-ready WSGI serving
+            # This works with threading mode which is compatible with trio (P2P/libp2p)
+            # gunicorn is required - no fallback to avoid unsafe werkzeug dev server
+            cmd = [
+                sys.executable, '-m', 'gunicorn',
+                '--bind', f'{host}:{port}',
+                '--workers', '1',
+                '--threads', '4',
+                '--worker-class', 'gthread',
+                '--timeout', '120',
+                '--log-level', 'warning',
+                'web.wsgi:app'
+            ]
+            logging.info(f"Starting Web UI with gunicorn at http://{host}:{port}", color="cyan")
+            subprocess.run(cmd, check=True)
 
         web_thread = threading.Thread(target=run_flask, daemon=True)
         web_thread.start()
@@ -2292,166 +2436,6 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
     except Exception as e:
         logging.error(f"Failed to start Web UI: {e}")
         return None
-
-
-def _wire_p2p_events_to_websocket(startupDag: StartupDag, sendToUI):
-    """
-    Wire P2P component callbacks to WebSocket event emission.
-
-    This enables real-time updates in the web dashboard for:
-    - Heartbeats from network peers
-    - Predictions published/received
-    - Observations from oracles
-    - Consensus phase changes
-    - Pool/lending updates
-    - Delegation changes
-    """
-    import asyncio
-
-    # Heartbeat callback
-    def on_heartbeat(heartbeat):
-        """Called when a heartbeat is received from the network."""
-        try:
-            sendToUI('heartbeat', {
-                'node_id': heartbeat.node_id[:16] + '...' if len(heartbeat.node_id) > 16 else heartbeat.node_id,
-                'address': getattr(heartbeat, 'evrmore_address', '')[:12] + '...',
-                'timestamp': heartbeat.timestamp,
-                'roles': getattr(heartbeat, 'roles', []),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit heartbeat: {e}")
-
-    # Prediction callback
-    def on_prediction(prediction):
-        """Called when a prediction is received."""
-        try:
-            sendToUI('prediction', {
-                'stream_id': prediction.stream_id[:16] + '...' if len(prediction.stream_id) > 16 else prediction.stream_id,
-                'predictor': getattr(prediction, 'predictor', '')[:12] + '...',
-                'value': getattr(prediction, 'value', None),
-                'timestamp': getattr(prediction, 'timestamp', None),
-                'target_time': getattr(prediction, 'target_time', None),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit prediction: {e}")
-
-    # Observation callback
-    def on_observation(observation):
-        """Called when an observation is received from an oracle."""
-        try:
-            sendToUI('observation', {
-                'stream_id': observation.stream_id[:16] + '...' if len(observation.stream_id) > 16 else observation.stream_id,
-                'oracle': getattr(observation, 'oracle', '')[:12] + '...',
-                'value': getattr(observation, 'value', None),
-                'timestamp': getattr(observation, 'timestamp', None),
-                'hash': getattr(observation, 'hash', None),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit observation: {e}")
-
-    # Consensus callback
-    def on_consensus_change(phase, round_id=None):
-        """Called when consensus phase changes."""
-        try:
-            sendToUI('consensus', {
-                'phase': str(phase),
-                'round_id': round_id,
-                'timestamp': int(time.time()),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit consensus: {e}")
-
-    # Pool/lending callback
-    def on_pool_update(update_type, data):
-        """Called when pool/lending status changes."""
-        try:
-            sendToUI('pool_update', {
-                'type': update_type,
-                'data': data,
-                'timestamp': int(time.time()),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit pool update: {e}")
-
-    # Delegation callback
-    def on_delegation_update(update_type, data):
-        """Called when delegation status changes."""
-        try:
-            sendToUI('delegation_update', {
-                'type': update_type,
-                'data': data,
-                'timestamp': int(time.time()),
-            })
-        except Exception as e:
-            logging.debug(f"Failed to emit delegation update: {e}")
-
-    # Wire callbacks to P2P components
-    async def _wire_callbacks():
-        try:
-            # Wire uptime tracker for heartbeats
-            if hasattr(startupDag, '_uptime_tracker') and startupDag._uptime_tracker:
-                tracker = startupDag._uptime_tracker
-                if hasattr(tracker, 'on_heartbeat_received'):
-                    tracker.on_heartbeat_received = on_heartbeat
-                elif hasattr(tracker, 'set_callback'):
-                    tracker.set_callback('heartbeat', on_heartbeat)
-
-            # Wire prediction protocol
-            if hasattr(startupDag, '_prediction_protocol') and startupDag._prediction_protocol:
-                proto = startupDag._prediction_protocol
-                if hasattr(proto, 'on_prediction_received'):
-                    proto.on_prediction_received = on_prediction
-                elif hasattr(proto, 'set_callback'):
-                    proto.set_callback('prediction', on_prediction)
-
-            # Wire oracle network
-            if hasattr(startupDag, '_oracle_network') and startupDag._oracle_network:
-                oracle = startupDag._oracle_network
-                if hasattr(oracle, 'on_observation_received'):
-                    oracle.on_observation_received = on_observation
-                elif hasattr(oracle, 'set_callback'):
-                    oracle.set_callback('observation', on_observation)
-
-            # Wire consensus manager
-            if hasattr(startupDag, '_consensus_manager') and startupDag._consensus_manager:
-                consensus = startupDag._consensus_manager
-                if hasattr(consensus, 'on_phase_change'):
-                    consensus.on_phase_change = on_consensus_change
-                elif hasattr(consensus, 'set_callback'):
-                    consensus.set_callback('phase_change', on_consensus_change)
-
-            # Wire lending manager
-            if hasattr(startupDag, '_lending_manager') and startupDag._lending_manager:
-                lending = startupDag._lending_manager
-                if hasattr(lending, 'on_update'):
-                    lending.on_update = lambda data: on_pool_update('lending', data)
-                elif hasattr(lending, 'set_callback'):
-                    lending.set_callback('update', lambda data: on_pool_update('lending', data))
-
-            # Wire delegation manager
-            if hasattr(startupDag, '_delegation_manager') and startupDag._delegation_manager:
-                delegation = startupDag._delegation_manager
-                if hasattr(delegation, 'on_update'):
-                    delegation.on_update = lambda data: on_delegation_update('delegation', data)
-                elif hasattr(delegation, 'set_callback'):
-                    delegation.set_callback('update', lambda data: on_delegation_update('delegation', data))
-
-            logging.debug("P2P event callbacks wired to WebSocket")
-
-        except Exception as e:
-            logging.warning(f"Failed to wire P2P callbacks: {e}")
-
-    # Run callback wiring (with delay to ensure P2P components are initialized)
-    def wire_with_delay():
-        time.sleep(5)  # Wait for P2P components to initialize
-        try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(_wire_callbacks())
-            loop.close()
-        except Exception as e:
-            logging.debug(f"Async callback wiring failed: {e}")
-
-    threading.Thread(target=wire_with_delay, daemon=True).start()
 
 
 if __name__ == "__main__":

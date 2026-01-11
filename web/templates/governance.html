@@ -1,0 +1,558 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Governance{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        <i class="material-icons align-middle me-2">how_to_vote</i>
+        Satori - Governance
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('stake_management') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">handshake</i>
+            Stake
+        </a>
+        <a href="{{ url_for('restart_neuron') }}" class="btn btn-outline-light btn-sm me-2" title="Restart Node" onclick="return confirm('Restart your Satori node?');">
+            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <!-- Stats Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="activeCount" class="mb-1" style="color: #ffd700;">0</h3>
+                    <small class="text-muted">Active</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="passedCount" class="mb-1 text-success">0</h3>
+                    <small class="text-muted">Passed</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h3 id="rejectedCount" class="mb-1 text-danger">0</h3>
+                    <small class="text-muted">Rejected</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h4 id="myStake" class="mb-1">0</h4>
+                    <small class="text-muted">My Stake (SATORI)</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3 col-6">
+            <div class="card text-center h-100">
+                <div class="card-body py-3">
+                    <h4 id="myVotingPower" class="mb-1" style="color: #00aaff;">0</h4>
+                    <small class="text-muted">Voting Power</small>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Proposals Card - Full Width -->
+    <div class="row g-4 mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">ballot</i>
+                        Proposals
+                    </h5>
+                    <div class="d-flex align-items-center">
+                        <select id="statusFilter" class="form-select form-select-sm d-inline-block me-2" style="width: auto;" onchange="loadProposals()">
+                            <option value="all">All</option>
+                            <option value="active" selected>Active</option>
+                            <option value="passed">Passed</option>
+                            <option value="rejected">Rejected</option>
+                            <option value="executed">Executed</option>
+                        </select>
+                        <div class="d-flex flex-column align-items-end">
+                            <button id="createProposalBtn" class="btn btn-primary btn-sm" onclick="showCreateProposal()" disabled>
+                                <i class="material-icons align-middle" style="font-size: 16px;">add</i>
+                                New Proposal
+                            </button>
+                            <small id="stakeRequiredHint" class="text-muted mt-1" style="font-size: 11px;">
+                                <i class="material-icons align-middle" style="font-size: 12px;">info</i>
+                                Stake required to create proposals
+                            </small>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <!-- Pinned Proposals -->
+                    <div id="pinnedProposals" style="display: none;">
+                        <div class="bg-warning bg-opacity-10 p-2 border-bottom">
+                            <small class="text-warning fw-bold"><i class="material-icons align-middle" style="font-size: 14px;">push_pin</i> Pinned</small>
+                        </div>
+                        <div id="pinnedList"></div>
+                    </div>
+
+                    <!-- Regular Proposals -->
+                    <div id="proposalsList" style="max-height: 600px; overflow-y: auto;">
+                        <div class="text-center text-muted py-5">Loading proposals...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Proposal Details Row - Full Width (shown when proposal selected) -->
+    <div class="row g-4" id="detailsRow" style="display: none;">
+        <div class="col-md-8">
+            <!-- Selected Proposal Details -->
+            <div class="card" id="proposalDetails">
+                <div class="card-header">
+                    <h6 class="mb-0" id="detailTitle">Proposal Details</h6>
+                </div>
+                <div class="card-body">
+                    <div id="detailContent"></div>
+
+                    <!-- Voting Buttons -->
+                    <div id="votingButtons" class="mt-3" style="display: none;">
+                        <div class="btn-group w-100" id="voteButtonGroup">
+                            <button id="voteYesBtn" onclick="vote('yes')" class="btn btn-success">
+                                <i class="material-icons align-middle">thumb_up</i> Yes
+                            </button>
+                            <button id="voteNoBtn" onclick="vote('no')" class="btn btn-danger">
+                                <i class="material-icons align-middle">thumb_down</i> No
+                            </button>
+                            <button id="voteAbstainBtn" onclick="vote('abstain')" class="btn btn-secondary">Abstain</button>
+                        </div>
+                        <small id="noStakeWarning" class="text-muted d-block text-center mt-2" style="display: none;">
+                            <i class="material-icons align-middle" style="font-size: 14px;">info</i>
+                            Stake required to vote
+                        </small>
+                    </div>
+
+                    <!-- Already Voted Indicator -->
+                    <div id="alreadyVoted" class="mt-3 text-center" style="display: none;">
+                        <span class="badge bg-info fs-6" id="myVoteBadge">
+                            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+                            You voted: <span id="myVoteChoice">--</span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <!-- Comments Section -->
+            <div class="card" id="commentsCard">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">
+                        <i class="material-icons align-middle me-1" style="font-size: 16px;">chat</i>
+                        Discussion
+                    </h6>
+                    <span id="commentCount" class="badge bg-secondary">0</span>
+                </div>
+                <div class="card-body p-0">
+                    <div id="commentsList" style="max-height: 300px; overflow-y: auto;"></div>
+                    <div class="p-3 border-top">
+                        <div class="input-group">
+                            <input type="text" id="commentInput" class="form-control form-control-sm" placeholder="Add a comment...">
+                            <button onclick="addComment()" class="btn btn-sm btn-primary">Post</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Proposal Modal -->
+<div class="modal fade" id="createModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create Proposal</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="proposalForm">
+                    <div class="mb-3">
+                        <label class="form-label">Title</label>
+                        <input type="text" class="form-control" id="proposalTitle" required maxlength="100">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Description</label>
+                        <textarea class="form-control" id="proposalDescription" rows="5" required></textarea>
+                        <small class="text-muted">Use markdown for formatting</small>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Type</label>
+                            <select class="form-select" id="proposalType">
+                                <option value="community">Community</option>
+                                <option value="parameter_change">Parameter Change</option>
+                                <option value="feature_toggle">Feature Toggle</option>
+                                <option value="treasury_spend">Treasury Spend</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Voting Period (days)</label>
+                            <input type="number" class="form-control" id="proposalDays" value="7" min="3" max="30">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="submitProposal()">Submit Proposal</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let selectedProposalId = null;
+let allProposals = [];
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadStatus();
+    loadProposals();
+    setInterval(loadStatus, 30000);
+    setInterval(loadProposals, 30000);
+});
+
+function loadStatus() {
+    fetch('/api/p2p/governance/status')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('activeCount').textContent = data.active_proposals || 0;
+            document.getElementById('passedCount').textContent = data.passed_proposals || 0;
+            document.getElementById('rejectedCount').textContent = data.rejected_proposals || 0;
+            document.getElementById('myStake').textContent = (data.my_stake || 0).toFixed(1);
+            document.getElementById('myVotingPower').textContent = (data.my_voting_power || 0).toFixed(1);
+
+            // Enable/disable proposal button based on stake
+            const proposalBtn = document.getElementById('createProposalBtn');
+            const stakeHint = document.getElementById('stakeRequiredHint');
+            if (data.can_propose) {
+                proposalBtn.disabled = false;
+                if (stakeHint) stakeHint.style.display = 'none';
+            } else {
+                proposalBtn.disabled = true;
+                if (stakeHint) stakeHint.style.display = 'block';
+            }
+
+            // Store voting ability for later use
+            window.canVoteGlobal = data.can_vote || data.my_stake > 0;
+        });
+}
+
+function loadProposals() {
+    const filter = document.getElementById('statusFilter').value;
+
+    fetch('/api/p2p/governance/proposals')
+        .then(r => r.json())
+        .then(data => {
+            allProposals = data.proposals || [];
+
+            // Filter proposals
+            let filtered = allProposals;
+            if (filter !== 'all') {
+                filtered = allProposals.filter(p => p.status === filter);
+            }
+
+            // Separate pinned
+            const pinned = filtered.filter(p => p.pinned);
+            const regular = filtered.filter(p => !p.pinned);
+
+            // Render pinned
+            if (pinned.length > 0) {
+                document.getElementById('pinnedProposals').style.display = 'block';
+                document.getElementById('pinnedList').innerHTML = pinned.map(renderProposalRow).join('');
+            } else {
+                document.getElementById('pinnedProposals').style.display = 'none';
+            }
+
+            // Render regular
+            if (regular.length > 0) {
+                document.getElementById('proposalsList').innerHTML = regular.map(renderProposalRow).join('');
+            } else {
+                document.getElementById('proposalsList').innerHTML = '<div class="text-center text-muted py-5">No proposals found</div>';
+            }
+        });
+}
+
+function renderProposalRow(p) {
+    const statusBadge = getStatusBadge(p.status);
+    const typeBadge = getTypeBadge(p.proposal_type);
+    const timeInfo = getTimeInfo(p);
+    const votes = Object.keys(p.votes || {}).length;
+
+    return `
+        <div class="p-3 border-bottom proposal-row ${selectedProposalId === p.proposal_id ? 'bg-primary bg-opacity-10' : ''}"
+             onclick="selectProposal('${p.proposal_id}')" style="cursor: pointer;">
+            <div class="d-flex justify-content-between align-items-start">
+                <div>
+                    <h6 class="mb-1">${p.pinned ? '<i class="material-icons text-warning" style="font-size: 14px;">push_pin</i> ' : ''}${p.title}</h6>
+                    <small class="text-muted">${p.description.substring(0, 100)}${p.description.length > 100 ? '...' : ''}</small>
+                </div>
+                <div class="text-end">
+                    ${statusBadge}
+                    ${typeBadge}
+                </div>
+            </div>
+            <div class="d-flex justify-content-between mt-2 small text-muted">
+                <span><i class="material-icons" style="font-size: 12px;">person</i> ${p.proposer_address.substring(0, 8)}...</span>
+                <span><i class="material-icons" style="font-size: 12px;">how_to_vote</i> ${votes} votes</span>
+                <span>${timeInfo}</span>
+            </div>
+        </div>
+    `;
+}
+
+function selectProposal(proposalId) {
+    selectedProposalId = proposalId;
+    loadProposals(); // Refresh to show selection
+
+    fetch(`/api/p2p/governance/proposal/${proposalId}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.proposal) return;
+
+            const p = data.proposal;
+            const t = data.tally || {};
+            const myVote = data.my_vote;
+
+            document.getElementById('detailsRow').style.display = 'flex';
+            document.getElementById('detailTitle').textContent = p.title;
+
+            const total = (t.yes_votes || 0) + (t.no_votes || 0) + (t.abstain_votes || 0);
+            const yesPct = total > 0 ? ((t.yes_votes / total) * 100).toFixed(1) : 0;
+            const noPct = total > 0 ? ((t.no_votes / total) * 100).toFixed(1) : 0;
+
+            document.getElementById('detailContent').innerHTML = `
+                <p>${p.description}</p>
+                <hr>
+                <div class="row small">
+                    <div class="col-6">
+                        <strong>Type:</strong> ${p.proposal_type}<br>
+                        <strong>Status:</strong> ${getStatusBadge(p.status)}<br>
+                        <strong>Proposer:</strong> <code>${p.proposer_address.substring(0, 12)}...</code>
+                    </div>
+                    <div class="col-6">
+                        <strong>Voting Ends:</strong> ${new Date(p.voting_ends * 1000).toLocaleString()}<br>
+                        <strong>Quorum:</strong> ${t.quorum_reached ? '<span class="text-success">Reached</span>' : '<span class="text-warning">Not reached</span>'}<br>
+                        ${myVote ? `<strong>My Vote:</strong> <span class="badge bg-info">${myVote.choice}</span>` : ''}
+                    </div>
+                </div>
+                <hr>
+                <div class="progress" style="height: 25px;">
+                    <div class="progress-bar bg-success" style="width: ${yesPct}%">${yesPct}% Yes</div>
+                    <div class="progress-bar bg-danger" style="width: ${noPct}%">${noPct}% No</div>
+                </div>
+                <small class="text-muted">${t.total_voters || 0} total voters</small>
+            `;
+
+            // Show voting buttons if active and not voted
+            const isActive = p.status === 'active';
+            const now = Math.floor(Date.now() / 1000);
+            const withinVotingPeriod = isActive && now >= p.voting_starts && now <= p.voting_ends;
+            const hasStake = window.canVoteGlobal;
+            const canVote = withinVotingPeriod && !myVote && hasStake;
+
+            // Show voting section if within voting period and not already voted
+            document.getElementById('votingButtons').style.display = (withinVotingPeriod && !myVote) ? 'block' : 'none';
+
+            // Enable/disable vote buttons based on stake
+            const voteYesBtn = document.getElementById('voteYesBtn');
+            const voteNoBtn = document.getElementById('voteNoBtn');
+            const voteAbstainBtn = document.getElementById('voteAbstainBtn');
+            const noStakeWarning = document.getElementById('noStakeWarning');
+
+            if (hasStake) {
+                voteYesBtn.disabled = false;
+                voteNoBtn.disabled = false;
+                voteAbstainBtn.disabled = false;
+                noStakeWarning.style.display = 'none';
+            } else {
+                voteYesBtn.disabled = true;
+                voteNoBtn.disabled = true;
+                voteAbstainBtn.disabled = true;
+                noStakeWarning.style.display = 'block';
+            }
+
+            // Show already voted indicator if voted
+            if (myVote) {
+                document.getElementById('alreadyVoted').style.display = 'block';
+                document.getElementById('myVoteChoice').textContent = myVote.choice.toUpperCase();
+            } else {
+                document.getElementById('alreadyVoted').style.display = 'none';
+            }
+
+            // Load comments
+            loadComments(proposalId);
+        });
+}
+
+function loadComments(proposalId) {
+    fetch(`/api/p2p/governance/comments/${proposalId}`)
+        .then(r => r.json())
+        .then(data => {
+            const comments = data.comments || [];
+            document.getElementById('commentCount').textContent = comments.length;
+
+            if (comments.length > 0) {
+                document.getElementById('commentsList').innerHTML = comments.map(c => `
+                    <div class="p-2 border-bottom ${c.is_status_update ? 'bg-info bg-opacity-10' : ''}">
+                        <div class="d-flex justify-content-between">
+                            <small>
+                                ${c.is_signer ? '<span class="badge bg-warning me-1">Signer</span>' : ''}
+                                ${c.is_status_update ? '<span class="badge bg-info me-1">Status</span>' : ''}
+                                <code>${c.author_address.substring(0, 8)}...</code>
+                            </small>
+                            <small class="text-muted">${new Date(c.timestamp * 1000).toLocaleString()}</small>
+                        </div>
+                        <p class="mb-0 small mt-1">${c.content}</p>
+                    </div>
+                `).join('');
+            } else {
+                document.getElementById('commentsList').innerHTML = '<div class="text-center text-muted py-3 small">No comments yet</div>';
+            }
+        });
+}
+
+function vote(choice) {
+    if (!selectedProposalId) return;
+
+    fetch('/api/p2p/governance/vote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposal_id: selectedProposalId, choice: choice })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert('Vote submitted successfully!');
+                selectProposal(selectedProposalId);
+                loadProposals();
+            } else {
+                alert('Vote failed: ' + (data.error || 'Unknown error'));
+            }
+        });
+}
+
+function addComment() {
+    if (!selectedProposalId) return;
+    const content = document.getElementById('commentInput').value.trim();
+    if (!content) return;
+
+    fetch('/api/p2p/governance/comment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proposal_id: selectedProposalId, content: content })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('commentInput').value = '';
+                loadComments(selectedProposalId);
+            }
+        });
+}
+
+// NOTE: Signer-only functions (pin, execute, status update, emergency cancel)
+// have been moved to the /signer page for clean separation of concerns
+
+function showCreateProposal() {
+    const modal = new bootstrap.Modal(document.getElementById('createModal'));
+    modal.show();
+}
+
+function submitProposal() {
+    const title = document.getElementById('proposalTitle').value;
+    const description = document.getElementById('proposalDescription').value;
+    const proposal_type = document.getElementById('proposalType').value;
+    const voting_period_days = parseInt(document.getElementById('proposalDays').value);
+
+    if (!title || !description) {
+        alert('Please fill in all required fields');
+        return;
+    }
+
+    fetch('/api/p2p/governance/propose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, description, proposal_type, voting_period_days })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                alert('Proposal created successfully!');
+                bootstrap.Modal.getInstance(document.getElementById('createModal')).hide();
+                document.getElementById('proposalForm').reset();
+                loadProposals();
+            } else {
+                alert('Failed to create proposal: ' + (data.error || 'Unknown error'));
+            }
+        });
+}
+
+function getStatusBadge(status) {
+    const badges = {
+        'draft': '<span class="badge bg-secondary">Draft</span>',
+        'active': '<span class="badge bg-warning">Active</span>',
+        'passed': '<span class="badge bg-success">Passed</span>',
+        'rejected': '<span class="badge bg-danger">Rejected</span>',
+        'expired': '<span class="badge bg-secondary">Expired</span>',
+        'executed': '<span class="badge bg-primary">Executed</span>',
+        'cancelled': '<span class="badge bg-dark">Cancelled</span>',
+    };
+    return badges[status] || `<span class="badge bg-secondary">${status}</span>`;
+}
+
+function getTypeBadge(type) {
+    const badges = {
+        'community': '<span class="badge bg-info ms-1">Community</span>',
+        'parameter_change': '<span class="badge bg-warning ms-1">Parameter</span>',
+        'feature_toggle': '<span class="badge bg-primary ms-1">Feature</span>',
+        'treasury_spend': '<span class="badge bg-success ms-1">Treasury</span>',
+        'signer_change': '<span class="badge bg-danger ms-1">Signer</span>',
+        'protocol_upgrade': '<span class="badge bg-dark ms-1">Upgrade</span>',
+    };
+    return badges[type] || '';
+}
+
+function getTimeInfo(p) {
+    const now = Math.floor(Date.now() / 1000);
+    if (p.status === 'active') {
+        const diff = p.voting_ends - now;
+        if (diff <= 0) return 'Ended';
+        const days = Math.floor(diff / 86400);
+        const hours = Math.floor((diff % 86400) / 3600);
+        return days > 0 ? `${days}d ${hours}h left` : `${hours}h left`;
+    }
+    return new Date(p.created_at * 1000).toLocaleDateString();
+}
+</script>
+{% endblock %}

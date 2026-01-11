@@ -14,13 +14,20 @@
             <span class="status-indicator status-online" id="statusIndicator"></span>
             <span id="statusText">Connected</span>
         </span>
-        <a href="{{ url_for('network') }}" class="btn btn-outline-secondary btn-sm me-2" title="P2P Network Dashboard">
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2" title="P2P Network Dashboard">
             <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
             Network
         </a>
+        <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2" title="Governance">
+            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+            Governance
+        </a>
         <a href="{{ url_for('stake_management') }}" class="btn btn-outline-light btn-sm me-2">
             <i class="material-icons align-middle" style="font-size: 16px;">handshake</i>
-            Stake Management
+            Stake
+        </a>
+        <a href="{{ url_for('restart_neuron') }}" class="btn btn-outline-light btn-sm me-2" title="Restart Node" onclick="return confirm('Restart your Satori node?');">
+            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
         </a>
         <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
         <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
@@ -142,7 +149,7 @@
                             Identity Wallet (for digital identity only - do not send tokens here)
                         </h6>
                         <div class="row">
-                            <div class="col-md-6 mb-3 mb-md-0">
+                            <div class="col-md-6 mb-3">
                                 <label class="form-label small">Identity Address</label>
                                 <div class="input-group input-group-sm">
                                     <input type="text" class="form-control" id="identityAddress" readonly placeholder="Loading...">
@@ -151,7 +158,7 @@
                                     </button>
                                 </div>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-6 mb-3">
                                 <label class="form-label small">Identity Private Key</label>
                                 <div class="input-group input-group-sm">
                                     <input type="password" class="form-control" id="identityPrivateKey" readonly placeholder="Click to reveal...">
@@ -159,6 +166,42 @@
                                         <i class="material-icons align-middle" style="font-size: 16px;" id="identityKeyIcon">visibility</i>
                                     </button>
                                     <button class="btn btn-outline-secondary" onclick="copyIdentityPrivateKey()" title="Copy">
+                                        <i class="material-icons align-middle" style="font-size: 16px;">content_copy</i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Identity Public Key</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control" id="identityPublicKey" readonly placeholder="Loading...">
+                                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('identityPublicKey')" title="Copy">
+                                        <i class="material-icons align-middle" style="font-size: 16px;">content_copy</i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">Vault Public Key</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control" id="vaultPublicKey" readonly placeholder="Loading...">
+                                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('vaultPublicKey')" title="Copy">
+                                        <i class="material-icons align-middle" style="font-size: 16px;">content_copy</i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">P2P Peer ID</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control" id="p2pPeerId" readonly placeholder="Loading...">
+                                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('p2pPeerId')" title="Copy">
+                                        <i class="material-icons align-middle" style="font-size: 16px;">content_copy</i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label small">P2P Multiaddress</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control" id="p2pMultiaddr" readonly placeholder="Loading...">
+                                    <button class="btn btn-outline-secondary" onclick="copyToClipboard('p2pMultiaddr')" title="Copy">
                                         <i class="material-icons align-middle" style="font-size: 16px;">content_copy</i>
                                     </button>
                                 </div>
@@ -361,6 +404,61 @@
             </div>
         </div>
 
+        <!-- My Rewards History Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#rewardsHistoryCollapse"
+                     aria-expanded="false"
+                     aria-controls="rewardsHistoryCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">payments</i>
+                        My Rewards History
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadMyRewardsHistory()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="collapse" id="rewardsHistoryCollapse">
+                <div class="card-body">
+                    <!-- Rewards Summary -->
+                    <div class="row text-center mb-3">
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-success" id="rewardsTotalEarned">--</div>
+                            <small class="text-muted">Total Earned</small>
+                        </div>
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-primary" id="rewardsThisMonth">--</div>
+                            <small class="text-muted">This Month</small>
+                        </div>
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-info" id="rewardsDistCount">--</div>
+                            <small class="text-muted">Distributions</small>
+                        </div>
+                    </div>
+
+                    <!-- Rewards List -->
+                    <div id="rewardsHistoryList" class="list-group list-group-flush" style="max-height: 200px; overflow-y: auto;">
+                        <div class="text-muted small text-center py-3">Loading rewards history...</div>
+                    </div>
+
+                    <!-- View More Link -->
+                    <div class="text-center mt-2">
+                        <a href="{{ url_for('network_page') }}" class="small text-muted">
+                            <i class="material-icons align-middle" style="font-size: 14px;">open_in_new</i>
+                            View Full Distribution History on Network Page
+                        </a>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pool Staking Row -->
+    <div class="row g-4 mb-4">
         <!-- Pool Staking Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
@@ -383,6 +481,96 @@
                     <div class="mb-3">
                         <label class="form-label">Status</label>
                         <div id="stakingStatus" class="alert alert-secondary">Not staking with a pool</div>
+                    </div>
+
+                    <!-- Available Pools List -->
+                    <div class="mb-3">
+                        <label class="form-label">Available Open Pools</label>
+                        <div id="availablePoolsList" class="list-group mb-2" style="max-height: 200px; overflow-y: auto;">
+                            <div class="text-muted small p-2">Loading pools...</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Pool Address</label>
+                        <span class="d-inline-block w-100" id="poolAddressWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <input type="text" class="form-control" id="poolAddress" placeholder="Enter pool address or select from list above">
+                        </span>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <span class="d-inline-block" id="addStakeBtnWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <button class="btn btn-primary" id="addStakeBtn" onclick="addStakeToPool()">Add Stake to Pool</button>
+                        </span>
+                        <span class="d-inline-block" id="removeStakeBtnWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <button class="btn btn-danger" id="removeStakeBtn" onclick="removeStakeFromPool()">Remove Stake from Pool</button>
+                        </span>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pool Management Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#poolManagementCollapse"
+                     aria-expanded="false"
+                     aria-controls="poolManagementCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">groups</i>
+                        Pool Management
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadWorkers(); loadLenders();">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="collapse" id="poolManagementCollapse">
+                <div class="card-body" id="poolManagementBody">
+                    <!-- Pool Staking Notice (shown when user is staking to another pool) -->
+                    <div class="alert alert-warning pool-staking-notice mb-3" id="poolStakingNotice" style="display: none;">
+                        <i class="material-icons align-middle me-1" style="font-size: 18px;">info</i>
+                        <strong>Note:</strong> Staking to a pool disables this neuron to act as a pool.
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Lender Commission (%)</label>
+                        <span class="d-inline-block w-100" id="poolCommissionWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <div class="input-group">
+                                <input type="number" class="form-control" id="poolCommission"
+                                       placeholder="0 = closed, 1-100 = open"
+                                       min="0" max="100" step="1"
+                                       onchange="setPoolCommission()"
+                                       onkeypress="if(event.key === 'Enter') { setPoolCommission(); event.preventDefault(); }">
+                                <span class="input-group-text">%</span>
+                            </div>
+                        </span>
+                        <small class="form-text text-muted">
+                            Commission you pay to pool stakers. Empty or 0 = pool closed. 1-100 = pool open.
+                        </small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Workers</label>
+                        <div id="workerList" class="mb-2" style="max-height: 150px; overflow-y: auto;">
+                            <p class="text-muted">Loading...</p>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Add Worker</label>
+                        <span class="d-inline-block w-100" id="addWorkerWrapper" data-bs-toggle="tooltip" data-bs-placement="top" title="">
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="newWorkerAddress" placeholder="Worker address">
+                                <button class="btn btn-primary" id="addWorkerBtn" onclick="addWorker()">Add</button>
+                            </div>
+                        </span>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pool Stakers</label>
+                        <div id="lenderList" class="mb-2" style="max-height: 150px; overflow-y: auto;">
+                            <p class="text-muted">Loading...</p>
+                        </div>
                     </div>
                 </div>
                 </div>
@@ -778,7 +966,7 @@
             if (health) {
                 document.getElementById('p2pPeerCount').textContent = health.peer_count || 0;
                 document.getElementById('p2pUptimePct').textContent =
-                    (health.uptime_pct ? health.uptime_pct.toFixed(1) : '0') + '%';
+                    (health.uptime_pct ? (health.uptime_pct * 100).toFixed(1) : '0') + '%';
 
                 const modeText = document.getElementById('p2pModeText');
                 const modeAlert = document.getElementById('p2pMode');
@@ -873,9 +1061,6 @@
 
     // Update UI based on mutual exclusion rules
     function updateMutualExclusionUI() {
-        const poolStakingReasonCommission = 'You cannot stake to a pool while you have commission set (open pool)';
-        const poolStakingReasonWorkers = 'You cannot stake to a pool while you have workers (active pool)';
-
         // Pool Staking elements
         const poolAddressInput = document.getElementById('poolAddress');
         const poolAddressWrapper = document.getElementById('poolAddressWrapper');
@@ -884,50 +1069,31 @@
         const removeStakeBtn = document.getElementById('removeStakeBtn');
         const removeStakeBtnWrapper = document.getElementById('removeStakeBtnWrapper');
 
-        // Pool Management elements
-        const poolCommission = document.getElementById('poolCommission');
-        const poolCommissionWrapper = document.getElementById('poolCommissionWrapper');
-        const newWorkerInput = document.getElementById('newWorkerAddress');
-        const addWorkerBtn = document.getElementById('addWorkerBtn');
-        const addWorkerWrapper = document.getElementById('addWorkerWrapper');
-
         // Pool Staking inputs are always enabled
-        // (Commented out: previously disabled when user was a pool operator)
-        /*
-        if (isOpenPool || hasWorkers) {
-            const reason = isOpenPool ? poolStakingReasonCommission : poolStakingReasonWorkers;
-            poolAddressInput.disabled = true;
-            poolAddressWrapper.setAttribute('title', reason);
-            addStakeBtn.disabled = true;
-            addStakeBtnWrapper.setAttribute('title', reason);
-            removeStakeBtn.disabled = true;
-            removeStakeBtnWrapper.setAttribute('title', reason);
+        if (poolAddressInput) poolAddressInput.disabled = false;
+        if (poolAddressWrapper) poolAddressWrapper.setAttribute('title', '');
+        if (addStakeBtn) addStakeBtn.disabled = false;
+        if (addStakeBtnWrapper) addStakeBtnWrapper.setAttribute('title', '');
+
+        // Remove button only enabled if actually staking to a pool
+        if (isStakingToPool) {
+            if (removeStakeBtn) removeStakeBtn.disabled = false;
+            if (removeStakeBtnWrapper) removeStakeBtnWrapper.setAttribute('title', '');
         } else {
-        */
-            poolAddressInput.disabled = false;
-            poolAddressWrapper.setAttribute('title', '');
-            addStakeBtn.disabled = false;
-            addStakeBtnWrapper.setAttribute('title', '');
-            // Remove button only enabled if actually staking to a pool
-            if (isStakingToPool) {
-                removeStakeBtn.disabled = false;
-                removeStakeBtnWrapper.setAttribute('title', '');
-            } else {
-                removeStakeBtn.disabled = true;
-                removeStakeBtnWrapper.setAttribute('title', 'You are not currently staking to a pool');
-            }
-        // }
+            if (removeStakeBtn) removeStakeBtn.disabled = true;
+            if (removeStakeBtnWrapper) removeStakeBtnWrapper.setAttribute('title', 'You are not currently staking to a pool');
+        }
 
         // If staking to pool, dim Pool Management card and show notice
         const poolManagementBody = document.getElementById('poolManagementBody');
         const poolStakingNotice = document.getElementById('poolStakingNotice');
 
         if (isStakingToPool) {
-            poolManagementBody.classList.add('dimmed');
-            poolStakingNotice.style.display = 'block';
+            if (poolManagementBody) poolManagementBody.classList.add('dimmed');
+            if (poolStakingNotice) poolStakingNotice.style.display = 'block';
         } else {
-            poolManagementBody.classList.remove('dimmed');
-            poolStakingNotice.style.display = 'none';
+            if (poolManagementBody) poolManagementBody.classList.remove('dimmed');
+            if (poolStakingNotice) poolStakingNotice.style.display = 'none';
         }
 
         // Update card collapse states based on usage
@@ -1000,7 +1166,7 @@
                 }
 
                 // Load USD values for balances
-                loadUsdValues(tokenBal, evrBal);
+                loadUsdValues(result.total || 0, result.total_evr || 0);
             } else {
                 // If there's an error, show dashes
                 document.getElementById('tokenBalance').textContent = '--';
@@ -1095,18 +1261,20 @@
     async function loadStakingStatus() {
         const result = await apiCall('/lender/status');
         const statusEl = document.getElementById('stakingStatus');
+        const poolAddressEl = document.getElementById('poolAddress');
+
         if (result && result.pool_address) {
             isStakingToPool = true;
             statusEl.className = 'alert alert-success';
             statusEl.textContent = 'Staking with pool: ' + result.pool_address;
             // Update the pool address input field
-            document.getElementById('poolAddress').value = result.pool_address;
+            poolAddressEl.value = result.pool_address;
         } else {
             isStakingToPool = false;
             statusEl.className = 'alert alert-secondary';
             statusEl.textContent = 'Not staking with a pool';
             // Clear the pool address input field
-            document.getElementById('poolAddress').value = '';
+            poolAddressEl.value = '';
         }
         updateMutualExclusionUI();
     }
@@ -1196,9 +1364,10 @@
     }
 
     async function loadPoolCommission() {
+        const commissionInput = document.getElementById('poolCommission');
+
         const result = await apiCall('/pool/commission', 'GET');
         if (result) {
-            const commissionInput = document.getElementById('poolCommission');
             commissionInput.value = result.commission || '';
             isOpenPool = result.commission !== null && result.commission > 0;
             updateMutualExclusionUI();  // Update UI after setting isOpenPool
@@ -1207,6 +1376,7 @@
 
     async function loadWorkers() {
         const workerListEl = document.getElementById('workerList');
+
         const result = await apiCall('/pool/workers');
 
         if (result && result.workers && result.workers.length > 0) {
@@ -1237,6 +1407,7 @@
 
     async function loadLenders() {
         const lenderListEl = document.getElementById('lenderList');
+
         const result = await apiCall('/pool/lenders');
 
         if (result && result.lenders && result.lenders.length > 0) {
@@ -1519,6 +1690,42 @@
             } else {
                 document.getElementById('identityAddress').value = 'Not available';
             }
+            // Public keys
+            if (result.wallet_public_key) {
+                document.getElementById('identityPublicKey').value = result.wallet_public_key;
+            } else {
+                document.getElementById('identityPublicKey').value = 'Not available';
+            }
+            if (result.vault_public_key) {
+                document.getElementById('vaultPublicKey').value = result.vault_public_key;
+            } else {
+                document.getElementById('vaultPublicKey').value = 'Not available';
+            }
+        }
+    }
+
+    async function loadP2PIdentity() {
+        // Load P2P peer ID and multiaddress
+        try {
+            const result = await apiCall('/p2p/identify/stats');
+            if (result && result.success) {
+                if (result.peer_id) {
+                    document.getElementById('p2pPeerId').value = result.peer_id;
+                } else {
+                    document.getElementById('p2pPeerId').value = 'P2P not initialized';
+                }
+                if (result.multiaddrs && result.multiaddrs.length > 0) {
+                    document.getElementById('p2pMultiaddr').value = result.multiaddrs[0];
+                } else {
+                    document.getElementById('p2pMultiaddr').value = 'No public address';
+                }
+            } else {
+                document.getElementById('p2pPeerId').value = 'P2P not available';
+                document.getElementById('p2pMultiaddr').value = 'P2P not available';
+            }
+        } catch (e) {
+            document.getElementById('p2pPeerId').value = 'P2P not available';
+            document.getElementById('p2pMultiaddr').value = 'P2P not available';
         }
     }
 
@@ -1531,6 +1738,10 @@
         const section = document.getElementById('identityWalletSection');
         identityWalletVisible = !identityWalletVisible;
         section.style.display = identityWalletVisible ? 'block' : 'none';
+        // Load P2P identity info when opening
+        if (identityWalletVisible) {
+            loadP2PIdentity();
+        }
     }
 
     async function toggleIdentityPrivateKey() {
@@ -2186,6 +2397,73 @@
         return icons[severity?.toLowerCase()] || 'notifications';
     }
 
+    // =========================================================================
+    // MY REWARDS HISTORY FUNCTIONS
+    // =========================================================================
+
+    async function loadMyRewardsHistory() {
+        try {
+            const result = await apiCall('/p2p/distribution/history?limit=20');
+
+            if (!result) {
+                document.getElementById('rewardsHistoryList').innerHTML =
+                    '<div class="text-muted small text-center py-3">Failed to load rewards</div>';
+                return;
+            }
+
+            // Update summary stats
+            const totalEarned = result.total_earned || 0;
+            document.getElementById('rewardsTotalEarned').textContent =
+                totalEarned > 0 ? totalEarned.toFixed(2) + ' SATORI' : '--';
+
+            const distributions = result.distributions || [];
+            document.getElementById('rewardsDistCount').textContent = distributions.length || '--';
+
+            // Calculate this month's earnings
+            const now = new Date();
+            const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000;
+            const thisMonthEarnings = distributions
+                .filter(d => d.timestamp >= thisMonthStart)
+                .reduce((sum, d) => sum + (d.amount || 0), 0);
+            document.getElementById('rewardsThisMonth').textContent =
+                thisMonthEarnings > 0 ? thisMonthEarnings.toFixed(2) + ' SATORI' : '--';
+
+            // Update history list
+            const container = document.getElementById('rewardsHistoryList');
+
+            if (distributions.length === 0) {
+                container.innerHTML = '<div class="text-muted small text-center py-3">No rewards received yet</div>';
+                return;
+            }
+
+            container.innerHTML = distributions.slice(0, 10).map(dist => {
+                const date = new Date(dist.timestamp * 1000);
+                const dateStr = date.toLocaleDateString();
+                const amount = (dist.amount || 0).toFixed(4);
+                const roundId = dist.round_id || '--';
+
+                return `<div class="list-group-item py-2 px-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="badge bg-success me-2">+${amount}</span>
+                            <small class="text-muted">SATORI</small>
+                        </div>
+                        <small class="text-muted">${dateStr}</small>
+                    </div>
+                    <div class="d-flex justify-content-between mt-1">
+                        <small class="text-muted">Round #${roundId}</small>
+                        <small class="text-muted">${dist.stream_count || '--'} streams</small>
+                    </div>
+                </div>`;
+            }).join('');
+
+        } catch (e) {
+            console.error('Failed to load rewards history:', e);
+            document.getElementById('rewardsHistoryList').innerHTML =
+                '<div class="text-danger small text-center py-3">Error loading rewards</div>';
+        }
+    }
+
     function getActionButtonClass(actionType) {
         const classes = {
             'donate_evr': 'btn-success',
@@ -2260,11 +2538,13 @@
         loadDonationStats();  // Load donation stats and treasury address
         loadReferralStats();  // Load referral stats
         loadTreasuryAlerts();  // Load treasury alerts and deferred rewards
+        loadMyRewardsHistory();  // Load personal rewards history
 
         // Periodic refresh of P2P data (every 30s)
         setInterval(loadP2PHealth, 30000);
         setInterval(loadHeartbeats, 15000);
         setInterval(loadTreasuryAlerts, 60000);  // Refresh alerts every minute
+        setInterval(loadMyRewardsHistory, 120000);  // Refresh rewards every 2 minutes
     });
 </script>
 {% endblock %}
