@@ -1,0 +1,585 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Badges & Achievements{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Badge Card Styles */
+    .badge-card {
+        border-radius: 12px;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        height: 100%;
+    }
+    .badge-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+    }
+    .badge-card.earned {
+        border: 2px solid #ffd700;
+    }
+    .badge-card.locked {
+        opacity: 0.6;
+        filter: grayscale(0.3);
+    }
+    .badge-icon {
+        font-size: 48px;
+        margin-bottom: 10px;
+    }
+
+    /* Rarity Colors */
+    .rarity-common { color: #9e9e9e; border-color: #9e9e9e; }
+    .rarity-uncommon { color: #4CAF50; border-color: #4CAF50; }
+    .rarity-rare { color: #2196F3; border-color: #2196F3; }
+    .rarity-epic { color: #9C27B0; border-color: #9C27B0; }
+    .rarity-legendary { color: #FF9800; border-color: #FF9800; }
+    .rarity-mythic { color: #E91E63; border-color: #E91E63; }
+
+    .rarity-badge-common { background-color: #9e9e9e; }
+    .rarity-badge-uncommon { background-color: #4CAF50; }
+    .rarity-badge-rare { background-color: #2196F3; }
+    .rarity-badge-epic { background-color: #9C27B0; }
+    .rarity-badge-legendary { background-color: #FF9800; }
+    .rarity-badge-mythic { background-color: #E91E63; }
+
+    /* Glow Effects */
+    .glow-legendary {
+        box-shadow: 0 0 20px rgba(255, 152, 0, 0.4);
+    }
+    .glow-mythic {
+        box-shadow: 0 0 20px rgba(233, 30, 99, 0.5);
+        animation: mythicPulse 2s ease-in-out infinite;
+    }
+    @keyframes mythicPulse {
+        0%, 100% { box-shadow: 0 0 20px rgba(233, 30, 99, 0.5); }
+        50% { box-shadow: 0 0 30px rgba(233, 30, 99, 0.8); }
+    }
+
+    /* Progress Ring */
+    .progress-ring {
+        width: 120px;
+        height: 120px;
+    }
+    .progress-ring-circle {
+        transition: stroke-dashoffset 0.35s;
+        transform: rotate(-90deg);
+        transform-origin: 50% 50%;
+    }
+
+    /* Category Filter Tabs */
+    .category-tabs .nav-link {
+        border-radius: 20px;
+        padding: 8px 16px;
+        margin: 0 4px;
+        font-size: 0.9rem;
+    }
+    .category-tabs .nav-link.active {
+        background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+        color: white;
+    }
+
+    /* Stats Cards */
+    .stats-card {
+        background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-input) 100%);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+    }
+    .stats-number {
+        font-size: 2.5rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* Leaderboard */
+    .leaderboard-item {
+        transition: background 0.3s;
+    }
+    .leaderboard-item:hover {
+        background: var(--bg-input);
+    }
+    .rank-1 { color: #ffd700; }
+    .rank-2 { color: #c0c0c0; }
+    .rank-3 { color: #cd7f32; }
+
+    /* Achievement Progress */
+    .achievement-progress {
+        height: 8px;
+        border-radius: 4px;
+        background: var(--bg-input);
+        overflow: hidden;
+    }
+    .achievement-progress-bar {
+        height: 100%;
+        border-radius: 4px;
+        transition: width 0.5s ease;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        <i class="material-icons align-middle me-2">military_tech</i>
+        Satori - Badges & Achievements
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network_page') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('guide') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">menu_book</i>
+            Guide
+        </a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
+    <!-- Header Stats Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-xl-3 col-md-6">
+            <div class="stats-card">
+                <h2 id="totalEarned" class="stats-number">0</h2>
+                <p class="text-muted mb-0">Badges Earned</p>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="stats-card">
+                <h2 id="totalAvailable" class="stats-number">0</h2>
+                <p class="text-muted mb-0">Total Available</p>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="stats-card">
+                <h2 id="completionPct" class="stats-number">0%</h2>
+                <p class="text-muted mb-0">Completion</p>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6">
+            <div class="stats-card">
+                <h2 id="leaderboardRank" class="stats-number">--</h2>
+                <p class="text-muted mb-0">Leaderboard Rank</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- My Progress Section -->
+    <div class="row g-4 mb-4">
+        <!-- Progress Overview -->
+        <div class="col-lg-8">
+            <div class="card h-100">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">trending_up</i>
+                        Badge Progress
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <!-- Progress by Category -->
+                    <div class="row" id="progressByCategory">
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Rank Badges</span>
+                                <span class="small text-muted" id="progressRank">0/10</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressRankBar" class="achievement-progress-bar bg-success" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Streak Badges</span>
+                                <span class="small text-muted" id="progressStreak">0/5</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressStreakBar" class="achievement-progress-bar bg-warning" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Achievement Badges</span>
+                                <span class="small text-muted" id="progressAchieve">0/16</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressAchieveBar" class="achievement-progress-bar bg-info" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Community Badges</span>
+                                <span class="small text-muted" id="progressCommunity">0/11</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressCommunityBar" class="achievement-progress-bar bg-primary" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Donation Badges</span>
+                                <span class="small text-muted" id="progressDonation">0/5</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressDonationBar" class="achievement-progress-bar" style="width: 0%; background-color: #ffd700;"></div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small">Special Badges</span>
+                                <span class="small text-muted" id="progressSpecial">0/7</span>
+                            </div>
+                            <div class="achievement-progress">
+                                <div id="progressSpecialBar" class="achievement-progress-bar" style="width: 0%; background-color: #E91E63;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr>
+
+                    <!-- Next Badge to Earn -->
+                    <div class="row align-items-center">
+                        <div class="col-md-6">
+                            <h6 class="text-muted mb-2">Next Badge to Earn</h6>
+                            <div id="nextBadgeInfo" class="d-flex align-items-center">
+                                <span class="badge rarity-badge-uncommon me-2" id="nextBadgeName">STREAK_EPOCH</span>
+                                <span class="small text-muted" id="nextBadgeDesc">7 days consecutive uptime</span>
+                            </div>
+                            <div class="mt-2">
+                                <div class="achievement-progress" style="height: 12px;">
+                                    <div id="nextBadgeProgressBar" class="achievement-progress-bar bg-warning" style="width: 30%"></div>
+                                </div>
+                                <small class="text-muted" id="nextBadgeProgress">3/7 days</small>
+                            </div>
+                        </div>
+                        <div class="col-md-6 text-center">
+                            <div class="small text-muted mb-1">Current Streak</div>
+                            <h1 id="currentStreak" class="mb-0" style="color: #ffd700;">0</h1>
+                            <small class="text-muted">days</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboard -->
+        <div class="col-lg-4">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">leaderboard</i>
+                        Top Badge Collectors
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadLeaderboard()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body p-0">
+                    <div id="leaderboardList" class="list-group list-group-flush" style="max-height: 300px; overflow-y: auto;">
+                        <div class="text-center text-muted py-4">Loading leaderboard...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Category Filter Tabs -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <ul class="nav nav-pills category-tabs justify-content-center" id="categoryTabs">
+                <li class="nav-item">
+                    <a class="nav-link active" href="#" data-category="all">All Badges</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="earned">Earned</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="rank">Rank</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="streak">Streak</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="achievement">Achievement</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="community">Community</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="donation">Donation</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="#" data-category="special">Special</a>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Rarity Filter -->
+    <div class="row mb-4">
+        <div class="col-12 text-center">
+            <div class="btn-group" role="group" id="rarityFilter">
+                <button type="button" class="btn btn-outline-secondary btn-sm active" data-rarity="all">All Rarities</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="common" style="border-color: #9e9e9e;">Common</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="uncommon" style="border-color: #4CAF50;">Uncommon</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="rare" style="border-color: #2196F3;">Rare</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="epic" style="border-color: #9C27B0;">Epic</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="legendary" style="border-color: #FF9800;">Legendary</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-rarity="mythic" style="border-color: #E91E63;">Mythic</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Badge Grid -->
+    <div class="row g-4" id="badgeGrid">
+        <div class="col-12 text-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="text-muted mt-2">Loading badges...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Rarity colors
+    const rarityColors = {
+        'common': '#9e9e9e',
+        'uncommon': '#4CAF50',
+        'rare': '#2196F3',
+        'epic': '#9C27B0',
+        'legendary': '#FF9800',
+        'mythic': '#E91E63'
+    };
+
+    // Badge icons by category
+    const categoryIcons = {
+        'rank': 'emoji_events',
+        'streak': 'local_fire_department',
+        'achievement': 'stars',
+        'community': 'groups',
+        'donation': 'volunteer_activism',
+        'special': 'auto_awesome',
+        'role': 'badge'
+    };
+
+    // State
+    let allBadges = [];
+    let earnedBadges = [];
+    let currentCategory = 'all';
+    let currentRarity = 'all';
+
+    // Load all data on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadAllData();
+        setupFilters();
+    });
+
+    async function loadAllData() {
+        try {
+            const [catalogResp, myBadgesResp, progressResp, leaderboardResp] = await Promise.all([
+                fetch('/api/badges/all'),
+                fetch('/api/badges/my'),
+                fetch('/api/badges/progress'),
+                fetch('/api/badges/leaderboard?limit=10')
+            ]);
+
+            const catalog = await catalogResp.json();
+            const myBadges = await myBadgesResp.json();
+            const progress = await progressResp.json();
+            const leaderboard = await leaderboardResp.json();
+
+            // Store data
+            allBadges = catalog.badges || [];
+            earnedBadges = myBadges.badges || [];
+            const earnedIds = new Set(earnedBadges.map(b => b.badge_id));
+
+            // Mark earned badges
+            allBadges.forEach(badge => {
+                badge.earned = earnedIds.has(badge.id);
+            });
+
+            // Update stats
+            document.getElementById('totalEarned').textContent = earnedBadges.length;
+            document.getElementById('totalAvailable').textContent = allBadges.length;
+            const completionPct = allBadges.length > 0 ? Math.round((earnedBadges.length / allBadges.length) * 100) : 0;
+            document.getElementById('completionPct').textContent = completionPct + '%';
+
+            // Update progress bars by category
+            updateCategoryProgress(catalog.by_category || {}, myBadges.by_category || {});
+
+            // Update streak info
+            if (progress.streak) {
+                document.getElementById('currentStreak').textContent = progress.streak.current_days || 0;
+                document.getElementById('nextBadgeName').textContent = progress.streak.next_badge || 'STREAK_EPOCH';
+                document.getElementById('nextBadgeProgress').textContent =
+                    `${progress.streak.current_days || 0}/${progress.streak.days_needed || 7} days`;
+                document.getElementById('nextBadgeProgressBar').style.width =
+                    (progress.streak.progress_percent || 0) + '%';
+            }
+
+            // Update leaderboard
+            renderLeaderboard(leaderboard);
+
+            // Find user's rank
+            if (leaderboard.leaderboard && myBadges.address) {
+                const myRank = leaderboard.leaderboard.find(e => e.address === myBadges.address);
+                if (myRank) {
+                    document.getElementById('leaderboardRank').textContent = '#' + myRank.rank;
+                }
+            }
+
+            // Render badges
+            renderBadges();
+
+        } catch (e) {
+            console.error('Failed to load badge data:', e);
+            document.getElementById('badgeGrid').innerHTML =
+                '<div class="col-12 text-center py-5 text-danger">Failed to load badges. Please try again.</div>';
+        }
+    }
+
+    function updateCategoryProgress(allCats, earnedCats) {
+        const categories = ['rank', 'streak', 'achievement', 'community', 'donation', 'special'];
+        categories.forEach(cat => {
+            const total = (allCats[cat] || []).length;
+            const earned = (earnedCats[cat] || []).length;
+            const pct = total > 0 ? Math.round((earned / total) * 100) : 0;
+
+            const label = document.getElementById('progress' + cat.charAt(0).toUpperCase() + cat.slice(1));
+            const bar = document.getElementById('progress' + cat.charAt(0).toUpperCase() + cat.slice(1) + 'Bar');
+
+            if (label) label.textContent = `${earned}/${total}`;
+            if (bar) bar.style.width = pct + '%';
+        });
+    }
+
+    function renderLeaderboard(data) {
+        const list = document.getElementById('leaderboardList');
+        if (!data.leaderboard || data.leaderboard.length === 0) {
+            list.innerHTML = '<div class="text-center text-muted py-4">No badge holders yet. Be the first!</div>';
+            return;
+        }
+
+        list.innerHTML = data.leaderboard.map((entry, idx) => {
+            const rankClass = idx < 3 ? `rank-${idx + 1}` : '';
+            const rankIcon = idx === 0 ? '&#x1F947;' : idx === 1 ? '&#x1F948;' : idx === 2 ? '&#x1F949;' : `#${entry.rank}`;
+            const addrShort = entry.address ? entry.address.substring(0, 10) + '...' : 'Unknown';
+
+            return `
+                <div class="list-group-item leaderboard-item d-flex justify-content-between align-items-center py-2">
+                    <div>
+                        <span class="me-2 ${rankClass}" style="font-size: 1.2em;">${rankIcon}</span>
+                        <code class="small">${addrShort}</code>
+                    </div>
+                    <span class="badge bg-warning text-dark">${entry.badge_count}</span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function loadLeaderboard() {
+        fetch('/api/badges/leaderboard?limit=10')
+            .then(r => r.json())
+            .then(data => renderLeaderboard(data))
+            .catch(e => console.error('Failed to load leaderboard:', e));
+    }
+
+    function setupFilters() {
+        // Category filter
+        document.querySelectorAll('#categoryTabs .nav-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                document.querySelectorAll('#categoryTabs .nav-link').forEach(l => l.classList.remove('active'));
+                this.classList.add('active');
+                currentCategory = this.dataset.category;
+                renderBadges();
+            });
+        });
+
+        // Rarity filter
+        document.querySelectorAll('#rarityFilter button').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('#rarityFilter button').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentRarity = this.dataset.rarity;
+                renderBadges();
+            });
+        });
+    }
+
+    function renderBadges() {
+        let filteredBadges = [...allBadges];
+
+        // Filter by category
+        if (currentCategory === 'earned') {
+            filteredBadges = filteredBadges.filter(b => b.earned);
+        } else if (currentCategory !== 'all') {
+            filteredBadges = filteredBadges.filter(b =>
+                (b.category || '').toLowerCase() === currentCategory
+            );
+        }
+
+        // Filter by rarity
+        if (currentRarity !== 'all') {
+            filteredBadges = filteredBadges.filter(b =>
+                (b.rarity || 'common').toLowerCase() === currentRarity
+            );
+        }
+
+        // Sort: earned first, then by rarity (mythic first)
+        const rarityOrder = ['mythic', 'legendary', 'epic', 'rare', 'uncommon', 'common'];
+        filteredBadges.sort((a, b) => {
+            if (a.earned && !b.earned) return -1;
+            if (!a.earned && b.earned) return 1;
+            const rarityA = rarityOrder.indexOf((a.rarity || 'common').toLowerCase());
+            const rarityB = rarityOrder.indexOf((b.rarity || 'common').toLowerCase());
+            return rarityA - rarityB;
+        });
+
+        const grid = document.getElementById('badgeGrid');
+
+        if (filteredBadges.length === 0) {
+            grid.innerHTML = '<div class="col-12 text-center py-5 text-muted">No badges found for this filter.</div>';
+            return;
+        }
+
+        grid.innerHTML = filteredBadges.map(badge => {
+            const rarity = (badge.rarity || 'common').toLowerCase();
+            const color = rarityColors[rarity] || '#9e9e9e';
+            const icon = categoryIcons[badge.category?.toLowerCase()] || 'emoji_events';
+            const earnedClass = badge.earned ? 'earned' : 'locked';
+            const glowClass = badge.earned && (rarity === 'legendary' || rarity === 'mythic') ? `glow-${rarity}` : '';
+
+            return `
+                <div class="col-xl-2 col-lg-3 col-md-4 col-sm-6">
+                    <div class="card badge-card ${earnedClass} ${glowClass}" style="border-color: ${color};">
+                        <div class="card-body text-center py-4">
+                            <i class="material-icons badge-icon" style="color: ${color};">${icon}</i>
+                            <h6 class="mb-1">${badge.name || badge.id}</h6>
+                            <span class="badge rarity-badge-${rarity} mb-2">${rarity.charAt(0).toUpperCase() + rarity.slice(1)}</span>
+                            <p class="small text-muted mb-2" style="min-height: 40px;">${badge.description || ''}</p>
+                            <div class="small">
+                                ${badge.earned
+                                    ? '<span class="text-success"><i class="material-icons align-middle" style="font-size: 14px;">check_circle</i> Earned</span>'
+                                    : '<span class="text-muted"><i class="material-icons align-middle" style="font-size: 14px;">lock</i> Locked</span>'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+</script>
+{% endblock %}

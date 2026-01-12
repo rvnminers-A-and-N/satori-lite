@@ -95,6 +95,110 @@
     }
 
     /* ============================================ */
+    /* REPUTATION VISUAL INDICATORS */
+    /* ============================================ */
+    /* Reputation is shown as an inner glow on the node circle */
+    /* Trusted (90+): green glow - highly reliable node */
+    /* Good (70-89): blue - good standing */
+    /* Neutral (50-69): no glow (grey/white border) - default */
+    /* Suspect (30-49): yellow/orange glow - caution */
+    /* Untrusted (<30): red glow - avoid */
+
+    .reputation-ring {
+        fill: none;
+        stroke-width: 2;
+        pointer-events: none;
+    }
+
+    /* Trusted: bright green glow */
+    .reputation-trusted {
+        stroke: #00ff88;
+        filter: drop-shadow(0 0 6px #00ff88) drop-shadow(0 0 3px #00ff88);
+    }
+    @keyframes trustedGlow {
+        0%, 100% { filter: drop-shadow(0 0 6px #00ff88) drop-shadow(0 0 3px #00ff88); }
+        50% { filter: drop-shadow(0 0 10px #00ff88) drop-shadow(0 0 5px #00ff88); }
+    }
+    .node:hover .reputation-trusted {
+        animation: trustedGlow 2s ease-in-out infinite;
+    }
+
+    /* Good: blue */
+    .reputation-good {
+        stroke: #00aaff;
+        filter: drop-shadow(0 0 4px #00aaff);
+    }
+
+    /* Neutral: subtle grey/white (default, no special effect) */
+    .reputation-neutral {
+        stroke: rgba(255, 255, 255, 0.3);
+        filter: none;
+    }
+
+    /* Suspect: yellow/orange warning */
+    .reputation-suspect {
+        stroke: #ffaa00;
+        filter: drop-shadow(0 0 4px #ffaa00);
+    }
+    @keyframes suspectPulse {
+        0%, 100% { filter: drop-shadow(0 0 4px #ffaa00); opacity: 1; }
+        50% { filter: drop-shadow(0 0 8px #ff6600); opacity: 0.8; }
+    }
+    .reputation-suspect {
+        animation: suspectPulse 1.5s ease-in-out infinite;
+    }
+
+    /* Untrusted: red danger */
+    .reputation-untrusted {
+        stroke: #ff4444;
+        filter: drop-shadow(0 0 6px #ff4444);
+    }
+    @keyframes untrustedPulse {
+        0%, 100% { filter: drop-shadow(0 0 6px #ff4444); opacity: 1; }
+        50% { filter: drop-shadow(0 0 10px #ff0000); opacity: 0.7; }
+    }
+    .reputation-untrusted {
+        animation: untrustedPulse 1s ease-in-out infinite;
+    }
+
+    /* ============================================ */
+    /* SLASHING STATUS INDICATORS */
+    /* ============================================ */
+    /* Slashing status: warned (yellow) or removed (red) */
+    /* Shown as a strike-through or warning icon on the node */
+
+    .slashing-badge {
+        font-size: 10px;
+        font-weight: bold;
+        pointer-events: none;
+    }
+
+    /* Warned: yellow warning icon, positioned bottom-right */
+    .slashing-warned {
+        fill: #ffcc00;
+        text-shadow: 0 0 4px #ffcc00, 0 1px 2px rgba(0,0,0,0.8);
+    }
+
+    /* Removed: red X icon, node is greyed out */
+    .slashing-removed {
+        fill: #ff4444;
+        text-shadow: 0 0 4px #ff4444, 0 1px 2px rgba(0,0,0,0.8);
+    }
+
+    /* Grey out removed nodes */
+    .node-slashed-removed .node-circle {
+        fill: #444444 !important;
+        opacity: 0.5;
+    }
+    .node-slashed-removed .title-ring {
+        opacity: 0.3;
+    }
+    .node-slashed-removed .node-label {
+        opacity: 0.5;
+        text-decoration: line-through;
+    }
+
+    /* ============================================ */
     /* EDGE TYPE STYLES */
     /* ============================================ */
     .edge-p2p {
@@ -268,6 +372,13 @@
         flex-shrink: 0;
         border: 2px solid;
         background: transparent;
+    }
+    .legend-glow {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 8px;
+        flex-shrink: 0;
     }
     .legend-hint {
         color: rgba(255,255,255,0.4);
@@ -1845,6 +1956,122 @@
         </div>
     </div>
 
+    <!-- Badges & Achievements Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-lg-6 col-md-12">
+            <div class="card metric-card h-100">
+                <div class="card-header py-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #ffd700;">military_tech</i>
+                            Badges & Achievements
+                        </h6>
+                        <div>
+                            <a href="{{ url_for('badges_page') }}" class="btn btn-outline-warning btn-sm me-1" title="View all badges">
+                                <i class="material-icons align-middle" style="font-size: 14px;">open_in_new</i>
+                            </a>
+                            <button onclick="loadMyBadges();" class="btn btn-outline-info btn-sm" title="Refresh">
+                                <i class="material-icons align-middle" style="font-size: 14px;">refresh</i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-3">
+                    <!-- Badge Stats Summary -->
+                    <div class="row text-center mb-3">
+                        <div class="col-3">
+                            <h4 id="badgeTotalCount" class="mb-0" style="color: #ffd700;">0</h4>
+                            <small class="text-muted">Earned</small>
+                        </div>
+                        <div class="col-3">
+                            <h5 id="badgeHighestRarity" class="mb-0" style="color: #9e9e9e;">--</h5>
+                            <small class="text-muted">Rarest</small>
+                        </div>
+                        <div class="col-3">
+                            <h5 id="badgeStreakDays" class="mb-0" style="color: #ffd700;">0</h5>
+                            <small class="text-muted">Streak Days</small>
+                        </div>
+                        <div class="col-3">
+                            <h5 id="badgeRank" class="mb-0" style="color: #00ff88;">--</h5>
+                            <small class="text-muted">Rank Badges</small>
+                        </div>
+                    </div>
+
+                    <!-- Progress to Next Badge -->
+                    <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="text-muted small">Progress to Next Badge</span>
+                            <span id="badgeProgressPct" class="small text-warning">0%</span>
+                        </div>
+                        <div class="progress" style="height: 8px;">
+                            <div id="badgeProgressBar" class="progress-bar bg-warning" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <small class="text-muted" id="badgeProgressText">Loading...</small>
+                    </div>
+
+                    <!-- Earned Badges Display -->
+                    <div class="mb-2">
+                        <span class="text-muted small d-block mb-2">Recent Badges</span>
+                        <div id="earnedBadgesList" class="d-flex flex-wrap gap-2">
+                            <span class="text-muted small">Loading badges...</span>
+                        </div>
+                    </div>
+
+                    <!-- Badge Categories Summary -->
+                    <div id="badgeCategorySummary" style="display: none;">
+                        <hr class="my-2">
+                        <div class="row text-center small">
+                            <div class="col-3">
+                                <span id="badgeCatRank" class="fw-bold text-success">0</span>
+                                <span class="text-muted d-block">Rank</span>
+                            </div>
+                            <div class="col-3">
+                                <span id="badgeCatStreak" class="fw-bold text-warning">0</span>
+                                <span class="text-muted d-block">Streak</span>
+                            </div>
+                            <div class="col-3">
+                                <span id="badgeCatAchieve" class="fw-bold text-info">0</span>
+                                <span class="text-muted d-block">Achievement</span>
+                            </div>
+                            <div class="col-3">
+                                <span id="badgeCatCommunity" class="fw-bold text-primary">0</span>
+                                <span class="text-muted d-block">Community</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Badge Leaderboard -->
+        <div class="col-lg-6 col-md-12">
+            <div class="card metric-card h-100">
+                <div class="card-header py-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0">
+                            <i class="material-icons me-1" style="font-size: 18px; vertical-align: middle; color: #00ff88;">leaderboard</i>
+                            Badge Leaderboard
+                        </h6>
+                        <button onclick="loadBadgeLeaderboard();" class="btn btn-outline-success btn-sm" title="Refresh">
+                            <i class="material-icons align-middle" style="font-size: 14px;">refresh</i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body p-3">
+                    <div id="badgeLeaderboardList" class="list-group list-group-flush" style="max-height: 220px; overflow-y: auto;">
+                        <div class="text-center text-muted small py-3">Loading badge leaderboard...</div>
+                    </div>
+                    <div class="text-center mt-2">
+                        <a href="{{ url_for('badges_page') }}" class="btn btn-outline-primary btn-sm">
+                            <i class="material-icons align-middle" style="font-size: 14px;">emoji_events</i>
+                            View Full Badge Catalog
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- My Identity Card (Full Width Horizontal) -->
     <div class="row g-4 mb-4">
         <div class="col-12">
@@ -2155,6 +2382,47 @@
                         <span>Legend</span>
                         <small class="legend-hint">all titles earned</small>
                     </div>
+                    <div class="legend-section">
+                        <small style="color: rgba(255,255,255,0.6);">Reputation (inner glow)</small>
+                    </div>
+                    <div class="legend-item" data-reputation="trusted">
+                        <div class="legend-glow" style="background: #00ff88; box-shadow: 0 0 6px #00ff88, 0 0 3px #00ff88;"></div>
+                        <span>Trusted</span>
+                        <small class="legend-hint">90+ score</small>
+                    </div>
+                    <div class="legend-item" data-reputation="good">
+                        <div class="legend-glow" style="background: #00aaff; box-shadow: 0 0 4px #00aaff;"></div>
+                        <span>Good</span>
+                        <small class="legend-hint">70-89 score</small>
+                    </div>
+                    <div class="legend-item" data-reputation="neutral">
+                        <div class="legend-glow" style="background: #888888;"></div>
+                        <span>Neutral</span>
+                        <small class="legend-hint">50-69 score</small>
+                    </div>
+                    <div class="legend-item" data-reputation="suspect">
+                        <div class="legend-glow" style="background: #ffaa00; box-shadow: 0 0 4px #ffaa00;"></div>
+                        <span>Suspect</span>
+                        <small class="legend-hint">30-49 score</small>
+                    </div>
+                    <div class="legend-item" data-reputation="untrusted">
+                        <div class="legend-glow" style="background: #ff4444; box-shadow: 0 0 6px #ff4444;"></div>
+                        <span>Untrusted</span>
+                        <small class="legend-hint">&lt;30 score</small>
+                    </div>
+                    <div class="legend-section">
+                        <small style="color: rgba(255,255,255,0.6);">Slashing Status (badge icon)</small>
+                    </div>
+                    <div class="legend-item" data-slashing="warned">
+                        <span class="legend-badge" style="color: #ffcc00; font-size: 14px; margin-right: 8px; text-shadow: 0 0 4px #ffcc00;">⚠</span>
+                        <span>Warned</span>
+                        <small class="legend-hint">50% penalty</small>
+                    </div>
+                    <div class="legend-item" data-slashing="removed">
+                        <span class="legend-badge" style="color: #ff4444; font-size: 14px; margin-right: 8px; text-shadow: 0 0 4px #ff4444;">✕</span>
+                        <span>Removed</span>
+                        <small class="legend-hint">no rewards</small>
+                    </div>
                 </div>
 
                 <!-- WebSocket Status -->
@@ -2220,6 +2488,14 @@
                         <div class="node-tooltip-row" id="tooltipStakingRow" style="display: none;">
                             <span class="node-tooltip-label">Staking</span>
                             <span id="tooltipStaking" class="node-tooltip-value">--</span>
+                        </div>
+                        <div class="node-tooltip-row" id="tooltipReputationRow" style="display: none;">
+                            <span class="node-tooltip-label">Reputation</span>
+                            <span id="tooltipReputation" class="node-tooltip-value">--</span>
+                        </div>
+                        <div class="node-tooltip-row" id="tooltipSlashingRow" style="display: none;">
+                            <span class="node-tooltip-label">Slashing</span>
+                            <span id="tooltipSlashing" class="node-tooltip-value">--</span>
                         </div>
                         <div class="node-tooltip-row">
                             <span class="node-tooltip-label">Status</span>
@@ -3663,6 +3939,44 @@
                         .attr('dy', d => d.isMe ? -16 : -10)
                         .attr('text-anchor', 'middle')
                         .text('↗');
+
+                    // Reputation ring (inner glow based on reputation score)
+                    // Only show for nodes with non-neutral reputation
+                    g.filter(d => !d.isMe && d.reputationScore !== undefined && d.reputationScore !== null)
+                        .append('circle')
+                        .attr('class', d => {
+                            const score = d.reputationScore;
+                            if (score >= 90) return 'reputation-ring reputation-trusted';
+                            if (score >= 70) return 'reputation-ring reputation-good';
+                            if (score >= 50) return 'reputation-ring reputation-neutral';
+                            if (score >= 30) return 'reputation-ring reputation-suspect';
+                            return 'reputation-ring reputation-untrusted';
+                        })
+                        .attr('r', d => d.isMe ? 20 : 12)  // Slightly inside the main circle
+                        .attr('fill', 'none');
+
+                    // Slashing status badge (warning or removed indicator)
+                    // Warned: ⚠ in yellow, positioned bottom-left
+                    g.filter(d => d.slashingStatus === 'warned')
+                        .append('text')
+                        .attr('class', 'slashing-badge slashing-warned')
+                        .attr('dx', d => d.isMe ? -16 : -10)
+                        .attr('dy', d => d.isMe ? 16 : 10)
+                        .attr('text-anchor', 'middle')
+                        .text('⚠');
+
+                    // Removed: ✕ in red, positioned bottom-left
+                    g.filter(d => d.slashingStatus === 'removed')
+                        .each(function(d) {
+                            // Add class to parent group for greying out
+                            d3.select(this.parentNode).classed('node-slashed-removed', true);
+                        })
+                        .append('text')
+                        .attr('class', 'slashing-badge slashing-removed')
+                        .attr('dx', d => d.isMe ? -16 : -10)
+                        .attr('dy', d => d.isMe ? 16 : 10)
+                        .attr('text-anchor', 'middle')
+                        .text('✕');
 
                     g.append('text')
                         .attr('class', 'node-label')
@@ -5826,6 +6140,59 @@
             stakingRow.style.display = 'none';
         }
 
+        // Display reputation score if available
+        const reputationRow = document.getElementById('tooltipReputationRow');
+        const reputationScore = nodeData.reputationScore;
+        if (reputationScore !== undefined && reputationScore !== null) {
+            reputationRow.style.display = 'flex';
+            let repColor, repLabel;
+            if (reputationScore >= 90) {
+                repColor = '#00ff88';  // Trusted - green
+                repLabel = 'Trusted';
+            } else if (reputationScore >= 70) {
+                repColor = '#00aaff';  // Good - blue
+                repLabel = 'Good';
+            } else if (reputationScore >= 50) {
+                repColor = '#888888';  // Neutral - grey
+                repLabel = 'Neutral';
+            } else if (reputationScore >= 30) {
+                repColor = '#ffaa00';  // Suspect - yellow/orange
+                repLabel = 'Suspect';
+            } else {
+                repColor = '#ff4444';  // Untrusted - red
+                repLabel = 'Untrusted';
+            }
+            document.getElementById('tooltipReputation').innerHTML =
+                `<span style="color: ${repColor}; font-weight: 600;">${reputationScore.toFixed(0)} (${repLabel})</span>`;
+        } else {
+            reputationRow.style.display = 'none';
+        }
+
+        // Display slashing status if any
+        const slashingRow = document.getElementById('tooltipSlashingRow');
+        const slashingStatus = nodeData.slashingStatus;
+        if (slashingStatus) {
+            slashingRow.style.display = 'flex';
+            let slashColor, slashLabel, slashIcon;
+            if (slashingStatus === 'removed') {
+                slashColor = '#ff4444';
+                slashLabel = 'Removed from rewards';
+                slashIcon = '✕';
+            } else if (slashingStatus === 'warned') {
+                slashColor = '#ffcc00';
+                slashLabel = 'Warning (50% penalty)';
+                slashIcon = '⚠';
+            } else {
+                slashColor = '#888';
+                slashLabel = slashingStatus;
+                slashIcon = '';
+            }
+            document.getElementById('tooltipSlashing').innerHTML =
+                `<span style="color: ${slashColor}; font-weight: 600;">${slashIcon} ${slashLabel}</span>`;
+        } else {
+            slashingRow.style.display = 'none';
+        }
+
         const isConnected = peer.connected === true;
         document.getElementById('tooltipStatus').textContent = isConnected ? 'Connected' : 'Offline';
         document.getElementById('tooltipStatus').style.color = isConnected ? '#00ff88' : '#888';
@@ -7191,15 +7558,160 @@
             });
     }
 
+    // =========================================================================
+    // BADGE SYSTEM FUNCTIONS
+    // =========================================================================
+
+    // Rarity colors for badge display
+    const rarityColors = {
+        'common': '#9e9e9e',
+        'uncommon': '#4CAF50',
+        'rare': '#2196F3',
+        'epic': '#9C27B0',
+        'legendary': '#FF9800',
+        'mythic': '#E91E63'
+    };
+
+    // Rarity display order (for finding highest)
+    const rarityOrder = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'];
+
+    function loadMyBadges() {
+        // Load badges
+        fetch('/api/badges/my', { method: 'GET' })
+            .then(r => r.json())
+            .then(badgesData => {
+                // Update badge count
+                document.getElementById('badgeTotalCount').textContent = badgesData.total || 0;
+
+                // Find highest rarity
+                let highestRarity = 'common';
+                let highestRarityIdx = 0;
+                if (badgesData.badges && badgesData.badges.length > 0) {
+                    for (const badge of badgesData.badges) {
+                        const rarity = badge.rarity || 'common';
+                        const idx = rarityOrder.indexOf(rarity.toLowerCase());
+                        if (idx > highestRarityIdx) {
+                            highestRarityIdx = idx;
+                            highestRarity = rarity;
+                        }
+                    }
+                }
+
+                const rarityEl = document.getElementById('badgeHighestRarity');
+                rarityEl.textContent = highestRarity.charAt(0).toUpperCase() + highestRarity.slice(1);
+                rarityEl.style.color = rarityColors[highestRarity.toLowerCase()] || '#9e9e9e';
+
+                // Display earned badges
+                const badgesList = document.getElementById('earnedBadgesList');
+                if (badgesData.badges && badgesData.badges.length > 0) {
+                    // Sort by earned_at descending, show most recent 10
+                    const recentBadges = badgesData.badges
+                        .sort((a, b) => (b.earned_at || 0) - (a.earned_at || 0))
+                        .slice(0, 10);
+
+                    badgesList.innerHTML = recentBadges.map(badge => {
+                        const rarity = (badge.rarity || 'common').toLowerCase();
+                        const color = rarityColors[rarity] || '#9e9e9e';
+                        const name = badge.name || badge.badge_id || 'Badge';
+                        const title = `${name}\n${badge.description || ''}\nRarity: ${rarity}`;
+                        return `<span class="badge" style="background-color: ${color}; font-size: 0.75rem;" title="${title}">${name}</span>`;
+                    }).join('');
+                } else {
+                    badgesList.innerHTML = '<span class="text-muted small">No badges earned yet. Keep participating!</span>';
+                }
+
+                // Update category summary
+                const catSummary = document.getElementById('badgeCategorySummary');
+                if (badgesData.by_category && Object.keys(badgesData.by_category).length > 0) {
+                    catSummary.style.display = 'block';
+                    document.getElementById('badgeCatRank').textContent =
+                        (badgesData.by_category['rank'] || []).length;
+                    document.getElementById('badgeCatStreak').textContent =
+                        (badgesData.by_category['streak'] || []).length;
+                    document.getElementById('badgeCatAchieve').textContent =
+                        (badgesData.by_category['achievement'] || []).length;
+                    document.getElementById('badgeCatCommunity').textContent =
+                        (badgesData.by_category['community'] || []).length;
+
+                    // Update rank badge count
+                    document.getElementById('badgeRank').textContent =
+                        (badgesData.by_category['rank'] || []).length;
+                }
+            })
+            .catch(e => {
+                console.error('Failed to load badges:', e);
+                document.getElementById('earnedBadgesList').innerHTML =
+                    '<span class="text-muted small">Failed to load badges</span>';
+            });
+
+        // Load progress
+        fetch('/api/badges/progress', { method: 'GET' })
+            .then(r => r.json())
+            .then(progressData => {
+                const progressBar = document.getElementById('badgeProgressBar');
+                const progressPct = document.getElementById('badgeProgressPct');
+                const progressText = document.getElementById('badgeProgressText');
+                const streakDays = document.getElementById('badgeStreakDays');
+
+                // Update streak days
+                if (progressData.streak) {
+                    streakDays.textContent = progressData.streak.current_days || 0;
+
+                    // Use streak progress for the bar
+                    const pct = progressData.streak.progress_percent || 0;
+                    progressBar.style.width = pct + '%';
+                    progressPct.textContent = pct + '%';
+                    progressText.textContent = `${progressData.streak.current_days || 0}/${progressData.streak.days_needed || 7} days to ${progressData.streak.next_badge || 'STREAK_EPOCH'}`;
+                }
+            })
+            .catch(e => {
+                console.error('Failed to load badge progress:', e);
+            });
+    }
+
+    function loadBadgeLeaderboard() {
+        fetch('/api/badges/leaderboard?limit=10', { method: 'GET' })
+            .then(r => r.json())
+            .then(data => {
+                const list = document.getElementById('badgeLeaderboardList');
+                if (data.leaderboard && data.leaderboard.length > 0) {
+                    list.innerHTML = data.leaderboard.map((entry, idx) => {
+                        const rankIcon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${entry.rank}`;
+                        const addrShort = entry.address ? entry.address.substring(0, 12) + '...' : 'Unknown';
+                        return `
+                            <div class="list-group-item d-flex justify-content-between align-items-center py-2 px-3">
+                                <div>
+                                    <span class="me-2">${rankIcon}</span>
+                                    <code class="small">${addrShort}</code>
+                                </div>
+                                <span class="badge bg-warning text-dark">${entry.badge_count} badges</span>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    list.innerHTML = '<div class="text-center text-muted small py-3">No badge holders yet. Be the first!</div>';
+                }
+            })
+            .catch(e => {
+                console.error('Failed to load badge leaderboard:', e);
+                document.getElementById('badgeLeaderboardList').innerHTML =
+                    '<div class="text-center text-danger small py-3">Failed to load leaderboard</div>';
+            });
+    }
+
     // Call on page load
     document.addEventListener('DOMContentLoaded', function() {
         // Existing code runs, also add protocol stats, consensus, and distribution
         setTimeout(refreshProtocolStats, 500);
         setTimeout(refreshConsensusStatus, 600);
         setTimeout(refreshDistributionStatus, 700);
+        setTimeout(loadMyBadges, 800);
+        setTimeout(loadBadgeLeaderboard, 900);
         setInterval(refreshProtocolStats, 60000);
         setInterval(refreshConsensusStatus, 30000);  // Consensus updates more frequently
         setInterval(refreshDistributionStatus, 60000);
+        setInterval(loadMyBadges, 300000);  // Refresh badges every 5 minutes
+        setInterval(loadBadgeLeaderboard, 300000);
     });
 </script>
 {% endblock %}

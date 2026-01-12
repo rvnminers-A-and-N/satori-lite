@@ -647,6 +647,18 @@ def register_routes(app):
         from satorineuron import VERSION
         return render_template('stake.html', version=VERSION)
 
+    @app.route('/guide')
+    @login_required
+    def guide():
+        """Comprehensive rewards guide page."""
+        return render_template('guide.html')
+
+    @app.route('/badges')
+    @login_required
+    def badges_page():
+        """Full badge catalog and achievements page."""
+        return render_template('badges.html')
+
     @app.route('/health')
     def health():
         """Health check endpoint - checks API server connectivity."""
@@ -7787,4 +7799,318 @@ def register_routes(app):
                 'success': False,
                 'error': str(e),
             })
+
+    # ========================================================================
+    # BADGE SYSTEM ENDPOINTS
+    # ========================================================================
+
+    @app.route('/api/badges/my')
+    @login_required
+    def api_badges_my():
+        """Get badges earned by the current user.
+
+        Returns all badges earned by this node's wallet address, grouped by
+        category with metadata for each badge.
+        """
+        try:
+            from satorineuron.init import start
+
+            # Get wallet address
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address:
+                return jsonify({
+                    'badges': [],
+                    'total': 0,
+                    'error': 'Wallet not available'
+                })
+
+            # Try to get badge manager from startup
+            badge_manager = None
+            if startup:
+                badge_manager = getattr(startup, '_badge_manager', None)
+
+            # If no badge manager in startup, create a temporary one for querying
+            if not badge_manager:
+                try:
+                    from satorip2p.protocol.badges import BadgeManager
+                    badge_manager = BadgeManager()
+                except ImportError:
+                    return jsonify({
+                        'badges': [],
+                        'total': 0,
+                        'by_category': {},
+                        'error': 'Badge system not available'
+                    })
+
+            # Get earned badges
+            earned_badges = badge_manager.get_badges_for_address(wallet_address)
+
+            # Group by category
+            by_category = {}
+            for badge in earned_badges:
+                # Get badge definition for full metadata
+                badge_def = badge_manager.get_badge_definition(badge.badge_id)
+                badge_data = badge.to_dict()
+
+                # Add definition metadata if available
+                if badge_def:
+                    badge_data['name'] = badge_def.name
+                    badge_data['description'] = badge_def.description
+                    badge_data['category'] = badge_def.category
+                    badge_data['rarity'] = badge_def.rarity
+
+                category = badge_data.get('category', 'unknown')
+                if category not in by_category:
+                    by_category[category] = []
+                by_category[category].append(badge_data)
+
+            return jsonify({
+                'badges': [b.to_dict() for b in earned_badges],
+                'total': len(earned_badges),
+                'by_category': by_category,
+                'address': wallet_address
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get user badges: {e}")
+            return jsonify({
+                'badges': [],
+                'total': 0,
+                'by_category': {},
+                'error': str(e)
+            })
+
+    @app.route('/api/badges/all')
+    @login_required
+    def api_badges_all():
+        """Get all available badge definitions.
+
+        Returns the complete catalog of badges that can be earned,
+        grouped by category.
+        """
+        try:
+            from satorip2p.protocol.badges import (
+                BadgeManager,
+                ACHIEVEMENTS,
+                STREAK_BADGES,
+                COMMUNITY_BADGES,
+                SPECIAL_BADGES,
+                DONATION_TIERS,
+                ROLE_BADGES,
+                BadgeCategory,
+            )
+
+            badge_manager = BadgeManager()
+            all_badges = badge_manager.list_all_badges()
+
+            # Group by category
+            by_category = {}
+            for badge in all_badges:
+                badge_dict = badge.to_dict()
+                category = badge_dict.get('category', 'unknown')
+                if category not in by_category:
+                    by_category[category] = []
+                by_category[category].append(badge_dict)
+
+            # Get counts
+            counts = badge_manager.get_badge_count_by_category()
+
+            return jsonify({
+                'badges': [b.to_dict() for b in all_badges],
+                'total': len(all_badges),
+                'by_category': by_category,
+                'counts': counts
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get badge catalog: {e}")
+            return jsonify({
+                'badges': [],
+                'total': 0,
+                'by_category': {},
+                'counts': {},
+                'error': str(e)
+            })
+
+    @app.route('/api/badges/stats')
+    @login_required
+    def api_badges_stats():
+        """Get badge system statistics.
+
+        Returns overall stats about badge issuance across the network.
+        """
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            badge_manager = None
+            if startup:
+                badge_manager = getattr(startup, '_badge_manager', None)
+
+            if not badge_manager:
+                try:
+                    from satorip2p.protocol.badges import BadgeManager
+                    badge_manager = BadgeManager()
+                except ImportError:
+                    return jsonify({'error': 'Badge system not available'})
+
+            stats = badge_manager.get_stats()
+            counts = badge_manager.get_badge_count_by_category()
+
+            return jsonify({
+                **stats,
+                'badge_types': counts,
+                'total_badge_types': sum(counts.values())
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get badge stats: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/badges/leaderboard')
+    @login_required
+    def api_badges_leaderboard():
+        """Get badge leaderboard - top badge holders.
+
+        Returns the top addresses by badge count.
+        """
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 10, type=int)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            badge_manager = None
+            if startup:
+                badge_manager = getattr(startup, '_badge_manager', None)
+
+            if not badge_manager:
+                return jsonify({
+                    'leaderboard': [],
+                    'error': 'Badge manager not initialized'
+                })
+
+            # Build leaderboard from earned badges
+            address_counts = {}
+            for address, badges in badge_manager._earned_badges.items():
+                address_counts[address] = len(badges)
+
+            # Sort by count descending
+            sorted_addresses = sorted(
+                address_counts.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:limit]
+
+            leaderboard = [
+                {'address': addr, 'badge_count': count, 'rank': i + 1}
+                for i, (addr, count) in enumerate(sorted_addresses)
+            ]
+
+            return jsonify({
+                'leaderboard': leaderboard,
+                'total_holders': len(address_counts)
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get badge leaderboard: {e}")
+            return jsonify({
+                'leaderboard': [],
+                'error': str(e)
+            })
+
+    @app.route('/api/badges/progress')
+    @login_required
+    def api_badges_progress():
+        """Get badge progress for current user.
+
+        Returns progress towards various badges (streaks, achievements, etc.)
+        """
+        try:
+            from satorineuron.init import start
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            wallet_address = None
+            if startup and hasattr(startup, 'wallet') and startup.wallet:
+                wallet_address = startup.wallet.address
+
+            if not wallet_address:
+                return jsonify({'error': 'Wallet not available'})
+
+            progress = {
+                'streak': {
+                    'current_days': 0,
+                    'next_badge': 'STREAK_EPOCH',
+                    'days_needed': 7,
+                    'progress_percent': 0
+                },
+                'voting': {
+                    'total_votes': 0,
+                    'next_badge': 'VOTER100',
+                    'votes_needed': 100,
+                    'progress_percent': 0
+                },
+                'mentoring': {
+                    'nodes_mentored': 0,
+                    'next_badge': 'MENTOR',
+                    'needed': 5,
+                    'progress_percent': 0
+                },
+                'data_service': {
+                    'requests_served': 0,
+                    'next_badge': 'DATA_PROVIDER',
+                    'needed': 1000,
+                    'progress_percent': 0
+                }
+            }
+
+            # Get uptime tracker for streak info
+            if startup:
+                uptime = getattr(startup, '_uptime', None)
+                if uptime and hasattr(uptime, 'get_streak'):
+                    streak_data = uptime.get_streak(wallet_address)
+                    if streak_data:
+                        days = streak_data.get('streak_days', 0)
+                        progress['streak']['current_days'] = days
+
+                        # Calculate next badge
+                        if days < 7:
+                            progress['streak']['next_badge'] = 'STREAK_EPOCH'
+                            progress['streak']['days_needed'] = 7
+                        elif days < 28:
+                            progress['streak']['next_badge'] = 'STREAK_EPOCH_4'
+                            progress['streak']['days_needed'] = 28
+                        elif days < 91:
+                            progress['streak']['next_badge'] = 'STREAK_EPOCH_13'
+                            progress['streak']['days_needed'] = 91
+                        else:
+                            progress['streak']['next_badge'] = 'STREAK_EPOCH_52'
+                            progress['streak']['days_needed'] = 364
+
+                        target = progress['streak']['days_needed']
+                        progress['streak']['progress_percent'] = min(100, int((days / target) * 100))
+
+                # Get governance for vote count
+                governance = getattr(startup, '_governance', None)
+                if governance and hasattr(governance, 'get_vote_count'):
+                    votes = governance.get_vote_count(wallet_address)
+                    progress['voting']['total_votes'] = votes
+                    if votes < 100:
+                        progress['voting']['next_badge'] = 'VOTER100'
+                        progress['voting']['votes_needed'] = 100
+                    else:
+                        progress['voting']['next_badge'] = 'VOTER500'
+                        progress['voting']['votes_needed'] = 500
+                    target = progress['voting']['votes_needed']
+                    progress['voting']['progress_percent'] = min(100, int((votes / target) * 100))
+
+            return jsonify(progress)
+
+        except Exception as e:
+            logger.warning(f"Failed to get badge progress: {e}")
+            return jsonify({'error': str(e)})
 

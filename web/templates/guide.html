@@ -1,0 +1,1251 @@
+{% extends "base.html" %}
+
+{% block title %}Satori - Rewards Guide{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Guide-specific styles */
+    .guide-section {
+        margin-bottom: 2rem;
+    }
+    .guide-section h2 {
+        color: var(--accent-primary);
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 0.5rem;
+        margin-bottom: 1.5rem;
+        font-size: 1.5rem;
+    }
+    .guide-section h3 {
+        color: var(--text-primary);
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        font-size: 1.2rem;
+    }
+    .guide-section h4 {
+        color: var(--text-secondary);
+        margin-top: 1rem;
+        margin-bottom: 0.75rem;
+        font-size: 1rem;
+    }
+    .guide-table {
+        width: 100%;
+        margin-bottom: 1rem;
+        border-collapse: collapse;
+    }
+    .guide-table th {
+        background: var(--bg-card-header);
+        color: var(--text-primary);
+        padding: 0.75rem;
+        text-align: left;
+        border-bottom: 2px solid var(--border-color);
+        font-weight: 600;
+    }
+    .guide-table td {
+        padding: 0.75rem;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-secondary);
+    }
+    .guide-table tr:hover td {
+        background: var(--bg-card-header);
+    }
+    .guide-table .highlight {
+        color: var(--accent-primary);
+        font-weight: 600;
+    }
+    .guide-table .positive {
+        color: #4ade80;
+    }
+    .guide-table .negative {
+        color: #f87171;
+    }
+    .guide-table .warning {
+        color: #fbbf24;
+    }
+    .multiplier-bar {
+        display: flex;
+        align-items: center;
+        margin: 1.5rem 0;
+        padding: 1rem;
+        background: var(--bg-secondary);
+        border-radius: 8px;
+        border: 1px solid var(--border-color);
+    }
+    .multiplier-bar .label {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-right: 1rem;
+        min-width: 80px;
+    }
+    .multiplier-bar .bar-container {
+        flex: 1;
+        height: 24px;
+        background: var(--bg-input);
+        border-radius: 4px;
+        overflow: hidden;
+        position: relative;
+    }
+    .multiplier-bar .bar-fill {
+        height: 100%;
+        background: var(--accent-gradient);
+        border-radius: 4px;
+        transition: width 0.5s ease;
+    }
+    .multiplier-bar .bar-value {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        font-weight: 600;
+        color: var(--text-primary);
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    }
+    .formula-box {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        font-family: 'Courier New', monospace;
+    }
+    .formula-box .formula {
+        font-size: 1.1rem;
+        color: var(--accent-primary);
+        margin-bottom: 0.5rem;
+    }
+    .formula-box .explanation {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        font-family: 'Inter', sans-serif;
+    }
+    .badge-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 1rem;
+        margin: 1rem 0;
+    }
+    .badge-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1rem;
+        text-align: center;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .badge-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow);
+    }
+    .badge-card .badge-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+    }
+    .badge-card .badge-name {
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
+    }
+    .badge-card .badge-desc {
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+    .badge-card.rarity-common { border-left: 3px solid #9ca3af; }
+    .badge-card.rarity-uncommon { border-left: 3px solid #22c55e; }
+    .badge-card.rarity-rare { border-left: 3px solid #3b82f6; }
+    .badge-card.rarity-epic { border-left: 3px solid #a855f7; }
+    .badge-card.rarity-legendary { border-left: 3px solid #f59e0b; }
+    .badge-card.rarity-mythic { border-left: 3px solid #ef4444; }
+    .rarity-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        padding: 0.75rem;
+        background: var(--bg-card-header);
+        border-radius: 6px;
+    }
+    .rarity-legend span {
+        display: flex;
+        align-items: center;
+        font-size: 0.85rem;
+    }
+    .rarity-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 6px;
+    }
+    .role-card {
+        display: flex;
+        align-items: center;
+        padding: 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+    }
+    .role-card .role-color {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        margin-right: 1rem;
+        flex-shrink: 0;
+    }
+    .role-card .role-info {
+        flex: 1;
+    }
+    .role-card .role-name {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+    .role-card .role-bonus {
+        color: #4ade80;
+        font-weight: 600;
+    }
+    .role-card .role-desc {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+    .warning-box {
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .warning-box h4 {
+        color: #f87171;
+        margin-top: 0;
+    }
+    .info-box {
+        background: rgba(59, 130, 246, 0.1);
+        border: 1px solid rgba(59, 130, 246, 0.3);
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .info-box h4 {
+        color: #60a5fa;
+        margin-top: 0;
+    }
+    .success-box {
+        background: rgba(34, 197, 94, 0.1);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+        border-radius: 8px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .success-box h4 {
+        color: #4ade80;
+        margin-top: 0;
+    }
+    .toc {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-bottom: 2rem;
+    }
+    .toc h4 {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        color: var(--text-primary);
+    }
+    .toc ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+    .toc li {
+        margin-bottom: 0.5rem;
+    }
+    .toc a {
+        color: var(--accent-primary);
+        text-decoration: none;
+    }
+    .toc a:hover {
+        text-decoration: underline;
+    }
+    .legend-title {
+        font-weight: 600;
+        font-size: 1.1rem;
+        color: var(--text-primary);
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+    }
+    .legend-title i {
+        margin-right: 0.5rem;
+        color: var(--accent-primary);
+    }
+    .time-hierarchy {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin: 1rem 0;
+    }
+    .time-unit {
+        padding: 0.5rem 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 20px;
+        font-size: 0.85rem;
+    }
+    .time-unit strong {
+        color: var(--accent-primary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <a href="{{ url_for('dashboard') }}" class="navbar-brand">
+        Satori
+    </a>
+    <div class="ms-auto d-flex align-items-center">
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container py-4">
+    <!-- Header -->
+    <div class="text-center mb-5">
+        <h1 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">
+            <i class="material-icons align-middle" style="font-size: 2.5rem; color: var(--accent-primary);">emoji_events</i>
+            Satori Rewards Guide
+        </h1>
+        <p class="text-muted" style="font-size: 1.1rem;">
+            Everything you need to know to maximize your rewards and achieve legendary status
+        </p>
+    </div>
+
+    <!-- Table of Contents -->
+    <div class="toc">
+        <h4><i class="material-icons align-middle me-2">list</i>Contents</h4>
+        <div class="row">
+            <div class="col-md-4">
+                <ul>
+                    <li><a href="#scoring">1. Artificial Neuron Scoring</a></li>
+                    <li><a href="#multipliers">2. Reward Multipliers</a></li>
+                    <li><a href="#roles">3. Node Roles</a></li>
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul>
+                    <li><a href="#reputation">4. Reputation System</a></li>
+                    <li><a href="#slashing">5. Slashing & Penalties</a></li>
+                    <li><a href="#donations">6. Donation Tiers</a></li>
+                </ul>
+            </div>
+            <div class="col-md-4">
+                <ul>
+                    <li><a href="#badges">7. Badges & Achievements</a></li>
+                    <li><a href="#time">8. Time Hierarchy</a></li>
+                    <li><a href="#legendary">9. Path to Legend</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 1: Artificial Neuron Scoring -->
+    <div class="guide-section" id="scoring">
+        <h2><i class="material-icons align-middle me-2">psychology</i>1. Artificial Neuron Scoring System</h2>
+
+        <p>
+            Satori uses a scientifically-grounded scoring model based on the <strong>McCulloch-Pitts Artificial Neuron</strong>
+            (1943), the foundational mathematical model of neural computation. This ensures fair, transparent, and
+            mathematically rigorous reward calculations.
+        </p>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">science</i>Scientific Foundation</h4>
+            <p style="margin-bottom: 0;">
+                The artificial neuron model, first proposed by Warren McCulloch and Walter Pitts, describes how neurons
+                process inputs through weighted summation and activation functions. Satori adapts this model: your
+                prediction accuracy and network contributions are the "inputs," various bonuses are the "weights,"
+                and your final reward is determined by the "activation" (sigmoid) function.
+            </p>
+        </div>
+
+        <h3>The Hybrid MCP/Continuous Model</h3>
+        <p>Scoring happens in two phases:</p>
+
+        <h4>Phase 1: MCP Inhibitory Gate (Binary Check)</h4>
+        <p>
+            Before any rewards are calculated, you must pass the inhibitory gate. Any of these conditions results
+            in <strong>immediate disqualification</strong> (0 rewards):
+        </p>
+        <ul>
+            <li>Slashing status = "removed"</li>
+            <li>Stake below minimum (50 SATORI)</li>
+            <li>Invalid or missing prediction</li>
+            <li>Known malicious behavior</li>
+        </ul>
+
+        <h4>Phase 2: Continuous Weighted Scoring</h4>
+        <p>
+            If you pass the gate, your score is calculated using sigmoid activation on weighted factors:
+        </p>
+
+        <div class="formula-box">
+            <div class="formula">
+                Final Score = Base Score × Total Multiplier × Sigmoid(weighted_factors)
+            </div>
+            <div class="explanation">
+                Where Total Multiplier = 1.0 + sum(all bonus multipliers), capped at 2.50x
+            </div>
+        </div>
+
+        <p>
+            The sigmoid function ensures smooth, continuous scoring that rewards improvement at all levels while
+            preventing extreme outliers from dominating.
+        </p>
+    </div>
+
+    <!-- Section 2: Reward Multipliers -->
+    <div class="guide-section" id="multipliers">
+        <h2><i class="material-icons align-middle me-2">speed</i>2. Reward Multipliers (Max 2.50x)</h2>
+
+        <p>
+            Your base reward can be multiplied by up to <strong>2.50x</strong> (150% bonus) by stacking various multipliers.
+            Here's every way to increase your rewards:
+        </p>
+
+        <div class="multiplier-bar">
+            <span class="label">MAX</span>
+            <div class="bar-container">
+                <div class="bar-fill" style="width: 100%;"></div>
+                <span class="bar-value">2.50x</span>
+            </div>
+        </div>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Bonus Type</th>
+                    <th>Max Bonus</th>
+                    <th>How to Earn</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Base</strong></td>
+                    <td class="highlight">1.00x</td>
+                    <td>Participate in predictions</td>
+                    <td>Everyone starts here</td>
+                </tr>
+                <tr>
+                    <td><strong>Stake Bonus</strong></td>
+                    <td class="positive">+25%</td>
+                    <td>Stake above minimum</td>
+                    <td>+5% per SATORI above 50, max at 55 SATORI</td>
+                </tr>
+                <tr>
+                    <td><strong>Role Bonus</strong></td>
+                    <td class="positive">+30%</td>
+                    <td>Serve network roles</td>
+                    <td>Relay +5%, Oracle +10%, Signer +15% (stackable to 30%)</td>
+                </tr>
+                <tr>
+                    <td><strong>Referral Bonus</strong></td>
+                    <td class="positive">+15%</td>
+                    <td>Refer new nodes</td>
+                    <td>Bronze (10) +2%, up to Diamond (2000+) +15%</td>
+                </tr>
+                <tr>
+                    <td><strong>Pool Diversity</strong></td>
+                    <td class="positive">+10%</td>
+                    <td>Join smaller pools</td>
+                    <td>Encourages decentralization</td>
+                </tr>
+                <tr>
+                    <td><strong>Uptime Streak</strong></td>
+                    <td class="positive">+10%</td>
+                    <td>Stay online consistently</td>
+                    <td>7 days +2%, up to 90+ days +10%</td>
+                </tr>
+                <tr>
+                    <td><strong>Donation Bonus</strong></td>
+                    <td class="positive">+20%</td>
+                    <td>Donate EVR to treasury</td>
+                    <td>Bronze (500 EVR) +4%, up to Diamond (250k EVR) +20%</td>
+                </tr>
+                <tr>
+                    <td><strong>Governance</strong></td>
+                    <td class="positive">+15%</td>
+                    <td>Participate in governance</td>
+                    <td>Vote, propose, comment on proposals</td>
+                </tr>
+                <tr>
+                    <td><strong>Reputation</strong></td>
+                    <td class="positive">+10%</td>
+                    <td>Maintain trusted status</td>
+                    <td>Score 90+ = +10%, 70-89 = +5%</td>
+                </tr>
+                <tr>
+                    <td><strong>Activity Bonus</strong></td>
+                    <td class="positive">+15%</td>
+                    <td>Verified unique activities</td>
+                    <td>Challenges +5%, Mentoring +3%, Data +4%, Health +3%</td>
+                </tr>
+                <tr style="background: var(--bg-card-header);">
+                    <td><strong>TOTAL POSSIBLE</strong></td>
+                    <td class="highlight" style="font-size: 1.2rem;">2.50x</td>
+                    <td colspan="2">Base 1.0 + 150% maximum bonus</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="success-box">
+            <h4><i class="material-icons align-middle me-2">tips_and_updates</i>Pro Tip</h4>
+            <p style="margin-bottom: 0;">
+                You don't need to max everything! Focus on what's achievable for you. Even reaching 1.50x puts you
+                well ahead of most participants. The multipliers are designed so that dedicated participants can
+                realistically achieve 1.75x-2.00x through normal, honest participation.
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 3: Node Roles -->
+    <div class="guide-section" id="roles">
+        <h2><i class="material-icons align-middle me-2">badge</i>3. Node Roles & Types</h2>
+
+        <h3>Functional Roles (Earn Bonuses)</h3>
+        <p>These roles actively contribute to the network and earn bonus multipliers:</p>
+
+        <div class="role-card">
+            <div class="role-color" style="background: #00ff88;"></div>
+            <div class="role-info">
+                <div class="role-name">Predictor <span class="role-bonus">+0%</span></div>
+                <div class="role-desc">Default role - all nodes make predictions. This is the foundation of Satori.</div>
+            </div>
+        </div>
+
+        <div class="role-card">
+            <div class="role-color" style="background: #ff6b6b;"></div>
+            <div class="role-info">
+                <div class="role-name">Relay <span class="role-bonus">+5%</span></div>
+                <div class="role-desc">High-uptime message relay node. Requires 95%+ uptime to qualify.</div>
+            </div>
+        </div>
+
+        <div class="role-card">
+            <div class="role-color" style="background: #00aaff;"></div>
+            <div class="role-info">
+                <div class="role-name">Oracle <span class="role-bonus">+10%</span></div>
+                <div class="role-desc">Provides external observations and data feeds to the network.</div>
+            </div>
+        </div>
+
+        <div class="role-card">
+            <div class="role-color" style="background: #ffd700;"></div>
+            <div class="role-info">
+                <div class="role-name">Signer <span class="role-bonus">+15%</span></div>
+                <div class="role-desc">Multi-sig signer for governance and consensus. Also handles data curation and archiving.</div>
+            </div>
+        </div>
+
+        <h3>Staking Status (Economic Relationships)</h3>
+        <p>These indicate your economic relationship with the network:</p>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Icon</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Pool Operator</strong></td>
+                    <td style="color: #aa44ff; font-size: 1.5rem;">&#x2B22;</td>
+                    <td>Runs a prediction/staking pool that others can delegate to</td>
+                </tr>
+                <tr>
+                    <td><strong>Delegate</strong></td>
+                    <td style="color: #00d4aa; font-size: 1.5rem;">&#x2197;</td>
+                    <td>Delegates stake to a pool operator</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Earned Titles (Achievements)</h3>
+        <p>Titles are displayed as colored rings around your node on the network map:</p>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Color</th>
+                    <th>How to Earn</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Historic</strong></td>
+                    <td><span style="color: #9966ff;">Purple</span></td>
+                    <td>90+ day uptime streak (maxed streak bonus)</td>
+                </tr>
+                <tr>
+                    <td><strong>Friendly</strong></td>
+                    <td><span style="color: #ff66aa;">Pink</span></td>
+                    <td>Diamond referral tier (2000+ referrals)</td>
+                </tr>
+                <tr>
+                    <td><strong>Charity</strong></td>
+                    <td><span style="color: #ffcc00;">Gold</span></td>
+                    <td>Diamond donor tier (250,000+ EVR donated)</td>
+                </tr>
+                <tr>
+                    <td><strong>Civic</strong></td>
+                    <td><span style="color: #00ddff;">Cyan</span></td>
+                    <td>Diamond governance tier (maxed governance participation)</td>
+                </tr>
+                <tr>
+                    <td><strong>Whale</strong></td>
+                    <td><span style="color: #00ff88;">Bright Green</span></td>
+                    <td>Maxed stake bonus (+25%)</td>
+                </tr>
+                <tr>
+                    <td><strong>Legend</strong></td>
+                    <td><span style="background: linear-gradient(90deg, #ff6b6b, #ffd700, #00ff88, #00aaff, #9966ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Rainbow</span></td>
+                    <td>All 5 titles earned - the ultimate achievement!</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 4: Reputation System -->
+    <div class="guide-section" id="reputation">
+        <h2><i class="material-icons align-middle me-2">verified</i>4. Reputation System</h2>
+
+        <p>
+            Your reputation score (0-100) reflects your standing in the network. It affects both your rewards
+            and how other nodes perceive you.
+        </p>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Level</th>
+                    <th>Score</th>
+                    <th>Visual</th>
+                    <th>Reward Effect</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Trusted</strong></td>
+                    <td>90-100</td>
+                    <td><span style="color: #00ff88;">Green Glow</span></td>
+                    <td class="positive">+10% bonus</td>
+                </tr>
+                <tr>
+                    <td><strong>Good</strong></td>
+                    <td>70-89</td>
+                    <td><span style="color: #00aaff;">Blue</span></td>
+                    <td class="positive">+5% bonus</td>
+                </tr>
+                <tr>
+                    <td><strong>Neutral</strong></td>
+                    <td>50-69</td>
+                    <td><span style="color: #888888;">Grey</span></td>
+                    <td>No effect</td>
+                </tr>
+                <tr>
+                    <td><strong>Suspect</strong></td>
+                    <td>30-49</td>
+                    <td><span style="color: #ffaa00;">Yellow/Orange</span></td>
+                    <td class="negative">-10% penalty</td>
+                </tr>
+                <tr>
+                    <td><strong>Untrusted</strong></td>
+                    <td>0-29</td>
+                    <td><span style="color: #ff4444;">Red</span></td>
+                    <td class="negative">-25% penalty</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>How to Build Reputation</h3>
+        <ul>
+            <li><strong>Consistent uptime</strong> - Stay online and responsive</li>
+            <li><strong>Accurate predictions</strong> - Quality over quantity</li>
+            <li><strong>Helpful behavior</strong> - Mentor new nodes, serve data requests</li>
+            <li><strong>Good citizenship</strong> - Participate in governance, follow network rules</li>
+        </ul>
+
+        <h3>How Reputation Decreases</h3>
+        <ul>
+            <li>Frequent downtime or disconnections</li>
+            <li>Consistently poor prediction accuracy</li>
+            <li>Failed verification challenges</li>
+            <li>Reports from other trusted nodes</li>
+        </ul>
+    </div>
+
+    <!-- Section 5: Slashing & Penalties -->
+    <div class="guide-section" id="slashing">
+        <h2><i class="material-icons align-middle me-2">warning</i>5. Slashing & Penalties</h2>
+
+        <div class="warning-box">
+            <h4><i class="material-icons align-middle me-2">error</i>Important: Things to Avoid</h4>
+            <p style="margin-bottom: 0;">
+                Slashing is the network's way of penalizing bad behavior. Understanding what to avoid is crucial
+                for maintaining your rewards and reputation.
+            </p>
+        </div>
+
+        <h3>Slashing Status Levels</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Visual</th>
+                    <th>Reward Penalty</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Normal</strong></td>
+                    <td>None</td>
+                    <td>None</td>
+                    <td>Default state</td>
+                </tr>
+                <tr>
+                    <td><strong>Warned</strong></td>
+                    <td><span style="color: #ffcc00;">&#9888; Yellow Warning</span></td>
+                    <td class="negative">50% reduction</td>
+                    <td>Until behavior improves</td>
+                </tr>
+                <tr>
+                    <td><strong>Removed</strong></td>
+                    <td><span style="color: #ff4444;">&#10005; Red X (greyed out)</span></td>
+                    <td class="negative">100% (no rewards)</td>
+                    <td>Must appeal to recover</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Behaviors That Cause Slashing</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Behavior</th>
+                    <th>Severity</th>
+                    <th>Typical Consequence</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Extended downtime (7+ days without notice)</td>
+                    <td class="warning">Medium</td>
+                    <td>Warning</td>
+                </tr>
+                <tr>
+                    <td>Repeated invalid predictions</td>
+                    <td class="warning">Medium</td>
+                    <td>Warning</td>
+                </tr>
+                <tr>
+                    <td>Failed verification challenges (3+ times)</td>
+                    <td class="warning">Medium</td>
+                    <td>Warning</td>
+                </tr>
+                <tr>
+                    <td>Attempting to game/exploit the system</td>
+                    <td class="negative">High</td>
+                    <td>Removal</td>
+                </tr>
+                <tr>
+                    <td>Submitting false oracle data</td>
+                    <td class="negative">High</td>
+                    <td>Removal</td>
+                </tr>
+                <tr>
+                    <td>Sybil attacks (fake nodes)</td>
+                    <td class="negative">Severe</td>
+                    <td>Permanent removal</td>
+                </tr>
+                <tr>
+                    <td>Malicious behavior against other nodes</td>
+                    <td class="negative">Severe</td>
+                    <td>Permanent removal</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Recovery from Slashing</h3>
+        <ul>
+            <li><strong>Warned status:</strong> Improve behavior for 7+ consecutive days to automatically recover</li>
+            <li><strong>Removed status:</strong> Must submit an appeal through governance and demonstrate corrective action</li>
+        </ul>
+    </div>
+
+    <!-- Section 6: Donation Tiers -->
+    <div class="guide-section" id="donations">
+        <h2><i class="material-icons align-middle me-2">volunteer_activism</i>6. Donation Tiers</h2>
+
+        <p>
+            Donating EVR to the treasury helps fund network operations (badge minting, transaction fees, development).
+            In return, you earn both a permanent badge AND an ongoing reward multiplier bonus.
+        </p>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Tier</th>
+                    <th>EVR Required</th>
+                    <th>~USD Value</th>
+                    <th>Badge</th>
+                    <th>Bonus</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span style="color: #9ca3af;">&#9679;</span> <strong>Bronze</strong></td>
+                    <td>500 EVR</td>
+                    <td>~$1</td>
+                    <td>Bronze Donor Badge</td>
+                    <td class="positive">+4%</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #22c55e;">&#9679;</span> <strong>Silver</strong></td>
+                    <td>2,500 EVR</td>
+                    <td>~$5</td>
+                    <td>Silver Donor Badge</td>
+                    <td class="positive">+8%</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #3b82f6;">&#9679;</span> <strong>Gold</strong></td>
+                    <td>10,000 EVR</td>
+                    <td>~$20</td>
+                    <td>Gold Donor Badge</td>
+                    <td class="positive">+12%</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #a855f7;">&#9679;</span> <strong>Platinum</strong></td>
+                    <td>50,000 EVR</td>
+                    <td>~$100</td>
+                    <td>Platinum Donor Badge</td>
+                    <td class="positive">+16%</td>
+                </tr>
+                <tr>
+                    <td><span style="color: #f59e0b;">&#9679;</span> <strong>Diamond</strong></td>
+                    <td>250,000 EVR</td>
+                    <td>~$500</td>
+                    <td>Diamond Donor Badge + "Charity" Title</td>
+                    <td class="positive">+20%</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">info</i>Donations are Cumulative</h4>
+            <p style="margin-bottom: 0;">
+                Your tier is based on your <strong>total lifetime donations</strong>. You don't need to donate
+                all at once - every contribution counts toward your next tier!
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 7: Badges & Achievements -->
+    <div class="guide-section" id="badges">
+        <h2><i class="material-icons align-middle me-2">military_tech</i>7. Badges & Achievements</h2>
+
+        <p>
+            Badges are permanent on-chain assets (minted on Evrmore) that recognize your achievements.
+            Once earned, they're yours forever!
+        </p>
+
+        <div class="rarity-legend">
+            <span><span class="rarity-dot" style="background: #9ca3af;"></span> Common</span>
+            <span><span class="rarity-dot" style="background: #22c55e;"></span> Uncommon</span>
+            <span><span class="rarity-dot" style="background: #3b82f6;"></span> Rare</span>
+            <span><span class="rarity-dot" style="background: #a855f7;"></span> Epic</span>
+            <span><span class="rarity-dot" style="background: #f59e0b;"></span> Legendary</span>
+            <span><span class="rarity-dot" style="background: #ef4444;"></span> Mythic</span>
+        </div>
+
+        <h3>Rank Badges</h3>
+        <p>Awarded to top 10 performers in each time period:</p>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Period</th>
+                    <th>Frequency</th>
+                    <th>1st Place Rarity</th>
+                    <th>Example</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Round (Daily)</td>
+                    <td>365/year</td>
+                    <td>Common</td>
+                    <td>SATORI#R42_1st</td>
+                </tr>
+                <tr>
+                    <td>Epoch (Weekly)</td>
+                    <td>52/year</td>
+                    <td>Uncommon</td>
+                    <td>SATORI#E7_1st</td>
+                </tr>
+                <tr>
+                    <td>Era (28 days)</td>
+                    <td>13/year</td>
+                    <td>Rare</td>
+                    <td>SATORI#ERA3_1st</td>
+                </tr>
+                <tr>
+                    <td>Season (Quarterly)</td>
+                    <td>4/year</td>
+                    <td>Epic</td>
+                    <td>SATORI#S2_1st</td>
+                </tr>
+                <tr>
+                    <td>Cycle (Yearly)</td>
+                    <td>1/year</td>
+                    <td>Mythic</td>
+                    <td>SATORI#C1_1st</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Streak Badges</h3>
+        <div class="badge-grid">
+            <div class="badge-card rarity-common">
+                <div class="badge-icon">&#128293;</div>
+                <div class="badge-name">Epoch Dedication</div>
+                <div class="badge-desc">7 consecutive days of participation</div>
+            </div>
+            <div class="badge-card rarity-uncommon">
+                <div class="badge-icon">&#128170;</div>
+                <div class="badge-name">Era Dedication</div>
+                <div class="badge-desc">28 consecutive days (1 era)</div>
+            </div>
+            <div class="badge-card rarity-rare">
+                <div class="badge-icon">&#9732;</div>
+                <div class="badge-name">Season Dedication</div>
+                <div class="badge-desc">91 consecutive days (1 season)</div>
+            </div>
+            <div class="badge-card rarity-legendary">
+                <div class="badge-icon">&#127942;</div>
+                <div class="badge-name">Cycle Dedication</div>
+                <div class="badge-desc">364 consecutive days (1 cycle)</div>
+            </div>
+        </div>
+
+        <h3>Achievement Badges</h3>
+        <div class="badge-grid">
+            <div class="badge-card rarity-common">
+                <div class="badge-icon">&#128172;</div>
+                <div class="badge-name">First Blood</div>
+                <div class="badge-desc">Made your very first prediction</div>
+            </div>
+            <div class="badge-card rarity-rare">
+                <div class="badge-icon">&#127919;</div>
+                <div class="badge-name">Perfect Round</div>
+                <div class="badge-desc">100% accuracy in a round</div>
+            </div>
+            <div class="badge-card rarity-epic">
+                <div class="badge-icon">&#9733;</div>
+                <div class="badge-name">Perfect Epoch</div>
+                <div class="badge-desc">100% accuracy for entire epoch</div>
+            </div>
+            <div class="badge-card rarity-legendary">
+                <div class="badge-icon">&#128081;</div>
+                <div class="badge-name">Perfect Era</div>
+                <div class="badge-desc">100% accuracy for entire era</div>
+            </div>
+            <div class="badge-card rarity-rare">
+                <div class="badge-icon">&#128640;</div>
+                <div class="badge-name">Comeback King</div>
+                <div class="badge-desc">Rose from bottom 10% to top 10%</div>
+            </div>
+            <div class="badge-card rarity-epic">
+                <div class="badge-icon">&#128200;</div>
+                <div class="badge-name">Consistency Crown</div>
+                <div class="badge-desc">Top 50% every epoch for a season</div>
+            </div>
+        </div>
+
+        <h3>Community Badges</h3>
+        <div class="badge-grid">
+            <div class="badge-card rarity-uncommon">
+                <div class="badge-icon">&#127891;</div>
+                <div class="badge-name">Mentor</div>
+                <div class="badge-desc">Helped 5 new nodes bootstrap</div>
+            </div>
+            <div class="badge-card rarity-rare">
+                <div class="badge-icon">&#127942;</div>
+                <div class="badge-name">Master Mentor</div>
+                <div class="badge-desc">Helped 25 new nodes bootstrap</div>
+            </div>
+            <div class="badge-card rarity-rare">
+                <div class="badge-icon">&#128737;</div>
+                <div class="badge-name">Reliable Node</div>
+                <div class="badge-desc">99.9% uptime for an era</div>
+            </div>
+            <div class="badge-card rarity-epic">
+                <div class="badge-icon">&#129689;</div>
+                <div class="badge-name">Iron Node</div>
+                <div class="badge-desc">99.9% uptime for a season</div>
+            </div>
+            <div class="badge-card rarity-legendary">
+                <div class="badge-icon">&#128171;</div>
+                <div class="badge-name">Titanium Node</div>
+                <div class="badge-desc">99.9% uptime for a cycle</div>
+            </div>
+        </div>
+
+        <h3>Special Badges (Limited)</h3>
+        <div class="badge-grid">
+            <div class="badge-card rarity-mythic">
+                <div class="badge-icon">&#127759;</div>
+                <div class="badge-name">Genesis</div>
+                <div class="badge-desc">Participated in the genesis round</div>
+            </div>
+            <div class="badge-card rarity-legendary">
+                <div class="badge-icon">&#128099;</div>
+                <div class="badge-name">Founding Member</div>
+                <div class="badge-desc">Top 100 in the first cycle</div>
+            </div>
+            <div class="badge-card rarity-epic">
+                <div class="badge-icon">&#127793;</div>
+                <div class="badge-name">Early Adopter</div>
+                <div class="badge-desc">Joined during the first cycle</div>
+            </div>
+            <div class="badge-card rarity-mythic">
+                <div class="badge-icon">&#128081;</div>
+                <div class="badge-name">Cycle Champion</div>
+                <div class="badge-desc">Ranked #1 for an entire cycle</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 8: Time Hierarchy -->
+    <div class="guide-section" id="time">
+        <h2><i class="material-icons align-middle me-2">schedule</i>8. Time Hierarchy</h2>
+
+        <p>
+            Satori uses a consistent time hierarchy inspired by celestial cycles. Understanding these periods
+            helps you plan your participation strategy.
+        </p>
+
+        <div class="time-hierarchy">
+            <div class="time-unit"><strong>Round</strong> = 1 day</div>
+            <div class="time-unit"><strong>Epoch</strong> = 7 days (1 week)</div>
+            <div class="time-unit"><strong>Era</strong> = 28 days (~1 month, lunar)</div>
+            <div class="time-unit"><strong>Season</strong> = 91 days (~3 months, quarterly)</div>
+            <div class="time-unit"><strong>Cycle</strong> = 364 days (~1 year)</div>
+        </div>
+
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Period</th>
+                    <th>Duration</th>
+                    <th>Per Year</th>
+                    <th>Significance</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Round</strong></td>
+                    <td>1 day (00:00-23:59 UTC)</td>
+                    <td>365</td>
+                    <td>Basic prediction period, daily rankings</td>
+                </tr>
+                <tr>
+                    <td><strong>Epoch</strong></td>
+                    <td>7 rounds (1 week)</td>
+                    <td>52</td>
+                    <td>Reward distribution, weekly rankings</td>
+                </tr>
+                <tr>
+                    <td><strong>Era</strong></td>
+                    <td>4 epochs (28 days)</td>
+                    <td>13</td>
+                    <td>Lunar-inspired, monthly achievements</td>
+                </tr>
+                <tr>
+                    <td><strong>Season</strong></td>
+                    <td>13 epochs (91 days)</td>
+                    <td>4</td>
+                    <td>Quarterly milestones, season badges</td>
+                </tr>
+                <tr>
+                    <td><strong>Cycle</strong></td>
+                    <td>52 epochs (364 days)</td>
+                    <td>1</td>
+                    <td>Annual championships, legendary badges</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 9: Path to Legend -->
+    <div class="guide-section" id="legendary">
+        <h2><i class="material-icons align-middle me-2">auto_awesome</i>9. The Path to Legend</h2>
+
+        <p>
+            Becoming a <strong>Legend</strong> is the ultimate achievement in Satori. It requires dedication,
+            skill, and contribution across all aspects of the network.
+        </p>
+
+        <div class="success-box">
+            <h4><i class="material-icons align-middle me-2">workspace_premium</i>Legend Requirements</h4>
+            <p>Earn ALL five titles to achieve Legend status:</p>
+            <ul style="margin-bottom: 0;">
+                <li><strong>Historic</strong> - 90+ day uptime streak</li>
+                <li><strong>Friendly</strong> - Diamond referral tier (2000+ referrals)</li>
+                <li><strong>Charity</strong> - Diamond donor (250,000+ EVR)</li>
+                <li><strong>Civic</strong> - Diamond governance participation</li>
+                <li><strong>Whale</strong> - Maxed stake bonus (55+ SATORI)</li>
+            </ul>
+        </div>
+
+        <h3>Checklist: Maximizing Your Multiplier (2.50x)</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Goal</th>
+                    <th>Requirement</th>
+                    <th>Bonus</th>
+                    <th>Difficulty</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>&#9744; Max Stake</td>
+                    <td>Stake 55+ SATORI</td>
+                    <td>+25%</td>
+                    <td class="positive">Easy</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Become a Signer</td>
+                    <td>Apply and be approved as multi-sig signer</td>
+                    <td>+15%</td>
+                    <td class="warning">Hard</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Run an Oracle</td>
+                    <td>Provide verified external data</td>
+                    <td>+10%</td>
+                    <td class="warning">Medium</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Diamond Referrals</td>
+                    <td>Refer 2000+ nodes</td>
+                    <td>+15%</td>
+                    <td class="negative">Very Hard</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Join Small Pool</td>
+                    <td>Participate in small/diverse pools</td>
+                    <td>+10%</td>
+                    <td class="positive">Easy</td>
+                </tr>
+                <tr>
+                    <td>&#9744; 90-Day Streak</td>
+                    <td>Stay online 90+ consecutive days</td>
+                    <td>+10%</td>
+                    <td class="warning">Medium</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Diamond Donor</td>
+                    <td>Donate 250,000+ EVR total</td>
+                    <td>+20%</td>
+                    <td class="negative">Hard</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Diamond Governance</td>
+                    <td>Vote on 95%+ proposals, create proposals</td>
+                    <td>+15%</td>
+                    <td class="warning">Medium</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Trusted Reputation</td>
+                    <td>Maintain 90+ reputation score</td>
+                    <td>+10%</td>
+                    <td class="warning">Medium</td>
+                </tr>
+                <tr>
+                    <td>&#9744; Max Activity</td>
+                    <td>Pass challenges, mentor, serve data</td>
+                    <td>+15%</td>
+                    <td class="warning">Medium</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">lightbulb</i>Realistic Goals</h4>
+            <p>
+                Most dedicated participants can achieve <strong>1.75x - 2.00x</strong> through consistent, honest
+                participation. Focus on:
+            </p>
+            <ul style="margin-bottom: 0;">
+                <li>Maxing your stake (easy +25%)</li>
+                <li>Maintaining good uptime (+10%)</li>
+                <li>Participating in governance (+15%)</li>
+                <li>Building reputation (+10%)</li>
+                <li>Contributing to the network (+15%)</li>
+            </ul>
+            <p style="margin-bottom: 0; margin-top: 0.5rem;">
+                That's already <strong>1.75x</strong> without spending any EVR on donations!
+            </p>
+        </div>
+
+        <h3>Your Journey</h3>
+        <p>
+            Remember: Satori rewards <strong>consistent participation over time</strong>. The path to legendary
+            status is a marathon, not a sprint. Every day you participate, every node you help, every vote you
+            cast - it all contributes to your legacy on the network.
+        </p>
+        <p>
+            Good luck, and may your predictions be ever accurate!
+        </p>
+    </div>
+
+    <!-- Footer -->
+    <div class="text-center mt-5 pt-4" style="border-top: 1px solid var(--border-color);">
+        <p class="text-muted">
+            <i class="material-icons align-middle me-1" style="font-size: 18px;">auto_awesome</i>
+            Satori Network - Decentralized Prediction Intelligence
+        </p>
+        <p class="text-muted" style="font-size: 0.85rem;">
+            Based on the McCulloch-Pitts Artificial Neuron Model (1943)
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Smooth scrolling for TOC links
+    document.querySelectorAll('.toc a').forEach(link => {
+        link.addEventListener('click', function(e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        });
+    });
+</script>
+{% endblock %}
