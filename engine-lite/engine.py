@@ -1037,7 +1037,7 @@ class StreamModel:
                     secondForecast = model.predict(data=augmentedData)
                     if isinstance(secondForecast, pd.DataFrame):
                         secondValue = StreamForecast.firstPredictionOf(secondForecast)
-                        debug(f"[AUTOREGRESSION] Second prediction (sent to server): {secondValue}", color='cyan')
+                        debug(f"[AUTOREGRESSION] Second prediction (queued for batch): {secondValue}", color='cyan')
                     else:
                         secondForecast = None
 
