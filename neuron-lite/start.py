@@ -940,11 +940,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         Called alongside authWithCentral() in hybrid mode.
         In central mode, this does nothing.
 
+        Note: This method now only sets up the P2P reference - actual
+        initialization happens in startP2PServices() which runs in a
+        persistent Trio context.
+
         Args:
             capabilities: List of capabilities (e.g., ["predictor", "oracle"])
         """
-        import asyncio
-
         networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
         if networking_mode is None:
             try:
@@ -958,61 +960,19 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         if networking_mode == 'central':
             return
 
-        async def _announce():
-            try:
-                from satorip2p.protocol.peer_registry import PeerRegistry
-                from satorip2p import Peers
-
-                # Get or create P2P peers instance
-                if not hasattr(self, '_p2p_peers') or self._p2p_peers is None:
-                    self._p2p_peers = Peers(
-                        identity=self.identity,
-                        listen_port=config.get().get('p2p port', 24600),
-                    )
-                    await self._p2p_peers.start()
-
-                # Create registry and announce
-                if not hasattr(self, '_peer_registry') or self._peer_registry is None:
-                    self._peer_registry = PeerRegistry(self._p2p_peers)
-                    await self._peer_registry.start()
-
-                # Announce with capabilities
-                caps = capabilities or ["predictor"]
-                announcement = await self._peer_registry.announce(capabilities=caps)
-
-                if announcement:
-                    logging.info(
-                        f"Announced to P2P network: {announcement.evrmore_address[:16]}...",
-                        color="cyan"
-                    )
-                else:
-                    logging.warning("Failed to announce to P2P network")
-
-            except ImportError:
-                logging.debug("satorip2p not available, skipping P2P announcement")
-            except Exception as e:
-                logging.warning(f"P2P announcement failed: {e}")
-
-        # Run P2P announcement in a dedicated thread with trio
-        # satorip2p uses trio internally (via libp2p), so we use trio.run() directly
-        def run_p2p():
-            import trio
-            try:
-                trio.run(_announce)
-            except Exception as e:
-                logging.warning(f"P2P announcement failed: {e}")
-
-        p2p_thread = threading.Thread(target=run_p2p, daemon=True)
-        p2p_thread.start()
-        # Give P2P time to start before continuing
-        p2p_thread.join(timeout=30)
+        # Store capabilities for use in startP2PServices
+        self._p2p_capabilities = capabilities or ["predictor"]
+        logging.debug("P2P announcement queued (will run in startP2PServices)")
 
     def initializeP2PComponents(self):
         """
         Initialize all P2P components for consensus, rewards, and distribution.
 
-        Called after announceToNetwork() has created the _p2p_peers instance.
-        Only runs in hybrid/p2p mode.
+        This method starts the unified P2P services thread that runs in a
+        single persistent Trio context. All P2P operations (announcement,
+        component initialization, and ongoing network tasks) run within
+        this same Trio event loop to avoid "internal error in Trio" and
+        "Bad file descriptor" errors.
 
         Components initialized:
         - _uptime_tracker: Heartbeat-based uptime tracking for relay bonus
@@ -1021,8 +981,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         - _distribution_trigger: Automatic distribution on consensus
         - _signer_node: Multi-sig signing (if this node is an authorized signer)
         """
-        import asyncio
-
         networking_mode = os.environ.get('SATORI_NETWORKING_MODE')
         if networking_mode is None:
             try:
@@ -1036,389 +994,459 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         if networking_mode == 'central':
             return
 
-        # Need P2P peers to be initialized first
-        if not hasattr(self, '_p2p_peers') or self._p2p_peers is None:
-            logging.debug("P2P peers not available, skipping component initialization")
+        # Start the unified P2P services thread
+        self._startP2PServicesThread()
+
+    def _startP2PServicesThread(self):
+        """
+        Start the unified P2P services in a persistent Trio context.
+
+        This runs ALL P2P operations in a single long-running Trio event loop:
+        1. Creates and starts the Peers instance
+        2. Announces to network
+        3. Initializes all P2P protocol components
+        4. Keeps running for ongoing P2P operations
+
+        Using a single persistent Trio context prevents "internal error in Trio"
+        and "Bad file descriptor" errors that occur when libp2p objects are
+        used across multiple Trio event loops.
+        """
+        # Prevent double-start
+        if hasattr(self, '_p2p_thread_started') and self._p2p_thread_started:
+            logging.debug("P2P services thread already started")
             return
 
-        async def _initialize():
+        self._p2p_thread_started = True
+        self._p2p_ready = threading.Event()
+
+        async def _run_p2p_services():
+            """Main async function running in persistent Trio context."""
             try:
-                # Import P2P modules
-                from satorip2p.protocol.uptime import UptimeTracker
-                from satorip2p.protocol.rewards import RewardCalculator
-                from satorip2p.protocol.consensus import ConsensusManager
-                from satorip2p.protocol.distribution_trigger import DistributionTrigger
-                from satorip2p.protocol.signer import SignerNode, AUTHORIZED_SIGNERS
+                import trio
+                from satorip2p.protocol.peer_registry import PeerRegistry
+                from satorip2p import Peers
 
-                # 1. Initialize Uptime Tracker
-                if not hasattr(self, '_uptime_tracker') or self._uptime_tracker is None:
-                    try:
-                        self._uptime_tracker = UptimeTracker(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._uptime_tracker.start()
-                        # Start heartbeat loop as background task (queued until run_forever starts)
-                        if hasattr(self._p2p_peers, 'spawn_background_task'):
-                            self._p2p_peers.spawn_background_task(self._uptime_tracker.run_heartbeat_loop)
-                        logging.info("P2P uptime tracker initialized with heartbeat loop", color="cyan")
-                        # Wire to WebSocket bridge for real-time UI updates
-                        try:
-                            from web.p2p_bridge import get_bridge
-                            get_bridge().wire_protocol('uptime_tracker', self._uptime_tracker)
-                        except Exception:
-                            pass  # Bridge may not be started yet
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize uptime tracker: {e}")
+                # Phase 1: Create and start Peers
+                logging.info("Starting P2P network services...", color="cyan")
+                self._p2p_peers = Peers(
+                    identity=self.identity,
+                    listen_port=config.get().get('p2p port', 24600),
+                )
+                await self._p2p_peers.start()
+                logging.info("P2P peers started", color="cyan")
 
-                # 2. Initialize Reward Calculator
-                if not hasattr(self, '_reward_calculator') or self._reward_calculator is None:
-                    try:
-                        self._reward_calculator = RewardCalculator()
-                        logging.info("P2P reward calculator initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize reward calculator: {e}")
-
-                # 3. Initialize Consensus Manager
-                if not hasattr(self, '_consensus_manager') or self._consensus_manager is None:
-                    try:
-                        self._consensus_manager = ConsensusManager(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._consensus_manager.start()
-                        logging.info("P2P consensus manager initialized", color="cyan")
-                        # Wire to WebSocket bridge for real-time UI updates
-                        try:
-                            from web.p2p_bridge import get_bridge
-                            get_bridge().wire_protocol('consensus_manager', self._consensus_manager)
-                        except Exception:
-                            pass  # Bridge may not be started yet
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize consensus manager: {e}")
-
-                # 4. Initialize Distribution Trigger
-                if not hasattr(self, '_distribution_trigger') or self._distribution_trigger is None:
-                    try:
-                        self._distribution_trigger = DistributionTrigger(
-                            peers=self._p2p_peers,
-                            consensus_manager=getattr(self, '_consensus_manager', None),
-                        )
-                        await self._distribution_trigger.start()
-                        # Alias for routes.py compatibility
-                        self._distribution_manager = self._distribution_trigger
-                        logging.info("P2P distribution trigger initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize distribution trigger: {e}")
-
-                # 5. Initialize Signer Node (only if authorized)
-                my_address = self.identity.address if hasattr(self.identity, 'address') else None
-                is_authorized_signer = my_address and my_address in AUTHORIZED_SIGNERS
-
-                if is_authorized_signer and (not hasattr(self, '_signer_node') or self._signer_node is None):
-                    try:
-                        self._signer_node = SignerNode(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._signer_node.start()
-                        logging.info("P2P signer node initialized (authorized signer)", color="green")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize signer node: {e}")
-
-                # 6. Initialize Oracle Network (for P2P observations)
-                if not hasattr(self, '_oracle_network') or self._oracle_network is None:
-                    try:
-                        from satorip2p.protocol.oracle_network import OracleNetwork
-                        self._oracle_network = OracleNetwork(self._p2p_peers)
-                        await self._oracle_network.start()
-                        logging.info("P2P oracle network initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize oracle network: {e}")
-
-                # 7. Initialize Lending Manager (for P2P pool operations)
-                if not hasattr(self, '_lending_manager') or self._lending_manager is None:
-                    try:
-                        from satorip2p.protocol.lending import LendingManager
-                        self._lending_manager = LendingManager(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._lending_manager.start()
-                        logging.info("P2P lending manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize lending manager: {e}")
-
-                # 8. Initialize Delegation Manager (for P2P proxy/delegation)
-                if not hasattr(self, '_delegation_manager') or self._delegation_manager is None:
-                    try:
-                        from satorip2p.protocol.delegation import DelegationManager
-                        self._delegation_manager = DelegationManager(
-                            peers=self._p2p_peers,
-                            wallet=self.identity,
-                        )
-                        await self._delegation_manager.start()
-                        logging.info("P2P delegation manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize delegation manager: {e}")
-
-                # 9. Initialize Stream Registry (for P2P stream discovery)
-                if not hasattr(self, '_stream_registry') or self._stream_registry is None:
-                    try:
-                        from satorip2p.protocol.stream_registry import StreamRegistry
-                        self._stream_registry = StreamRegistry(self._p2p_peers)
-                        await self._stream_registry.start()
-                        logging.info("P2P stream registry initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize stream registry: {e}")
-
-                # 10. Initialize Prediction Protocol (for P2P commit-reveal predictions)
-                if not hasattr(self, '_prediction_protocol') or self._prediction_protocol is None:
-                    try:
-                        from satorip2p.protocol.prediction_protocol import PredictionProtocol
-                        self._prediction_protocol = PredictionProtocol(self._p2p_peers)
-                        await self._prediction_protocol.start()
-                        logging.info("P2P prediction protocol initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize prediction protocol: {e}")
-
-                # 11. Initialize Treasury Alert Manager
-                if not hasattr(self, '_alert_manager') or self._alert_manager is None:
-                    try:
-                        from satorip2p.protocol.alerts import TreasuryAlertManager
-                        self._alert_manager = TreasuryAlertManager(
-                            peers=self._p2p_peers,
-                        )
-                        await self._alert_manager.start()
-                        logging.info("P2P treasury alert manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize alert manager: {e}")
-
-                # 12. Initialize Deferred Rewards Manager
-                if not hasattr(self, '_deferred_rewards_manager') or self._deferred_rewards_manager is None:
-                    try:
-                        from satorip2p.protocol.deferred_rewards import DeferredRewardsManager
-                        self._deferred_rewards_manager = DeferredRewardsManager()
-                        logging.info("P2P deferred rewards manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize deferred rewards manager: {e}")
-
-                # 13. Initialize Donation Manager
-                if not hasattr(self, '_donation_manager') or self._donation_manager is None:
-                    try:
-                        from satorip2p.protocol.donation import DonationManager
-                        # DonationManager requires wallet and treasury_address
-                        treasury_addr = getattr(self, 'treasury_address', None)
-                        if self.identity and treasury_addr:
-                            self._donation_manager = DonationManager(
-                                wallet=self.identity,
-                                treasury_address=treasury_addr,
-                            )
-                            await self._donation_manager.start()
-                            logging.info("P2P donation manager initialized", color="cyan")
-                        else:
-                            logging.debug("Skipping donation manager - no treasury address configured")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize donation manager: {e}")
-
-                # 14. Initialize Protocol Versioning
-                if not hasattr(self, '_version_tracker') or self._version_tracker is None:
-                    try:
-                        PeerVersionTracker = get_p2p_module('PeerVersionTracker')
-                        VersionNegotiator = get_p2p_module('VersionNegotiator')
-                        PROTOCOL_VERSION = get_p2p_module('PROTOCOL_VERSION')
-                        if PeerVersionTracker and VersionNegotiator:
-                            self._version_tracker = PeerVersionTracker()
-                            self._version_negotiator = VersionNegotiator()
-                            self._protocol_version = PROTOCOL_VERSION or '1.0.0'
-                            logging.info(f"P2P protocol versioning initialized (v{self._protocol_version})", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize version tracker: {e}")
-
-                # 15. Initialize Storage Manager (redundant storage for deferred rewards & alerts)
-                if not hasattr(self, '_storage_manager') or self._storage_manager is None:
-                    try:
-                        StorageManager = get_p2p_module('StorageManager')
-                        DeferredRewardsStorage = get_p2p_module('DeferredRewardsStorage')
-                        AlertStorage = get_p2p_module('AlertStorage')
-                        if StorageManager:
-                            from pathlib import Path
-                            storage_dir = Path.home() / '.satori' / 'storage'
-                            self._storage_manager = StorageManager(storage_dir=storage_dir)
-                            # Create specialized storage for deferred rewards and alerts
-                            if DeferredRewardsStorage:
-                                self._deferred_rewards_storage = DeferredRewardsStorage(
-                                    storage_dir=storage_dir,
-                                    peers=self._p2p_peers,
-                                )
-                            if AlertStorage:
-                                self._alert_storage = AlertStorage(
-                                    storage_dir=storage_dir,
-                                    peers=self._p2p_peers,
-                                )
-                            logging.info("P2P storage manager initialized (redundant storage enabled)", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize storage manager: {e}")
-
-                # 16. Initialize Bandwidth Tracker & QoS Manager
-                if not hasattr(self, '_bandwidth_tracker') or self._bandwidth_tracker is None:
-                    try:
-                        create_qos_manager = get_p2p_module('create_qos_manager')
-                        if create_qos_manager:
-                            # create_qos_manager returns (BandwidthTracker, QoSManager) tuple
-                            self._bandwidth_tracker, self._qos_manager = create_qos_manager()
-                            # Wire bandwidth tracker to Peers for automatic traffic accounting
-                            if self._p2p_peers and hasattr(self._p2p_peers, 'set_bandwidth_tracker'):
-                                self._p2p_peers.set_bandwidth_tracker(self._bandwidth_tracker)
-                            logging.info("P2P bandwidth tracker and QoS manager initialized", color="cyan")
-                        else:
-                            logging.warning("create_qos_manager not available")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize bandwidth tracker: {e}")
-
-                # 17. Initialize Referral Manager
-                if not hasattr(self, '_referral_manager') or self._referral_manager is None:
-                    try:
-                        ReferralManager = get_p2p_module('ReferralManager')
-                        if ReferralManager:
-                            self._referral_manager = ReferralManager(
-                                peers=self._p2p_peers,
-                                wallet=self.identity,
-                            )
-                            await self._referral_manager.start()
-                            logging.info("P2P referral manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize referral manager: {e}")
-
-                # 18. Initialize Pricing Provider
-                if not hasattr(self, '_price_provider') or self._price_provider is None:
-                    try:
-                        get_price_provider = get_p2p_module('get_price_provider')
-                        if get_price_provider:
-                            self._price_provider = get_price_provider()
-                            logging.info("P2P price provider initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize price provider: {e}")
-
-                # 19. Initialize Reward Address Manager
-                if not hasattr(self, '_reward_address_manager') or self._reward_address_manager is None:
-                    try:
-                        RewardAddressManager = get_p2p_module('RewardAddressManager')
-                        if RewardAddressManager:
-                            self._reward_address_manager = RewardAddressManager(
-                                peers=self._p2p_peers,
-                                wallet=self.identity,
-                            )
-                            await self._reward_address_manager.start()
-                            logging.info("P2P reward address manager initialized", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize reward address manager: {e}")
-
-                # 20. Wire managers to P2PSatoriServerClient if available
-                if hasattr(self, 'server') and self.server is not None:
-                    try:
-                        if hasattr(self.server, 'set_lending_manager'):
-                            self.server.set_lending_manager(getattr(self, '_lending_manager', None))
-                        if hasattr(self.server, 'set_delegation_manager'):
-                            self.server.set_delegation_manager(getattr(self, '_delegation_manager', None))
-                        if hasattr(self.server, 'set_oracle_network'):
-                            self.server.set_oracle_network(getattr(self, '_oracle_network', None))
-                        if hasattr(self.server, 'set_stream_registry'):
-                            self.server.set_stream_registry(getattr(self, '_stream_registry', None))
-                        if hasattr(self.server, 'set_alert_manager'):
-                            self.server.set_alert_manager(getattr(self, '_alert_manager', None))
-                        if hasattr(self.server, 'set_deferred_rewards_manager'):
-                            self.server.set_deferred_rewards_manager(getattr(self, '_deferred_rewards_manager', None))
-                        if hasattr(self.server, 'set_donation_manager'):
-                            self.server.set_donation_manager(getattr(self, '_donation_manager', None))
-                        # Wire new protocol feature managers
-                        if hasattr(self.server, 'set_version_tracker'):
-                            self.server.set_version_tracker(getattr(self, '_version_tracker', None))
-                        if hasattr(self.server, 'set_version_negotiator'):
-                            self.server.set_version_negotiator(getattr(self, '_version_negotiator', None))
-                        if hasattr(self.server, 'set_storage_manager'):
-                            self.server.set_storage_manager(getattr(self, '_storage_manager', None))
-                        if hasattr(self.server, 'set_bandwidth_tracker'):
-                            self.server.set_bandwidth_tracker(getattr(self, '_bandwidth_tracker', None))
-                        if hasattr(self.server, 'set_qos_manager'):
-                            self.server.set_qos_manager(getattr(self, '_qos_manager', None))
-                        if hasattr(self.server, 'set_referral_manager'):
-                            self.server.set_referral_manager(getattr(self, '_referral_manager', None))
-                        if hasattr(self.server, 'set_price_provider'):
-                            self.server.set_price_provider(getattr(self, '_price_provider', None))
-                        if hasattr(self.server, 'set_reward_address_manager'):
-                            self.server.set_reward_address_manager(getattr(self, '_reward_address_manager', None))
-                        logging.info("P2P managers wired to server client", color="cyan")
-                    except Exception as e:
-                        logging.warning(f"Failed to wire P2P managers to server: {e}")
-
-                logging.info("P2P components initialization complete", color="cyan")
-
-                # 21. Initialize StreamManager (oracle data streams)
+                # Phase 2: Announce to network
                 try:
-                    from streams_lite import StreamManager
-                    if not hasattr(self, '_stream_manager') or self._stream_manager is None:
-                        self._stream_manager = StreamManager(
-                            peers=getattr(self, '_p2p_peers', None),
-                            identity=getattr(self, 'identity', None),
-                            send_to_ui=getattr(self, 'sendToUI', None),
-                        )
-                        await self._stream_manager.start()
-                        logging.info(f"StreamManager initialized ({self._stream_manager.oracle_count} oracles)", color="cyan")
-                except ImportError:
-                    logging.debug("streams-lite not available, oracle streams disabled")
-                except Exception as e:
-                    logging.warning(f"StreamManager initialization failed: {e}")
+                    self._peer_registry = PeerRegistry(self._p2p_peers)
+                    await self._peer_registry.start()
 
-                # 22. Initialize Governance Protocol
-                if not hasattr(self, '_governance') or self._governance is None:
-                    try:
-                        from satorip2p.protocol.governance import GovernanceProtocol
-                        self._governance = GovernanceProtocol(
-                            peers=self._p2p_peers,
+                    caps = getattr(self, '_p2p_capabilities', ["predictor"])
+                    announcement = await self._peer_registry.announce(capabilities=caps)
+
+                    if announcement:
+                        logging.info(
+                            f"Announced to P2P network: {announcement.evrmore_address[:16]}...",
+                            color="cyan"
                         )
-                        await self._governance.start()
-                        # Wire uptime tracker for uptime-based voting power
-                        if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
-                            if hasattr(self._governance, 'set_uptime_tracker'):
-                                self._governance.set_uptime_tracker(self._uptime_tracker)
-                        # Wire wallet for stake-based voting power (via setter, not __init__)
-                        if self.identity is not None:
-                            if hasattr(self._governance, 'set_wallet'):
-                                self._governance.set_wallet(self.identity)
-                        # Wire activity storage for governance participation tracking
-                        if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
-                            if hasattr(self._uptime_tracker, '_activity_storage') and self._uptime_tracker._activity_storage:
-                                if hasattr(self._governance, 'set_activity_storage'):
-                                    self._governance.set_activity_storage(self._uptime_tracker._activity_storage)
-                        logging.info("P2P governance protocol initialized", color="cyan")
-                        # Wire to WebSocket bridge for real-time UI updates
-                        try:
-                            from web.p2p_bridge import get_bridge
-                            get_bridge().wire_protocol('governance_manager', self._governance)
-                        except Exception:
-                            pass  # Bridge may not be started yet
-                    except Exception as e:
-                        logging.warning(f"Failed to initialize governance protocol: {e}")
+                    else:
+                        logging.debug("P2P announcement returned None (may succeed later)")
+                except Exception as e:
+                    logging.debug(f"P2P announcement phase: {e}")
+
+                # Phase 3: Initialize all P2P components
+                await self._initializeP2PComponentsAsync()
+
+                # Signal that P2P is ready
+                self._p2p_ready.set()
+
+                # Phase 4: Keep running - this Trio context must stay alive
+                # for all P2P operations to work properly
+                logging.info("P2P services running in persistent context", color="cyan")
+
+                # Run forever - the thread stays alive for P2P operations
+                while True:
+                    await trio.sleep(60)  # Heartbeat to keep context alive
 
             except ImportError as e:
                 logging.debug(f"satorip2p not available: {e}")
+                self._p2p_ready.set()  # Signal ready even on failure
             except Exception as e:
-                logging.warning(f"P2P component initialization failed: {e}")
+                logging.warning(f"P2P services error: {e}")
+                self._p2p_ready.set()  # Signal ready even on failure
 
-        # Run P2P initialization in a dedicated thread with trio
-        # satorip2p uses trio internally (via libp2p)
-        def run_p2p_init():
+        def run_p2p_thread():
+            """Thread target that runs the persistent Trio event loop."""
             import trio
             try:
-                trio.run(_initialize)
+                trio.run(_run_p2p_services)
             except Exception as e:
-                logging.warning(f"P2P component initialization failed: {e}")
+                logging.warning(f"P2P services thread error: {e}")
 
-        p2p_init_thread = threading.Thread(target=run_p2p_init, daemon=True)
-        p2p_init_thread.start()
-        # Don't block - P2P components initialize in background
-        # They'll be available once initialization completes
+        # Start the P2P thread
+        p2p_thread = threading.Thread(target=run_p2p_thread, daemon=True, name="P2PServices")
+        p2p_thread.start()
+
+        # Wait for P2P to be ready (with timeout)
+        if not self._p2p_ready.wait(timeout=30):
+            logging.debug("P2P ready timeout - continuing anyway")
+
+    async def _initializeP2PComponentsAsync(self):
+        """
+        Initialize all P2P protocol components (async version).
+
+        This is called from within the persistent Trio context.
+        """
+        try:
+            # Import P2P modules
+            from satorip2p.protocol.uptime import UptimeTracker
+            from satorip2p.protocol.rewards import RewardCalculator
+            from satorip2p.protocol.consensus import ConsensusManager
+            from satorip2p.protocol.distribution_trigger import DistributionTrigger
+            from satorip2p.protocol.signer import SignerNode, AUTHORIZED_SIGNERS
+
+            # 1. Initialize Uptime Tracker
+            if not hasattr(self, '_uptime_tracker') or self._uptime_tracker is None:
+                try:
+                    self._uptime_tracker = UptimeTracker(
+                        peers=self._p2p_peers,
+                        wallet=self.identity,
+                    )
+                    await self._uptime_tracker.start()
+                    logging.info("P2P uptime tracker initialized", color="cyan")
+                    # Wire to WebSocket bridge for real-time UI updates
+                    try:
+                        from web.p2p_bridge import get_bridge
+                        get_bridge().wire_protocol('uptime_tracker', self._uptime_tracker)
+                    except Exception:
+                        pass  # Bridge may not be started yet
+                except Exception as e:
+                    logging.debug(f"Uptime tracker: {e}")
+
+            # 2. Initialize Reward Calculator
+            if not hasattr(self, '_reward_calculator') or self._reward_calculator is None:
+                try:
+                    self._reward_calculator = RewardCalculator()
+                    logging.info("P2P reward calculator initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Reward calculator: {e}")
+
+            # 3. Initialize Consensus Manager
+            if not hasattr(self, '_consensus_manager') or self._consensus_manager is None:
+                try:
+                    self._consensus_manager = ConsensusManager(
+                        peers=self._p2p_peers,
+                        wallet=self.identity,
+                    )
+                    await self._consensus_manager.start()
+                    logging.info("P2P consensus manager initialized", color="cyan")
+                    # Wire to WebSocket bridge for real-time UI updates
+                    try:
+                        from web.p2p_bridge import get_bridge
+                        get_bridge().wire_protocol('consensus_manager', self._consensus_manager)
+                    except Exception:
+                        pass  # Bridge may not be started yet
+                except Exception as e:
+                    logging.debug(f"Consensus manager: {e}")
+
+            # 4. Initialize Distribution Trigger
+            if not hasattr(self, '_distribution_trigger') or self._distribution_trigger is None:
+                try:
+                    self._distribution_trigger = DistributionTrigger(
+                        peers=self._p2p_peers,
+                        consensus_manager=getattr(self, '_consensus_manager', None),
+                    )
+                    await self._distribution_trigger.start()
+                    # Alias for routes.py compatibility
+                    self._distribution_manager = self._distribution_trigger
+                    logging.info("P2P distribution trigger initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Distribution trigger: {e}")
+
+            # 5. Initialize Signer Node (only if authorized)
+            my_address = self.identity.address if hasattr(self.identity, 'address') else None
+            is_authorized_signer = my_address and my_address in AUTHORIZED_SIGNERS
+
+            if is_authorized_signer and (not hasattr(self, '_signer_node') or self._signer_node is None):
+                try:
+                    self._signer_node = SignerNode(
+                        peers=self._p2p_peers,
+                        wallet=self.identity,
+                    )
+                    await self._signer_node.start()
+                    logging.info("P2P signer node initialized (authorized signer)", color="green")
+                except Exception as e:
+                    logging.debug(f"Signer node: {e}")
+
+            # 6. Initialize Oracle Network (for P2P observations)
+            if not hasattr(self, '_oracle_network') or self._oracle_network is None:
+                try:
+                    from satorip2p.protocol.oracle_network import OracleNetwork
+                    self._oracle_network = OracleNetwork(self._p2p_peers)
+                    await self._oracle_network.start()
+                    logging.info("P2P oracle network initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Oracle network: {e}")
+
+            # 7. Initialize Lending Manager (for P2P pool operations)
+            if not hasattr(self, '_lending_manager') or self._lending_manager is None:
+                try:
+                    from satorip2p.protocol.lending import LendingManager
+                    self._lending_manager = LendingManager(
+                        peers=self._p2p_peers,
+                        wallet=self.identity,
+                    )
+                    await self._lending_manager.start()
+                    logging.info("P2P lending manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Lending manager: {e}")
+
+            # 8. Initialize Delegation Manager (for P2P proxy/delegation)
+            if not hasattr(self, '_delegation_manager') or self._delegation_manager is None:
+                try:
+                    from satorip2p.protocol.delegation import DelegationManager
+                    self._delegation_manager = DelegationManager(
+                        peers=self._p2p_peers,
+                        wallet=self.identity,
+                    )
+                    await self._delegation_manager.start()
+                    logging.info("P2P delegation manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Delegation manager: {e}")
+
+            # 9. Initialize Stream Registry (for P2P stream discovery)
+            if not hasattr(self, '_stream_registry') or self._stream_registry is None:
+                try:
+                    from satorip2p.protocol.stream_registry import StreamRegistry
+                    self._stream_registry = StreamRegistry(self._p2p_peers)
+                    await self._stream_registry.start()
+                    logging.info("P2P stream registry initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Stream registry: {e}")
+
+            # 10. Initialize Prediction Protocol (for P2P commit-reveal predictions)
+            if not hasattr(self, '_prediction_protocol') or self._prediction_protocol is None:
+                try:
+                    from satorip2p.protocol.prediction_protocol import PredictionProtocol
+                    self._prediction_protocol = PredictionProtocol(self._p2p_peers)
+                    await self._prediction_protocol.start()
+                    logging.info("P2P prediction protocol initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Prediction protocol: {e}")
+
+            # 11. Initialize Treasury Alert Manager
+            if not hasattr(self, '_alert_manager') or self._alert_manager is None:
+                try:
+                    from satorip2p.protocol.alerts import TreasuryAlertManager
+                    self._alert_manager = TreasuryAlertManager(
+                        peers=self._p2p_peers,
+                    )
+                    await self._alert_manager.start()
+                    logging.info("P2P treasury alert manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Alert manager: {e}")
+
+            # 12. Initialize Deferred Rewards Manager
+            if not hasattr(self, '_deferred_rewards_manager') or self._deferred_rewards_manager is None:
+                try:
+                    from satorip2p.protocol.deferred_rewards import DeferredRewardsManager
+                    self._deferred_rewards_manager = DeferredRewardsManager()
+                    logging.info("P2P deferred rewards manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Deferred rewards manager: {e}")
+
+            # 13. Initialize Donation Manager
+            if not hasattr(self, '_donation_manager') or self._donation_manager is None:
+                try:
+                    from satorip2p.protocol.donation import DonationManager
+                    treasury_addr = getattr(self, 'treasury_address', None)
+                    if self.identity and treasury_addr:
+                        self._donation_manager = DonationManager(
+                            wallet=self.identity,
+                            treasury_address=treasury_addr,
+                        )
+                        await self._donation_manager.start()
+                        logging.info("P2P donation manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Donation manager: {e}")
+
+            # 14. Initialize Protocol Versioning
+            if not hasattr(self, '_version_tracker') or self._version_tracker is None:
+                try:
+                    PeerVersionTracker = get_p2p_module('PeerVersionTracker')
+                    VersionNegotiator = get_p2p_module('VersionNegotiator')
+                    PROTOCOL_VERSION = get_p2p_module('PROTOCOL_VERSION')
+                    if PeerVersionTracker and VersionNegotiator:
+                        self._version_tracker = PeerVersionTracker()
+                        self._version_negotiator = VersionNegotiator()
+                        self._protocol_version = PROTOCOL_VERSION or '1.0.0'
+                        logging.info(f"P2P protocol versioning initialized (v{self._protocol_version})", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Version tracker: {e}")
+
+            # 15. Initialize Storage Manager (redundant storage for deferred rewards & alerts)
+            if not hasattr(self, '_storage_manager') or self._storage_manager is None:
+                try:
+                    StorageManager = get_p2p_module('StorageManager')
+                    DeferredRewardsStorage = get_p2p_module('DeferredRewardsStorage')
+                    AlertStorage = get_p2p_module('AlertStorage')
+                    if StorageManager:
+                        from pathlib import Path
+                        storage_dir = Path.home() / '.satori' / 'storage'
+                        self._storage_manager = StorageManager(storage_dir=storage_dir)
+                        if DeferredRewardsStorage:
+                            self._deferred_rewards_storage = DeferredRewardsStorage(
+                                storage_dir=storage_dir,
+                                peers=self._p2p_peers,
+                            )
+                        if AlertStorage:
+                            self._alert_storage = AlertStorage(
+                                storage_dir=storage_dir,
+                                peers=self._p2p_peers,
+                            )
+                        logging.info("P2P storage manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Storage manager: {e}")
+
+            # 16. Initialize Bandwidth Tracker & QoS Manager
+            if not hasattr(self, '_bandwidth_tracker') or self._bandwidth_tracker is None:
+                try:
+                    create_qos_manager = get_p2p_module('create_qos_manager')
+                    if create_qos_manager:
+                        self._bandwidth_tracker, self._qos_manager = create_qos_manager()
+                        if self._p2p_peers and hasattr(self._p2p_peers, 'set_bandwidth_tracker'):
+                            self._p2p_peers.set_bandwidth_tracker(self._bandwidth_tracker)
+                        logging.info("P2P bandwidth tracker and QoS manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Bandwidth tracker: {e}")
+
+            # 17. Initialize Referral Manager
+            if not hasattr(self, '_referral_manager') or self._referral_manager is None:
+                try:
+                    ReferralManager = get_p2p_module('ReferralManager')
+                    if ReferralManager:
+                        self._referral_manager = ReferralManager(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._referral_manager.start()
+                        logging.info("P2P referral manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Referral manager: {e}")
+
+            # 18. Initialize Pricing Provider
+            if not hasattr(self, '_price_provider') or self._price_provider is None:
+                try:
+                    get_price_provider = get_p2p_module('get_price_provider')
+                    if get_price_provider:
+                        self._price_provider = get_price_provider()
+                        logging.info("P2P price provider initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Price provider: {e}")
+
+            # 19. Initialize Reward Address Manager
+            if not hasattr(self, '_reward_address_manager') or self._reward_address_manager is None:
+                try:
+                    RewardAddressManager = get_p2p_module('RewardAddressManager')
+                    if RewardAddressManager:
+                        self._reward_address_manager = RewardAddressManager(
+                            peers=self._p2p_peers,
+                            wallet=self.identity,
+                        )
+                        await self._reward_address_manager.start()
+                        logging.info("P2P reward address manager initialized", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Reward address manager: {e}")
+
+            # 20. Wire managers to P2PSatoriServerClient if available
+            if hasattr(self, 'server') and self.server is not None:
+                try:
+                    if hasattr(self.server, 'set_lending_manager'):
+                        self.server.set_lending_manager(getattr(self, '_lending_manager', None))
+                    if hasattr(self.server, 'set_delegation_manager'):
+                        self.server.set_delegation_manager(getattr(self, '_delegation_manager', None))
+                    if hasattr(self.server, 'set_oracle_network'):
+                        self.server.set_oracle_network(getattr(self, '_oracle_network', None))
+                    if hasattr(self.server, 'set_stream_registry'):
+                        self.server.set_stream_registry(getattr(self, '_stream_registry', None))
+                    if hasattr(self.server, 'set_alert_manager'):
+                        self.server.set_alert_manager(getattr(self, '_alert_manager', None))
+                    if hasattr(self.server, 'set_deferred_rewards_manager'):
+                        self.server.set_deferred_rewards_manager(getattr(self, '_deferred_rewards_manager', None))
+                    if hasattr(self.server, 'set_donation_manager'):
+                        self.server.set_donation_manager(getattr(self, '_donation_manager', None))
+                    if hasattr(self.server, 'set_version_tracker'):
+                        self.server.set_version_tracker(getattr(self, '_version_tracker', None))
+                    if hasattr(self.server, 'set_version_negotiator'):
+                        self.server.set_version_negotiator(getattr(self, '_version_negotiator', None))
+                    if hasattr(self.server, 'set_storage_manager'):
+                        self.server.set_storage_manager(getattr(self, '_storage_manager', None))
+                    if hasattr(self.server, 'set_bandwidth_tracker'):
+                        self.server.set_bandwidth_tracker(getattr(self, '_bandwidth_tracker', None))
+                    if hasattr(self.server, 'set_qos_manager'):
+                        self.server.set_qos_manager(getattr(self, '_qos_manager', None))
+                    if hasattr(self.server, 'set_referral_manager'):
+                        self.server.set_referral_manager(getattr(self, '_referral_manager', None))
+                    if hasattr(self.server, 'set_price_provider'):
+                        self.server.set_price_provider(getattr(self, '_price_provider', None))
+                    if hasattr(self.server, 'set_reward_address_manager'):
+                        self.server.set_reward_address_manager(getattr(self, '_reward_address_manager', None))
+                    logging.info("P2P managers wired to server client", color="cyan")
+                except Exception as e:
+                    logging.debug(f"Server wiring: {e}")
+
+            logging.info("P2P components initialization complete", color="cyan")
+
+            # 21. Initialize StreamManager (oracle data streams)
+            try:
+                from streams_lite import StreamManager
+                if not hasattr(self, '_stream_manager') or self._stream_manager is None:
+                    self._stream_manager = StreamManager(
+                        peers=getattr(self, '_p2p_peers', None),
+                        identity=getattr(self, 'identity', None),
+                        send_to_ui=getattr(self, 'sendToUI', None),
+                    )
+                    await self._stream_manager.start()
+                    logging.info(f"StreamManager initialized ({self._stream_manager.oracle_count} oracles)", color="cyan")
+            except ImportError:
+                logging.debug("streams-lite not available, oracle streams disabled")
+            except Exception as e:
+                logging.debug(f"StreamManager: {e}")
+
+            # 22. Initialize Governance Protocol
+            if not hasattr(self, '_governance') or self._governance is None:
+                try:
+                    from satorip2p.protocol.governance import GovernanceProtocol
+                    self._governance = GovernanceProtocol(
+                        peers=self._p2p_peers,
+                    )
+                    await self._governance.start()
+                    # Wire uptime tracker for uptime-based voting power
+                    if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
+                        if hasattr(self._governance, 'set_uptime_tracker'):
+                            self._governance.set_uptime_tracker(self._uptime_tracker)
+                    # Wire wallet for stake-based voting power
+                    if self.identity is not None:
+                        if hasattr(self._governance, 'set_wallet'):
+                            self._governance.set_wallet(self.identity)
+                    # Wire activity storage for governance participation tracking
+                    if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
+                        if hasattr(self._uptime_tracker, '_activity_storage') and self._uptime_tracker._activity_storage:
+                            if hasattr(self._governance, 'set_activity_storage'):
+                                self._governance.set_activity_storage(self._uptime_tracker._activity_storage)
+                    logging.info("P2P governance protocol initialized", color="cyan")
+                    # Wire to WebSocket bridge for real-time UI updates
+                    try:
+                        from web.p2p_bridge import get_bridge
+                        get_bridge().wire_protocol('governance_manager', self._governance)
+                    except Exception:
+                        pass  # Bridge may not be started yet
+                except Exception as e:
+                    logging.debug(f"Governance protocol: {e}")
+
+        except ImportError as e:
+            logging.debug(f"satorip2p not available: {e}")
+        except Exception as e:
+            logging.debug(f"P2P component initialization: {e}")
 
     def discoverStreams(
         self,
@@ -2441,6 +2469,11 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 publications=self.publications,
                 server=self.server,
                 wallet=self.wallet)
+
+            # Wire P2P peers to engine if available
+            if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
+                if hasattr(self.aiengine, 'setP2PPeers'):
+                    self.aiengine.setP2PPeers(self._p2p_peers)
 
             def runEngine():
                 try:

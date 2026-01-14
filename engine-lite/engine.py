@@ -277,63 +277,33 @@ class Engine:
             self.initializeP2P()
 
     def initializeP2P(self):
-        """Initialize P2P oracle network and prediction protocol."""
-        try:
-            from satorip2p.peers import Peers
-            from satorip2p.protocol.oracle_network import OracleNetwork
-            from satorip2p.protocol.prediction_protocol import PredictionProtocol
+        """Initialize P2P oracle network and prediction protocol.
 
-            # Initialize P2P peers if not already done
-            if self._p2p_peers is None:
-                self._p2p_peers = Peers()
-                asyncio.run(self._p2p_peers.start())
-                info("P2P peers initialized for Engine", color="green")
+        Note: Engine should NOT create its own Peers instance or start protocols.
+        P2P protocols are already started by start.py in the persistent Trio context.
+        This method just logs that P2P peers have been wired.
+        """
+        # P2P peers must be provided externally via setP2PPeers()
+        # Engine does not create its own Peers instance
+        if self._p2p_peers is None:
+            debug("P2P peers not set - waiting for external wiring from start.py")
+            return
 
-            # Initialize Oracle Network for receiving observations
-            if self._oracle_network is None:
-                self._oracle_network = OracleNetwork(self._p2p_peers)
-                asyncio.run(self._oracle_network.start())
-                info("P2P Oracle Network initialized", color="green")
+        # P2P protocols (OracleNetwork, PredictionProtocol, etc.) are already
+        # initialized and started by start.py in the persistent Trio context.
+        # Engine just receives references to the already-running protocols.
+        info("Engine P2P ready (using shared Peers from start.py)", color="green")
 
-            # Initialize Prediction Protocol for commit-reveal
-            if self._prediction_protocol is None:
-                self._prediction_protocol = PredictionProtocol(self._p2p_peers)
-                asyncio.run(self._prediction_protocol.start())
-                info("P2P Prediction Protocol initialized", color="green")
+    def setP2PPeers(self, peers) -> None:
+        """Set the shared P2P Peers instance from start.py.
 
-            # Initialize Bandwidth QoS for throttling
-            BandwidthTracker = get_p2p_module('BandwidthTracker')
-            if BandwidthTracker and self._bandwidth_qos is None:
-                try:
-                    self._bandwidth_qos = BandwidthTracker()
-                    info("P2P Bandwidth QoS initialized", color="green")
-                except Exception as e:
-                    debug(f"Bandwidth QoS not initialized: {e}")
-
-            # Initialize Version Tracker
-            PeerVersionTracker = get_p2p_module('PeerVersionTracker')
-            if PeerVersionTracker and self._version_manager is None:
-                try:
-                    self._version_manager = PeerVersionTracker()
-                    info("P2P Version Tracker initialized", color="green")
-                except Exception as e:
-                    debug(f"Version Tracker not initialized: {e}")
-
-            # Initialize Storage Manager
-            StorageManager = get_p2p_module('StorageManager')
-            if StorageManager and self._storage_redundancy is None:
-                try:
-                    self._storage_redundancy = StorageManager(
-                        base_path='/Satori/Neuron/data',
-                    )
-                    info("P2P Storage Manager initialized", color="green")
-                except Exception as e:
-                    debug(f"Storage Manager not initialized: {e}")
-
-        except ImportError as e:
-            debug(f"satorip2p not available for Engine P2P: {e}")
-        except Exception as e:
-            warning(f"Failed to initialize P2P for Engine: {e}")
+        Args:
+            peers: The Peers instance initialized by start.py
+        """
+        self._p2p_peers = peers
+        info("P2P peers wired to Engine", color="cyan")
+        # Now initialize P2P protocols that depend on peers
+        self.initializeP2P()
 
     def subscribeToP2PObservations(self, streamUuid: str) -> bool:
         """Subscribe to P2P observations for a stream."""
