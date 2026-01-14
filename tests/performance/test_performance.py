@@ -1,5 +1,5 @@
 """
-Performance tests for satori-lite client and server.
+Performance tests for neuron client and server.
 
 Tests response times, throughput, and performance characteristics.
 """

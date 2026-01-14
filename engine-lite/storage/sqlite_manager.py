@@ -74,11 +74,65 @@ class EngineSqliteDatabase:
             error(f"Engine DB: Error checking table existence: {e}")
             return False
 
+    def migrateTimestampFormat(self, table_uuid: str) -> int:
+        """
+        Migrate datetime string timestamps to Unix timestamps.
+        Handles backward compatibility for existing user data.
+
+        Returns: Number of rows migrated
+        """
+        try:
+            if not self.tableExists(table_uuid):
+                return 0
+
+            # Get all rows
+            self.cursor.execute(f'SELECT ts, value, hash, provider FROM "{table_uuid}"')
+            rows = self.cursor.fetchall()
+
+            migrated = 0
+            for ts_val, value, hash_val, provider in rows:
+                # Check if ts is a datetime string (contains '-' or ':')
+                if isinstance(ts_val, str) and ('-' in ts_val or ':' in ts_val):
+                    try:
+                        # Parse datetime string to datetime object
+                        if '.' in ts_val:
+                            dt = pd.to_datetime(ts_val, format='%Y-%m-%d %H:%M:%S.%f')
+                        else:
+                            dt = pd.to_datetime(ts_val, format='%Y-%m-%d %H:%M:%S')
+
+                        # Convert to Unix timestamp
+                        unix_ts = dt.timestamp()
+
+                        # Delete old row
+                        self.cursor.execute(f'DELETE FROM "{table_uuid}" WHERE ts = ?', (ts_val,))
+
+                        # Insert with Unix timestamp
+                        self.cursor.execute(
+                            f'INSERT INTO "{table_uuid}" (ts, value, hash, provider) VALUES (?, ?, ?, ?)',
+                            (unix_ts, value, hash_val, provider))
+
+                        migrated += 1
+                    except Exception as e:
+                        warning(f"Engine DB: Could not migrate timestamp {ts_val}: {e}")
+
+            if migrated > 0:
+                self.conn.commit()
+                info(f"Engine DB: Migrated {migrated} datetime strings to Unix timestamps in {table_uuid}", color='green')
+
+            return migrated
+        except Exception as e:
+            error(f"Engine DB: Error during timestamp migration for {table_uuid}: {e}")
+            self.conn.rollback()
+            return 0
+
     def getTableData(self, table_uuid: str) -> pd.DataFrame:
         """Get all data from a table as DataFrame."""
         try:
             if not self.tableExists(table_uuid):
                 return pd.DataFrame(columns=['ts', 'value', 'hash', 'provider'])
+
+            # Auto-migrate datetime strings to Unix timestamps on read
+            self.migrateTimestampFormat(table_uuid)
 
             df = pd.read_sql_query(
                 f"""
@@ -238,3 +292,180 @@ class EngineSqliteDatabase:
         return hashlib.blake2s(
             string.encode(),
             digest_size=8).hexdigest()
+
+    # ==================== Streams Metadata Methods ====================
+
+    def createStreamsTable(self):
+        """Create the streams metadata table if it doesn't exist."""
+        try:
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS streams (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_stream_id INTEGER,
+                    uuid TEXT UNIQUE NOT NULL,
+                    name TEXT,
+                    author TEXT,
+                    secondary TEXT,
+                    target TEXT,
+                    meta TEXT,
+                    description TEXT,
+                    last_synced TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            ''')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_streams_uuid ON streams(uuid)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_streams_name ON streams(name)')
+            self.cursor.execute('CREATE INDEX IF NOT EXISTS idx_streams_server_id ON streams(server_stream_id)')
+            self.conn.commit()
+            debug("Engine DB: Created/verified streams metadata table")
+        except Exception as e:
+            error(f"Engine DB: Error creating streams table: {e}")
+
+    def upsertStream(
+        self,
+        uuid: str,
+        server_stream_id: Optional[int] = None,
+        name: Optional[str] = None,
+        author: Optional[str] = None,
+        secondary: Optional[str] = None,
+        target: Optional[str] = None,
+        meta: Optional[str] = None,
+        description: Optional[str] = None
+    ) -> bool:
+        """
+        Insert or update stream metadata.
+
+        Args:
+            uuid: Stream UUID (required, unique)
+            server_stream_id: Stream ID from central server
+            name: Human-readable stream name
+            author: Wallet pubkey of peer allowed to publish on this stream
+            secondary: Secondary identifier
+            target: Target field for StreamId compatibility
+            meta: Metadata field
+            description: Stream description
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Ensure streams table exists
+            self.createStreamsTable()
+
+            # Get current timestamp for last_synced
+            from datetime import datetime
+            last_synced = datetime.utcnow().isoformat()
+
+            # Use INSERT OR REPLACE to upsert
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO streams
+                (uuid, server_stream_id, name, author, secondary, target, meta, description, last_synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (uuid, server_stream_id, name, author, secondary, target, meta, description, last_synced))
+            self.conn.commit()
+            debug(f"Engine DB: Upserted stream metadata for {uuid} (name: {name}, author: {author})")
+            return True
+        except Exception as e:
+            error(f"Engine DB: Error upserting stream {uuid}: {e}")
+            return False
+
+    def getStreamByUuid(self, uuid: str) -> Optional[dict]:
+        """
+        Get stream metadata by UUID.
+
+        Returns:
+            Dict with stream info or None if not found
+        """
+        try:
+            self.cursor.execute(
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
+                FROM streams WHERE uuid = ?''', (uuid,))
+            row = self.cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'server_stream_id': row[1],
+                    'uuid': row[2],
+                    'name': row[3],
+                    'author': row[4],
+                    'secondary': row[5],
+                    'target': row[6],
+                    'meta': row[7],
+                    'description': row[8],
+                    'last_synced': row[9],
+                    'created_at': row[10]
+                }
+            return None
+        except Exception as e:
+            error(f"Engine DB: Error getting stream by uuid {uuid}: {e}")
+            return None
+
+    def getStreamByName(self, name: str) -> Optional[dict]:
+        """
+        Get stream metadata by name.
+
+        Returns:
+            Dict with stream info or None if not found
+        """
+        try:
+            self.cursor.execute(
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
+                FROM streams WHERE name = ?''', (name,))
+            row = self.cursor.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'server_stream_id': row[1],
+                    'uuid': row[2],
+                    'name': row[3],
+                    'author': row[4],
+                    'secondary': row[5],
+                    'target': row[6],
+                    'meta': row[7],
+                    'description': row[8],
+                    'last_synced': row[9],
+                    'created_at': row[10]
+                }
+            return None
+        except Exception as e:
+            error(f"Engine DB: Error getting stream by name {name}: {e}")
+            return None
+
+    def getAllStreams(self) -> list:
+        """
+        Get all streams metadata.
+
+        Returns:
+            List of dicts with stream info
+        """
+        try:
+            self.cursor.execute(
+                '''SELECT id, server_stream_id, uuid, name, author, secondary, target, meta, description, last_synced, created_at
+                FROM streams ORDER BY created_at DESC''')
+            rows = self.cursor.fetchall()
+            return [{
+                'id': row[0],
+                'server_stream_id': row[1],
+                'uuid': row[2],
+                'name': row[3],
+                'author': row[4],
+                'secondary': row[5],
+                'target': row[6],
+                'meta': row[7],
+                'description': row[8],
+                'last_synced': row[9],
+                'created_at': row[10]
+            } for row in rows]
+        except Exception as e:
+            error(f"Engine DB: Error getting all streams: {e}")
+            return []
+
+    def getStreamUuidByName(self, name: str) -> Optional[str]:
+        """
+        Get stream UUID by name (convenience method).
+
+        Returns:
+            UUID string or None if not found
+        """
+        stream = self.getStreamByName(name)
+        return stream['uuid'] if stream else None

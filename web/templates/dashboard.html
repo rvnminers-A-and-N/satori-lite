@@ -10,6 +10,22 @@
         <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
     </span>
     <div class="ms-auto d-flex align-items-center">
+        <!-- Wallet Dropdown -->
+        <div class="dropdown me-3">
+            <button class="btn btn-outline-light btn-sm dropdown-toggle" type="button" id="walletDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="material-icons align-middle" style="font-size: 16px;">account_balance_wallet</i>
+                Wallet
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="walletDropdown" style="background: var(--bg-card); border: 1px solid var(--border-color);">
+                <li>
+                    <a class="dropdown-item" href="#" onclick="openImportWalletModal(); return false;" style="color: var(--text-primary);">
+                        <i class="material-icons align-middle me-2" style="font-size: 18px;">upload_file</i>
+                        Import Wallet
+                    </a>
+                </li>
+            </ul>
+        </div>
+
         <span class="me-3">
             <span class="status-indicator status-online" id="statusIndicator"></span>
             <span id="statusText">Connected</span>
@@ -40,6 +56,55 @@
     </div>
 </nav>
 
+<!-- Import Wallet Modal -->
+<div class="modal fade" id="importWalletModal" tabindex="-1" aria-labelledby="importWalletModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content" style="background: var(--bg-card); border: 1px solid var(--border-color);">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color);">
+                <h5 class="modal-title" id="importWalletModalLabel">
+                    <i class="material-icons align-middle me-2">upload_file</i>
+                    Import Wallet
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" style="filter: invert(1);"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning">
+                    <strong>Warning:</strong> Importing a wallet will replace your current wallet and restart the container.
+                    Make sure you have backed up your current wallet first!
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Select Wallet Folder</label>
+                    <input type="file"
+                           class="form-control"
+                           id="walletFolderInputModal"
+                           webkitdirectory
+                           directory
+                           multiple
+                           accept=".yaml,.yml">
+                    <small class="form-text text-muted">
+                        Select the "wallet" folder containing wallet.yaml and vault.yaml
+                    </small>
+                </div>
+
+                <div id="importFileListModal" class="mb-3" style="display: none;">
+                    <label class="form-label">Files to Import:</label>
+                    <ul id="importFileListItemsModal" class="small"></ul>
+                </div>
+
+                <div id="importResultModal" class="mt-3" style="display: none;"></div>
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid var(--border-color);">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="importWalletFromModal()" id="importWalletBtnModal" disabled>
+                    <i class="material-icons align-middle me-1">upload</i>
+                    Import Wallet & Restart
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="container-fluid py-4">
     <div class="row g-4">
         <!-- Wallet Section -->
@@ -50,7 +115,7 @@
                         <i class="material-icons align-middle me-2">account_balance_wallet</i>
                         Wallet
                     </h5>
-                    <a href="#" class="small text-muted" onclick="toggleIdentityWallet(); return false;">
+                    <a href="#" class="btn btn-outline-secondary btn-sm" onclick="toggleIdentityWallet(); return false;">
                         <i class="material-icons align-middle" style="font-size: 16px;">badge</i>
                         Identity
                     </a>
@@ -211,6 +276,49 @@
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Burn Address for Reverse Bridge Section -->
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">local_fire_department</i>
+                        Burn Address for Reverse Bridge
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted mb-3">
+                        Send SATORI tokens on Base chain to this address to bridge them back to Evrmore
+                    </p>
+                    <div class="mb-3">
+                        <label class="form-label">Base Chain Burn Address</label>
+                        <div class="input-group">
+                            {% if eth_wallet_address %}
+                            <input type="text" class="form-control" id="burnAddress" readonly value="{{ eth_wallet_address }}">
+                            <button class="btn btn-outline-secondary" onclick="copyToClipboard('burnAddress')" title="Copy burn address">
+                                <i class="material-icons align-middle">content_copy</i>
+                            </button>
+                            {% else %}
+                            <input type="text" class="form-control" readonly value="Not available" disabled>
+                            {% endif %}
+                        </div>
+                        <small class="text-muted">Ethereum address ending in "DEAD"</small>
+                    </div>
+                    <div class="alert alert-info" role="alert">
+                        <strong>How it works:</strong>
+                        <ol class="mb-0 mt-2">
+                            <li>Send SATORI tokens to this burn address on the <strong>Base blockchain</strong></li>
+                            <li>Tokens are tracked by the bridge system daily at 20:00 UTC</li>
+                            <li>After 30 days, equivalent SATORI will be minted on Evrmore chain to your wallet</li>
+                        </ol>
+                    </div>
+                    <div class="alert alert-danger" role="alert">
+                        <i class="material-icons align-middle me-1" style="font-size: 18px;">warning</i>
+                        <strong>Warning:</strong> Only send SATORI tokens from Base chain. Sending other tokens or from wrong networks will result in permanent loss.
                     </div>
                 </div>
             </div>
@@ -796,6 +904,75 @@
             </div>
         </div>
     </div>
+
+    <!-- AI Engine Performance Dashboard -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#performanceCollapse"
+                     aria-expanded="false"
+                     aria-controls="performanceCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">show_chart</i>
+                        AI Engine Performance
+                    </h5>
+                </div>
+                <div class="collapse" id="performanceCollapse">
+                <div class="card-body">
+                    <!-- Stats Summary -->
+                    <div class="row mb-4" id="performanceStats">
+                        <div class="col-md-4">
+                            <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
+                                <div class="text-muted small">Accuracy</div>
+                                <div class="h4 mb-0" id="accuracyPct">--</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
+                                <div class="text-muted small">Avg Error</div>
+                                <div class="h5 mb-0" id="avgError">--</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
+                                <div class="text-muted small">Avg Abs Error</div>
+                                <div class="h5 mb-0" id="avgAbsError">--</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Predictions vs Observations Chart -->
+                    <div class="mb-4">
+                        <h6 class="mb-3">Predictions vs Observations</h6>
+                        <div style="position: relative; height: 300px;">
+                            <canvas id="predVsObsChart"></canvas>
+                        </div>
+                        <small class="text-muted">Last 100 data points</small>
+                    </div>
+
+                    <!-- Accuracy Over Time Chart -->
+                    <div class="mb-3">
+                        <h6 class="mb-3">Prediction Accuracy Over Time</h6>
+                        <div style="position: relative; height: 300px;">
+                            <canvas id="accuracyChart"></canvas>
+                        </div>
+                        <small class="text-muted">Absolute error between prediction and next observation</small>
+                    </div>
+
+                    <div class="text-center mt-3">
+                        <button class="btn btn-outline-primary btn-sm" onclick="refreshPerformance()">
+                            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            Refresh Data
+                        </button>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 <!-- Disclaimer Footer -->
@@ -878,6 +1055,19 @@
         if (value === undefined || value === null) return '--';
         // Format to 8 decimals then parse to remove trailing zeros
         return parseFloat(parseFloat(value).toFixed(8)).toString();
+    }
+
+    // Get color for commission percentage (light green at 0% to red at 100%)
+    function getCommissionColor(percentage) {
+        // Clamp percentage between 0 and 100
+        const p = Math.max(0, Math.min(100, percentage));
+
+        // Light green (144, 238, 144) at 0% to red (220, 53, 69) at 100%
+        const r = Math.round(144 + (220 - 144) * (p / 100));
+        const g = Math.round(238 + (53 - 238) * (p / 100));
+        const b = Math.round(144 + (69 - 144) * (p / 100));
+
+        return `rgb(${r}, ${g}, ${b})`;
     }
 
     // State tracking for mutual exclusion
@@ -1254,8 +1444,18 @@
             showToast('Invalid address: must start with E and be 34 characters', true);
             return;
         }
+
+        // Check if same as current address
+        const currentAddress = document.getElementById('currentRewardAddress').value;
+        if (address === currentAddress) {
+            showToast('This reward address is already set', true);
+            document.getElementById('newRewardAddress').value = '';
+            return;
+        }
+
+        // Backend handles server sync
         const result = await apiCall('/peer/reward-address', 'POST', { reward_address: address });
-        if (result) {
+        if (result && result.success) {
             showToast('Reward address updated');
             loadRewardAddress();
             document.getElementById('newRewardAddress').value = '';
@@ -1263,7 +1463,17 @@
     }
 
     async function loadStakingStatus() {
-        const result = await apiCall('/lender/status');
+        // Get wallet address first
+        const walletData = await apiCall('/wallet/address');
+        if (!walletData || !walletData.wallet_address) {
+            const statusEl = document.getElementById('stakingStatus');
+            statusEl.className = 'alert alert-warning';
+            statusEl.textContent = 'Unable to load staking status';
+            return;
+        }
+
+        // Query lender status with wallet address
+        const result = await apiCall(`/lender/status?wallet_address=${encodeURIComponent(walletData.wallet_address)}`);
         const statusEl = document.getElementById('stakingStatus');
         const poolAddressEl = document.getElementById('poolAddress');
 
@@ -1315,6 +1525,8 @@
         const result = await apiCall('/pool/open', 'GET');
         if (result && result.pools && result.pools.length > 0) {
             listEl.innerHTML = '';
+            // Sort pools by increasing fee percentage (inverted commission)
+            result.pools.sort((a, b) => (100 - a.commission) - (100 - b.commission));
             result.pools.forEach(pool => {
                 const item = document.createElement('a');
                 item.href = '#';
@@ -1323,6 +1535,8 @@
                     e.preventDefault();
                     document.getElementById('poolAddress').value = pool.address;
                 };
+                const invertedCommission = 100 - pool.commission;
+                const commissionColor = getCommissionColor(invertedCommission);
                 item.innerHTML = `
                     <div class="d-flex w-100 justify-content-between align-items-center">
                         <div>
@@ -1331,7 +1545,7 @@
                         </div>
                         <div class="text-end">
                             ${pool.alias ? `<span class="badge bg-primary">${pool.alias}</span><br>` : ''}
-                            <small class="text-success fw-bold">${pool.commission}% commission</small>
+                            <small class="fw-bold" style="color: ${commissionColor}">${invertedCommission}% Fee</small>
                         </div>
                     </div>
                 `;
@@ -1344,22 +1558,26 @@
 
     async function setPoolCommission() {
         const commissionInput = document.getElementById('poolCommission');
-        let commission = commissionInput.value ? parseInt(commissionInput.value) : null;
+        let displayedCommission = commissionInput.value ? parseInt(commissionInput.value) : null;
 
         // Validate
-        if (commission !== null && (commission < 0 || commission > 100)) {
+        if (displayedCommission !== null && (displayedCommission < 0 || displayedCommission > 100)) {
             showToast('Commission must be between 0 and 100', true);
             return;
         }
 
-        // Convert 0 to null (closed)
-        if (commission === 0) {
+        // Convert inverted value back to actual commission (100 - displayed)
+        // Displayed 95% means pool stakers keep 95%, so commission is 5%
+        let commission = displayedCommission !== null ? (100 - displayedCommission) : null;
+
+        // Convert 100% commission (0% to stakers) to null (closed)
+        if (commission === 100) {
             commission = null;
         }
 
         const result = await apiCall('/pool/toggle-open', 'POST', { commission: commission });
         if (result) {
-            const msg = commission === null ? 'Pool closed' : `Pool open with ${commission}% commission`;
+            const msg = commission === null ? 'Pool closed' : `Pool open with ${displayedCommission}% Fee`;
             showToast(msg);
             await loadPoolCommission();
             await loadAvailablePools();  // Refresh pool list to show updated commission
@@ -1372,7 +1590,8 @@
 
         const result = await apiCall('/pool/commission', 'GET');
         if (result) {
-            commissionInput.value = result.commission || '';
+            // Upstream fix: display as (100 - commission) percentage
+            commissionInput.value = result.commission !== null ? (100 - result.commission) : '';
             isOpenPool = result.commission !== null && result.commission > 0;
             updateMutualExclusionUI();  // Update UI after setting isOpenPool
         }
@@ -1435,17 +1654,8 @@
 
     // Get central-lite API URL
     function getCentralApiUrl() {
-        // For development: assume central-lite runs on port 8000
-        // For production: this should be configured properly
-        const protocol = window.location.protocol;
-        const hostname = window.location.hostname;
-
-        // If we're on localhost, use localhost:8000
-        // Otherwise, use the same hostname (assumes central-lite on same domain)
-        if (hostname === 'localhost' || hostname === '127.0.0.1') {
-            return `${protocol}//${hostname}:8000`;
-        }
-        return `${protocol}//${hostname}`;
+        // Always use the production Satori network server for audit files
+        return 'https://network.satorinet.io';
     }
 
     // Helper function to download JSON data as a file
@@ -1477,14 +1687,22 @@
                 throw new Error(`HTTP ${response.status}`);
             }
 
-            const data = await response.json();
+            const csvText = await response.text();
 
             // Generate filename with timestamp
             const now = new Date();
             const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
-            const filename = `workers_audit_${timestamp}.json`;
+            const filename = `workers_audit_${timestamp}.csv`;
 
-            downloadJSON(data, filename);
+            // Download CSV file
+            const blob = new Blob([csvText], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+
             showToast('Workers audit downloaded');
         } catch (error) {
             console.error('Error downloading workers audit:', error);
@@ -1506,125 +1724,26 @@
                 throw new Error(`HTTP ${response.status}`);
             }
 
-            const data = await response.json();
+            const csvText = await response.text();
 
             // Generate filename with timestamp
             const now = new Date();
             const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, -5);
-            const filename = `stakers_audit_${timestamp}.json`;
+            const filename = `stakers_audit_${timestamp}.csv`;
 
-            downloadJSON(data, filename);
+            // Download CSV file
+            const blob = new Blob([csvText], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            window.URL.revokeObjectURL(url);
+
             showToast('Pool stakers audit downloaded');
         } catch (error) {
             console.error('Error downloading pool stakers audit:', error);
             showToast('Failed to download pool stakers audit', 'error');
-        }
-    }
-
-    // Pay lenders from audit
-    async function payLenders() {
-        try {
-            // 1. Fetch audit
-            showToast('Fetching audit...', 'info');
-            const centralApiUrl = getCentralApiUrl();
-            const response = await fetch(`${centralApiUrl}/api/v1/audit/stakers/latest`);
-
-            if (!response.ok) {
-                if (response.status === 404) {
-                    showToast('No audit available yet', 'warning');
-                    return;
-                }
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-            const audit = await response.json();
-
-            // 2. Find my pool and lenders
-            const myAddress = await apiCall('/wallet/address');
-            if (!myAddress || !myAddress.wallet_address) {
-                showToast('Unable to determine your wallet address', 'error');
-                return;
-            }
-
-            const myPool = audit.pools.find(p => p.pool_address === myAddress.wallet_address);
-
-            if (!myPool || !myPool.lenders || myPool.lenders.length === 0) {
-                showToast('No pool stakers to pay', 'info');
-                return;
-            }
-
-            // 3. Build payment dictionary
-            const payments = {};
-            myPool.lenders.forEach(lender => {
-                if (lender.commission_owed > 0) {
-                    payments[lender.lender_address] = lender.commission_owed;
-                }
-            });
-
-            const count = Object.keys(payments).length;
-            if (count === 0) {
-                showToast('No pool stakers with amounts owed', 'info');
-                return;
-            }
-
-            const total = Object.values(payments).reduce((sum, amt) => sum + amt, 0);
-
-            // 4. Check balance
-            const balance = await apiCall('/wallet/balance/direct');
-            if (!balance) {
-                showToast('Unable to check balance', 'error');
-                return;
-            }
-
-            if (balance.vault_balance < total) {
-                showToast(`Insufficient balance: need ${formatBalance(total)}, have ${formatBalance(balance.vault_balance)}`, 'error');
-                return;
-            }
-
-            // 5. Confirm with user
-            const confirmMsg =
-                `Pay ${count} pool stakers a total of ${formatBalance(total)} SATORI?\n\n` +
-                `Your balance: ${formatBalance(balance.vault_balance)} SATORI\n` +
-                `EVR for fees: ${formatBalance(balance.vault_evr)} EVR\n\n` +
-                `⚠️ This action cannot be undone!`;
-
-            if (!confirm(confirmMsg)) {
-                return;
-            }
-
-            // 6. Send payment
-            showToast('Sending payment to pool stakers...', 'info');
-
-            const paymentResponse = await fetch('/api/lender/pay', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({payments})
-            });
-
-            const data = await paymentResponse.json();
-
-            if (data.success) {
-                // 7. Show success
-                const explorerUrl = `https://evr.cryptoscope.io/tx/?hash=${data.txhash}`;
-                showToast(`✓ Paid ${data.lenders_paid} pool stakers!`, 'success');
-
-                const resultMsg =
-                    `Successfully paid ${data.lenders_paid} pool stakers!\n\n` +
-                    `Total: ${formatBalance(data.total_sent)} SATORI\n\n` +
-                    `Transaction: ${data.txhash}\n\n` +
-                    `View on blockchain explorer:\n${explorerUrl}`;
-
-                alert(resultMsg);
-
-                // Refresh balance
-                loadAllBalances();
-            } else {
-                showToast(`Payment failed: ${data.error}`, 'error');
-            }
-
-        } catch (error) {
-            console.error('Error paying pool stakers:', error);
-            showToast(`Failed to pay pool stakers: ${error.message}`, 'error');
         }
     }
 
@@ -1771,11 +1890,30 @@
     function copyIdentityPrivateKey() {
         const input = document.getElementById('identityPrivateKey');
         if (input.value && input.value !== 'Click to reveal...' && input.value !== 'Unable to load') {
-            navigator.clipboard.writeText(input.value).then(() => {
-                showToast('Identity private key copied to clipboard');
-            }).catch(() => {
-                showToast('Failed to copy', true);
-            });
+            // Check if Clipboard API is available (requires HTTPS or localhost)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(input.value).then(() => {
+                    showToast('Identity private key copied to clipboard');
+                }).catch(() => {
+                    // Fallback for older browsers or non-HTTPS
+                    input.select();
+                    try {
+                        document.execCommand('copy');
+                        showToast('Identity private key copied to clipboard');
+                    } catch (err) {
+                        showToast('Failed to copy', true);
+                    }
+                });
+            } else {
+                // Fallback for older browsers or non-HTTPS
+                input.select();
+                try {
+                    document.execCommand('copy');
+                    showToast('Identity private key copied to clipboard');
+                } catch (err) {
+                    showToast('Failed to copy', true);
+                }
+            }
         } else {
             showToast('Please reveal the private key first', true);
         }
@@ -1785,14 +1923,32 @@
         const input = document.getElementById(elementId);
         const value = input.value;
         if (value && value !== 'Loading...' && value !== 'Not available') {
-            navigator.clipboard.writeText(value).then(() => {
-                showToast('Address copied to clipboard');
-            }).catch(() => {
-                // Fallback for older browsers
-                input.select();
-                document.execCommand('copy');
-                showToast('Address copied to clipboard');
-            });
+            // Check if Clipboard API is available (requires HTTPS or localhost)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(value).then(() => {
+                    showToast('Address copied to clipboard');
+                }).catch(() => {
+                    // Fallback for older browsers or non-HTTPS
+                    try {
+                        input.select();
+                        document.execCommand('copy');
+                        showToast('Address copied to clipboard');
+                    } catch (err) {
+                        showToast('Failed to copy address', true);
+                    }
+                });
+            } else {
+                // Fallback for older browsers or non-HTTPS
+                try {
+                    input.select();
+                    document.execCommand('copy');
+                    showToast('Address copied to clipboard');
+                } catch (err) {
+                    showToast('Failed to copy address', true);
+                }
+            }
+        } else {
+            showToast('No address to copy', true);
         }
     }
 
@@ -1836,11 +1992,42 @@
     function copyPrivateKey() {
         const privateKey = document.getElementById('walletPrivateKey').textContent;
         if (privateKey && privateKey !== 'Loading...' && privateKey !== 'Unable to load private key') {
-            navigator.clipboard.writeText(privateKey).then(() => {
-                showToast('Private key copied to clipboard');
-            }).catch(() => {
-                showToast('Failed to copy private key', true);
-            });
+            // Check if Clipboard API is available (requires HTTPS or localhost)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(privateKey).then(() => {
+                    showToast('Private key copied to clipboard');
+                }).catch(() => {
+                    // Fallback for older browsers or non-HTTPS
+                    const textArea = document.createElement('textarea');
+                    textArea.value = privateKey;
+                    textArea.style.position = 'fixed';
+                    textArea.style.opacity = '0';
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    try {
+                        document.execCommand('copy');
+                        showToast('Private key copied to clipboard');
+                    } catch (err) {
+                        showToast('Failed to copy private key', true);
+                    }
+                    document.body.removeChild(textArea);
+                });
+            } else {
+                // Fallback for older browsers or non-HTTPS
+                const textArea = document.createElement('textarea');
+                textArea.value = privateKey;
+                textArea.style.position = 'fixed';
+                textArea.style.opacity = '0';
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    showToast('Private key copied to clipboard');
+                } catch (err) {
+                    showToast('Failed to copy private key', true);
+                }
+                document.body.removeChild(textArea);
+            }
         }
     }
 
@@ -2502,8 +2689,503 @@
         }
     }
 
+    // =========================================================================
+    // AI ENGINE PERFORMANCE CHARTS (from upstream)
+    // =========================================================================
+    let predVsObsChart = null;
+    let accuracyChart = null;
+
+    async function loadPerformance() {
+        try {
+            const data = await apiCall('/engine/performance');
+
+            if (!data || data.error) {
+                // Show message to user
+                if (data?.error) {
+                    showToast('Performance data unavailable: ' + data.error, true);
+                }
+                return;
+            }
+
+            // Check if we have any data
+            const hasData = (data.observations && data.observations.length > 0) ||
+                           (data.predictions && data.predictions.length > 0);
+
+            if (!hasData) {
+                // Update stats to show no data
+                document.getElementById('accuracyPct').textContent = '--';
+                document.getElementById('avgError').textContent = 'No data yet';
+                document.getElementById('avgAbsError').textContent = '--';
+                return;
+            }
+
+            // Update stats
+            if (data.stats) {
+                document.getElementById('accuracyPct').textContent =
+                    data.stats.accuracy_pct ? `${data.stats.accuracy_pct}%` : '--';
+                document.getElementById('avgError').textContent =
+                    data.stats.avg_error !== undefined ? data.stats.avg_error.toFixed(2) : '--';
+                document.getElementById('avgAbsError').textContent =
+                    data.stats.avg_abs_error !== undefined ? data.stats.avg_abs_error.toFixed(2) : '--';
+            }
+
+            renderPredVsObsChart(data.observations, data.predictions, data.accuracy);
+            renderAccuracyChart(data.accuracy);
+        } catch (error) {
+            console.error('Error loading performance data:', error);
+            showToast('Failed to load performance data', true);
+        }
+    }
+
+    function renderPredVsObsChart(observations, predictions, accuracyData) {
+        try {
+            const ctx = document.getElementById('predVsObsChart');
+            if (!ctx) {
+                console.error('Chart canvas element not found: predVsObsChart');
+                return;
+            }
+
+            if (predVsObsChart) predVsObsChart.destroy();
+
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const textColor = isDark ? '#a0a0a0' : '#555555';
+            const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
+
+            // Helper function to parse timestamp (handles both Unix timestamps and date strings)
+            const parseTimestamp = (ts) => {
+                // Check if it's a pure numeric string (Unix timestamp)
+                if (/^\d+\.?\d*$/.test(ts)) {
+                    const numTs = parseFloat(ts);
+                    // Unix timestamp - multiply by 1000 if in seconds
+                    return numTs < 10000000000 ? new Date(numTs * 1000) : new Date(numTs);
+                } else {
+                    // Date string (like "2025-12-21 06:55:47.484299")
+                    // Add 'Z' to parse as UTC if not already present
+                    const dateStr = ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z';
+                    return new Date(dateStr);
+                }
+            };
+
+            // Convert observations data - use sequential positions
+            const obsData = observations.map((o, i) => ({
+                x: i,  // Use index as x-position
+                y: parseFloat(o.value)
+            }));
+
+            // Convert predictions data - shift forward by 1 position
+            // prediction[i] should be at position i+1 to align with observation[i+1]
+            const predData = predictions.map((p, i) => ({
+                x: i + 1,  // Shift forward: pred[0] at position 1, pred[1] at position 2, etc.
+                y: parseFloat(p.value)
+            }));
+
+            // Create index-based lookup maps
+            // observation[i] -> prediction[i+1] (observation produces next prediction)
+            // prediction[i] -> observation[i-1] (prediction was made from previous observation)
+            const obsToPredMap = new Map();
+            const predToObsMap = new Map();
+
+            // Build obsToPredMap: observation[i] maps to prediction[i+1]
+            observations.forEach((obs, i) => {
+                if (i + 1 < predictions.length) {
+                    const nextPred = predictions[i + 1];
+                    obsToPredMap.set(obs.ts, {
+                        ts: nextPred.ts,
+                        value: parseFloat(nextPred.value),
+                        timestamp: parseTimestamp(nextPred.ts)
+                    });
+                }
+                // First observation has no prediction to show (it produces the next one)
+            });
+
+            // Build predToObsMap: prediction[i] maps to observation[i-1]
+            predictions.forEach((pred, i) => {
+                if (i - 1 >= 0 && i - 1 < observations.length) {
+                    const prevObs = observations[i - 1];
+                    predToObsMap.set(pred.ts, {
+                        ts: prevObs.ts,
+                        value: parseFloat(prevObs.value),
+                        timestamp: parseTimestamp(prevObs.ts)
+                    });
+                }
+                // First prediction has no prior observation in our data
+            });
+
+            predVsObsChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Observations',
+                    data: obsData,
+                    borderColor: 'rgb(75, 192, 192)',
+                    borderWidth: 2,
+                    pointRadius: 2
+                }, {
+                    label: 'Predictions',
+                    data: predData,
+                    borderColor: 'rgb(153, 102, 255)',
+                    borderWidth: 2,
+                    pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'linear',
+                        ticks: {
+                            color: textColor,
+                            callback: function(value, index) {
+                                // Show timestamp labels for select points
+                                if (index >= observations.length - 3 || index === 0) {
+                                    const obs = observations[value];
+                                    if (obs) {
+                                        return new Date(parseTimestamp(obs.ts)).toLocaleTimeString();
+                                    }
+                                }
+                                return '';
+                            }
+                        },
+                        grid: { color: gridColor }
+                    },
+                    y: {
+                        ticks: { color: textColor },
+                        grid: { color: gridColor }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: textColor } },
+                    tooltip: {
+                        mode: 'point',
+                        intersect: false,
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                const index = Math.round(tooltipItems[0].parsed.x);
+                                const obs = observations[index];
+                                if (obs) {
+                                    return new Date(parseTimestamp(obs.ts)).toLocaleString();
+                                }
+                                return 'Index: ' + index;
+                            },
+                            label: function(context) {
+                                const datasetLabel = context.dataset.label;
+                                const value = context.parsed.y;
+                                const position = Math.round(context.parsed.x);
+
+                                if (datasetLabel === 'Observations') {
+                                    // observation is at position i
+                                    const obsData = observations[position];
+                                    if (!obsData) {
+                                        // No observation at this position (future prediction only)
+                                        return null;
+                                    }
+                                    const obsTime = new Date(parseTimestamp(obsData.ts)).toLocaleTimeString();
+                                    return `Observation: ${value.toFixed(2)} (at ${obsTime})`;
+
+                                } else if (datasetLabel === 'Predictions') {
+                                    // prediction[i] is at position i+1, so prediction at position p is predictions[p-1]
+                                    const predIndex = position - 1;
+                                    if (predIndex < 0 || predIndex >= predictions.length) {
+                                        // No prediction at this position (first observation has no prediction)
+                                        return null;
+                                    }
+                                    const predData = predictions[predIndex];
+                                    if (!predData) {
+                                        return null;
+                                    }
+                                    const predTime = new Date(parseTimestamp(predData.ts)).toLocaleTimeString();
+                                    return `Prediction: ${value.toFixed(2)} (at ${predTime})`;
+                                }
+
+                                return null;
+                            }
+                        }
+                    }
+                },
+                interaction: {
+                    mode: 'point',
+                    intersect: false
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering predictions vs observations chart:', error);
+            showToast('Error rendering chart: ' + error.message, true);
+        }
+    }
+
+    function renderAccuracyChart(accuracyData) {
+        try {
+            const ctx = document.getElementById('accuracyChart');
+            if (!ctx) {
+                console.error('Chart canvas element not found: accuracyChart');
+                return;
+            }
+
+            if (accuracyChart) accuracyChart.destroy();
+
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const textColor = isDark ? '#a0a0a0' : '#555555';
+        const gridColor = isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)';
+
+        // Helper function to parse timestamp (same as in renderPredVsObsChart)
+        const parseTimestamp = (ts) => {
+            if (/^\d+\.?\d*$/.test(ts)) {
+                const numTs = parseFloat(ts);
+                return numTs < 10000000000 ? new Date(numTs * 1000) : new Date(numTs);
+            } else {
+                const dateStr = ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z';
+                return new Date(dateStr);
+            }
+        };
+
+        accuracyChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: 'Absolute Error',
+                    data: accuracyData.map((a, i) => ({ x: i, y: a.abs_error })),
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'linear',
+                        ticks: {
+                            color: textColor,
+                            callback: function(value, index) {
+                                // Show timestamp labels for select points
+                                if (index >= accuracyData.length - 3 || index === 0) {
+                                    const acc = accuracyData[value];
+                                    if (acc) {
+                                        return parseTimestamp(acc.ts).toLocaleTimeString();
+                                    }
+                                }
+                                return '';
+                            }
+                        },
+                        grid: { color: gridColor }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: textColor },
+                        grid: { color: gridColor }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: textColor } },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                const index = Math.round(tooltipItems[0].parsed.x);
+                                const acc = accuracyData[index];
+                                if (acc) {
+                                    return parseTimestamp(acc.ts).toLocaleString();
+                                }
+                                return 'Index: ' + index;
+                            },
+                            label: function(context) {
+                                return 'Absolute Error: ' + context.parsed.y.toFixed(4);
+                            }
+                        }
+                    }
+                },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                }
+            }
+        });
+        } catch (error) {
+            console.error('Error rendering accuracy chart:', error);
+            showToast('Error rendering accuracy chart: ' + error.message, true);
+        }
+    }
+
+    function refreshPerformance() {
+        showToast('Refreshing performance data...', 'info');
+        loadPerformance();
+    }
+
+    // Wallet Import Functionality
+    let walletImportFilesModal = [];
+
+    function openImportWalletModal() {
+        const modal = new bootstrap.Modal(document.getElementById('importWalletModal'));
+        modal.show();
+    }
+
+    function handleWalletFolderSelectModal(event) {
+        const files = Array.from(event.target.files);
+        const importBtn = document.getElementById('importWalletBtnModal');
+        const fileListDiv = document.getElementById('importFileListModal');
+        const fileListItems = document.getElementById('importFileListItemsModal');
+
+        walletImportFilesModal = [];
+        fileListItems.innerHTML = '';
+
+        if (files.length === 0) {
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Validate folder name is "wallet"
+        const firstFile = files[0];
+        const pathParts = firstFile.webkitRelativePath.split('/');
+        const folderName = pathParts[0];
+
+        if (folderName !== 'wallet') {
+            showToast('Please select a folder named "wallet"', true);
+            event.target.value = '';
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Filter to only .yaml files
+        const yamlFiles = files.filter(f =>
+            f.name.endsWith('.yaml') || f.name.endsWith('.yml')
+        );
+
+        // Check for required files
+        const fileNames = yamlFiles.map(f => f.name);
+        const hasWallet = fileNames.includes('wallet.yaml');
+        const hasVault = fileNames.includes('vault.yaml');
+
+        if (!hasWallet || !hasVault) {
+            showToast('Wallet folder must contain wallet.yaml and vault.yaml', true);
+            event.target.value = '';
+            importBtn.disabled = true;
+            fileListDiv.style.display = 'none';
+            return;
+        }
+
+        // Valid files - show list
+        walletImportFilesModal = yamlFiles;
+        fileListItems.innerHTML = '';
+        yamlFiles.forEach(file => {
+            const li = document.createElement('li');
+            li.innerHTML = `<code>${file.name}</code> (${(file.size / 1024).toFixed(2)} KB)`;
+            fileListItems.appendChild(li);
+        });
+
+        fileListDiv.style.display = 'block';
+        importBtn.disabled = false;
+    }
+
+    async function importWalletFromModal() {
+        if (walletImportFilesModal.length === 0) {
+            showToast('No files selected', true);
+            return;
+        }
+
+        const importBtn = document.getElementById('importWalletBtnModal');
+        const resultDiv = document.getElementById('importResultModal');
+
+        // Confirm action
+        const confirmMsg =
+            'WARNING: This will replace your current wallet and restart the container!\n\n' +
+            `Files to import: ${walletImportFilesModal.map(f => f.name).join(', ')}\n\n` +
+            'Make sure you have backed up your current wallet.\n\n' +
+            'Continue?';
+
+        if (!confirm(confirmMsg)) {
+            return;
+        }
+
+        // Disable button and show loading
+        importBtn.disabled = true;
+        importBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Importing...';
+        resultDiv.style.display = 'none';
+
+        try {
+            // Prepare FormData
+            const formData = new FormData();
+            walletImportFilesModal.forEach(file => {
+                formData.append('files', file, file.name);
+            });
+
+            // Upload files
+            const response = await fetch('/api/wallet/import', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                resultDiv.className = 'mt-3 alert alert-success';
+                resultDiv.innerHTML =
+                    '<strong>Success!</strong><br>' +
+                    'Wallet imported successfully.<br>' +
+                    'Container is restarting...<br>' +
+                    '<small>Backup saved to: ' + data.backup_location + '</small><br>' +
+                    '<small class="text-warning">Note: You\'ll need to set a new reward address after restart.</small>';
+                resultDiv.style.display = 'block';
+
+                showToast('Wallet imported! Container restarting...');
+
+                // Show restart notice
+                setTimeout(() => {
+                    alert(
+                        'Container Restarting\n\n' +
+                        'The application is restarting with your imported wallet.\n' +
+                        'Please wait 10-15 seconds, then refresh this page.\n\n' +
+                        'You will need to:\n' +
+                        '1. Log in again with your vault password\n' +
+                        '2. Set a new reward address for this wallet'
+                    );
+
+                    // Auto-reload after 15 seconds
+                    setTimeout(() => {
+                        window.location.href = '/login';
+                    }, 15000);
+                }, 2000);
+
+            } else {
+                const errorMsg = data.error || 'Import failed';
+                const rolledBack = data.rolled_back ? '\n\nYour old wallet has been restored.' : '';
+                resultDiv.className = 'mt-3 alert alert-danger';
+                resultDiv.innerHTML = '<strong>Error:</strong> ' + errorMsg + rolledBack;
+                resultDiv.style.display = 'block';
+                showToast('Import failed: ' + errorMsg, true);
+
+                // Re-enable button
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="material-icons align-middle me-1">upload</i> Import Wallet & Restart';
+            }
+
+        } catch (error) {
+            resultDiv.className = 'mt-3 alert alert-danger';
+            resultDiv.innerHTML = '<strong>Error:</strong> ' + error.message;
+            resultDiv.style.display = 'block';
+            showToast('Import error: ' + error.message, true);
+
+            // Re-enable button
+            importBtn.disabled = false;
+            importBtn.innerHTML = '<i class="material-icons align-middle me-1">upload</i> Import Wallet & Restart';
+        }
+    }
+
     // Initialize dashboard
     document.addEventListener('DOMContentLoaded', function() {
+        // Set up wallet import file input handler for modal
+        const walletFolderInputModal = document.getElementById('walletFolderInputModal');
+        if (walletFolderInputModal) {
+            walletFolderInputModal.addEventListener('change', handleWalletFolderSelectModal);
+        }
+
         // Update theme icon based on stored theme
         const storedTheme = localStorage.getItem('satori-theme') || 'dark';
         const themeIcon = document.getElementById('themeIcon');
@@ -2543,6 +3225,7 @@
         loadReferralStats();  // Load referral stats
         loadTreasuryAlerts();  // Load treasury alerts and deferred rewards
         loadMyRewardsHistory();  // Load personal rewards history
+        loadPerformance();  // Load AI engine performance charts (upstream feature)
 
         // Periodic refresh of P2P data (every 30s)
         setInterval(loadP2PHealth, 30000);

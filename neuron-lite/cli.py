@@ -519,8 +519,8 @@ class NeuronCLI:
 
                         # If selection changed, redraw
                         if old_selected != selected:
-                            # Move cursor back to start of menu
-                            console_write(f'\x1b[{lines_printed}A')
+                            # Move cursor back to start of menu and clear all lines atomically
+                            console_write(f'\x1b[{lines_printed}A\r')
 
                             # Redraw menu (atomic writes to prevent duplication)
                             console_write(f'\x1b[2K{title}\r\n')

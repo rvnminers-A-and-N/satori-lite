@@ -167,7 +167,7 @@ def test_client_checkin_workflow(client_instance, server_available):
     # Should have updated lastCheckin timestamp
     assert client_instance.lastCheckin > initial_checkin
 
-    # Response should have expected structure (central-lite minimal response)
+    # Response should have expected structure (central minimal response)
     assert "wallet" in result or "key" in result
 
 

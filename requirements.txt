@@ -54,6 +54,7 @@ pycryptodome==3.21.0
 eth-account==0.13.4
 eth-keys==0.6.1
 web3>=7.0.0
+coincurve>=20.0.0
 
 # API validation
 marshmallow==3.23.1

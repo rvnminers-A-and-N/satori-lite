@@ -1,5 +1,5 @@
 """
-Edge case and data validation tests for satori-lite client and server.
+Edge case and data validation tests for neuron client and server.
 
 Tests boundary conditions, special characters, large values, and data validation.
 """

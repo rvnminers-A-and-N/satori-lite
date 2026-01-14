@@ -97,9 +97,21 @@ class SatoriServerClient(object):
         try:
             response = requests.get(self.url + '/api/v1/auth/challenge')
             if response.status_code == 200:
-                return response.json().get('challenge', str(time.time()))
-        except Exception:
-            pass
+                challenge = response.json().get('challenge')
+                if challenge:
+                    return challenge
+                else:
+                    logging.warning(
+                        'Challenge endpoint returned empty challenge, using timestamp fallback',
+                        color='yellow')
+            else:
+                logging.warning(
+                    f'Challenge endpoint returned status {response.status_code}, using timestamp fallback',
+                    color='yellow')
+        except Exception as e:
+            logging.warning(
+                f'Failed to fetch challenge from server: {str(e)}. Using timestamp fallback.',
+                color='yellow')
         return str(time.time())
 
     def _login_with_jwt(self):
@@ -441,18 +453,17 @@ class SatoriServerClient(object):
             raise Exception(f'Unable to connect to central-lite server: {e}')
 
     def checkinCheck(self) -> bool:
-        """Check if there are updates since last checkin."""
-        # For central-lite, always return False (no stream updates)
+        """Check if there are updates since last checkin. Returns True if health check fails."""
         try:
             health_response = requests.get(self.url + '/health')
             if health_response.status_code == 200:
-                return False  # central-lite doesn't have stream updates
+                return False  # healthy - no restart needed
             else:
                 logging.warning(f'central-lite health check returned status {health_response.status_code}')
-                return False
+                return True  # unhealthy - trigger restart
         except Exception as e:
             logging.warning(f'central-lite health check failed in checkinCheck: {e}')
-            return False
+            return True  # failed - trigger restart
 
     def requestSimplePartial(self, network: str):
         ''' sends a satori partial transaction to the server '''
@@ -849,21 +860,23 @@ class SatoriServerClient(object):
         return False, ''
 
     def mineToAddressStatus(self) -> Union[str, None]:
-        ''' get reward address '''
+        ''' get reward address from central server using v1 API '''
         try:
             response = self._makeAuthenticatedCall(
                 function=requests.get,
-                endpoint='/mine/to/address')
+                endpoint='/api/v1/peer/reward-address')
             if response.status_code > 399:
-                return 'Unknown'
-            if response.text in ['null', 'None', 'NULL']:
+                return None
+            # Parse JSON response
+            data = response.json()
+            reward_address = data.get('reward_address', '')
+            if not reward_address or reward_address in ['null', 'None', 'NULL']:
                 return ''
-            return response.text
+            return reward_address
         except Exception as e:
             logging.warning(
                 'unable to get reward address; try again Later.', e, color='yellow')
             return None
-        return None
 
     def setRewardAddress(
         self,
@@ -1406,25 +1419,163 @@ class SatoriServerClient(object):
             if response.status_code == 200:
                 return True
             if response.status_code > 399:
+                logging.warning(
+                    f'Prediction rejected with status {response.status_code}: {response.text}',
+                    color='yellow')
                 return None
             if response.text.lower() in ['fail', 'null', 'none', 'error']:
+                logging.warning(f'Prediction failed: {response.text}', color='yellow')
                 return False
-        except Exception as _:
-            # logging.warning(
-            #    'unable to determine if prediction was accepted; try again Later.', e, color='yellow')
+        except Exception as e:
+            logging.warning(
+                f'Unable to publish prediction: {str(e)}. Will retry later.',
+                color='yellow')
             return None
         return True
 
-    def getObservation(self, stream: str = 'bitcoin') -> Union[dict, None]:
+    def publishPredictionsBatch(self, predictions: list[dict]) -> Union[dict, None]:
+        """
+        Publish multiple predictions in a single batch request.
+
+        Args:
+            predictions: List of prediction dicts, each containing:
+                - stream_uuid: Stream UUID this prediction is for
+                - stream_name: Optional stream name for logging
+                - value: Predicted value
+                - observed_at: Timestamp
+                - hash: Hash for data integrity
+
+        Returns:
+            dict with keys: total_submitted, successful, failed, prediction_ids, errors
+            None if request fails
+
+        Example:
+            >>> predictions = [
+            ...     {"stream_uuid": "abc-123", "stream_name": "btc", "value": "45000", "observed_at": "...", "hash": "..."},
+            ...     {"stream_uuid": "def-456", "stream_name": "eth", "value": "3000", "observed_at": "...", "hash": "..."}
+            ... ]
+            >>> result = server.publishPredictionsBatch(predictions)
+            >>> print(f"Submitted {result['successful']}/{result['total_submitted']} predictions")
+        """
+        try:
+            if not predictions:
+                logging.warning("No predictions to submit in batch", color='yellow')
+                return None
+
+            # Call batch prediction endpoint
+            response = self._makeAuthenticatedCall(
+                function=requests.post,
+                endpoint='/api/v1/predictions/batch',
+                payload=json.dumps({'predictions': predictions}),
+                raiseForStatus=False
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                logging.info(
+                    f"Batch prediction: {result['successful']}/{result['total_submitted']} successful",
+                    color='green')
+                return result
+            elif response.status_code > 399:
+                logging.warning(
+                    f'Batch prediction rejected with status {response.status_code}: {response.text}',
+                    color='yellow')
+                return None
+            else:
+                logging.warning(f'Batch prediction unexpected response: {response.text}', color='yellow')
+                return None
+
+        except Exception as e:
+            logging.error(f'Failed to submit batch predictions: {e}', color='red')
+            return None
+
+    def getObservationsBatch(self, storage=None, limit: int = 100) -> Union[list, None]:
+        """
+        Get the latest batch of observations from the Central Server.
+
+        This retrieves all observations from the most recent daily run, including:
+        - Multi-crypto observations (btc, eth, doge, etc.)
+        - SafeTrade observations (safetrade_btc, etc.)
+        - Bitcoin observation (bitcoin)
+
+        Args:
+            storage: Optional storage manager for storing stream metadata
+            limit: Maximum number of observations to return (default: 100)
+
+        Returns:
+            List of observation dicts with stream_uuid added, or None if request fails
+        """
+        try:
+            # Call new batch endpoint
+            response = self._makeAuthenticatedCall(
+                function=requests.get,
+                endpoint=f'/api/v1/observations/batch?limit={limit}',
+                raiseForStatus=False
+            )
+            if response.status_code == 200:
+                observations = response.json()
+                if observations is None:
+                    return None
+
+                # Process each observation to extract and store stream metadata
+                processed_observations = []
+                for data in observations:
+                    # Extract and store stream metadata if present
+                    if data.get('stream'):
+                        stream_info = data['stream']
+                        stream_uuid = stream_info.get('uuid')
+
+                        if stream_uuid and storage and hasattr(storage, 'db'):
+                            # Store stream metadata in client's streams table
+                            try:
+                                storage.db.upsertStream(
+                                    uuid=stream_uuid,
+                                    server_stream_id=stream_info.get('id'),
+                                    name=stream_info.get('name'),
+                                    author=stream_info.get('author'),
+                                    secondary=stream_info.get('secondary'),
+                                    target=stream_info.get('target'),
+                                    meta=stream_info.get('meta'),
+                                    description=stream_info.get('description')
+                                )
+                                # Add stream_uuid to observation for easy access
+                                data['stream_uuid'] = stream_uuid
+                            except Exception as e:
+                                logging.warning(
+                                    f"Failed to store stream metadata for {stream_info.get('name')}: {e}",
+                                    color='yellow')
+
+                    processed_observations.append(data)
+
+                if processed_observations:
+                    logging.info(
+                        f"Retrieved {len(processed_observations)} observations from latest batch",
+                        color='green')
+
+                return processed_observations
+            else:
+                logging.warning(
+                    f"Failed to get observations batch. Status code: {response.status_code}",
+                    color='yellow')
+                return None
+        except Exception as e:
+            logging.error(
+                f"Error occurred while fetching observations batch: {str(e)}",
+                color='red')
+            return None
+
+    def getObservation(self, stream: str = 'bitcoin', storage=None) -> Union[dict, None]:
         """
         Get the latest observation from the Central Server.
 
         Args:
             stream: The stream/topic to get observations for (default: 'bitcoin')
                     NOTE: This is a temporary testing endpoint - will be updated later
+            storage: Optional storage manager for storing stream metadata
 
         Returns:
-            dict with keys: observation_id, value, observed_at, ts, bitcoin_price, sources
+            dict with keys: observation_id, value, observed_at, ts, bitcoin_price, sources,
+                           stream_uuid (if stream metadata is present)
             None if request fails or no observation available
         """
         try:
@@ -1438,6 +1589,35 @@ class SatoriServerClient(object):
                 data = response.json()
                 if data is None:
                     return None
+
+                # Extract and store stream metadata if present
+                if data.get('stream'):
+                    stream_info = data['stream']
+                    stream_uuid = stream_info.get('uuid')
+
+                    if stream_uuid and storage and hasattr(storage, 'db'):
+                        # Store stream metadata in client's streams table
+                        try:
+                            storage.db.upsertStream(
+                                uuid=stream_uuid,
+                                server_stream_id=stream_info.get('id'),
+                                name=stream_info.get('name'),
+                                author=stream_info.get('author'),
+                                secondary=stream_info.get('secondary'),
+                                target=stream_info.get('target'),
+                                meta=stream_info.get('meta'),
+                                description=stream_info.get('description')
+                            )
+                            # Add stream_uuid to response for easy access
+                            data['stream_uuid'] = stream_uuid
+                            logging.info(
+                                f"Stored stream metadata for '{stream_info.get('name')}' (UUID: {stream_uuid})",
+                                color='green')
+                        except Exception as e:
+                            logging.warning(
+                                f"Failed to store stream metadata: {e}",
+                                color='yellow')
+
                 return data
             else:
                 logging.warning(

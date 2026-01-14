@@ -6,6 +6,7 @@ import os
 import time
 import json
 import threading
+import hashlib
 from satorilib.concepts.structs import StreamId, Stream
 from satorilib.concepts import constants
 from satorilib.wallet import EvrmoreWallet
@@ -14,7 +15,6 @@ from satorilib.server.api import CheckinDetails
 from satorineuron import VERSION
 from satorineuron import logging
 from satorineuron import config
-from satorineuron.init.tag import LatestTag, Version
 from satorineuron.init.wallet import WalletManager
 from satorineuron.structs.start import RunMode, StartupDagStruct
 # from satorilib.utils.ip import getPublicIpv4UsingCurl  # Removed - not needed
@@ -338,17 +338,13 @@ class SingletonMeta(type):
 class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     """a DAG of startup tasks."""
 
-    _holdingBalanceBase_cache = None
-    _holdingBalanceBase_timestamp = 0
 
     @classmethod
     def create(
         cls,
         *args,
-        env: str = 'dev',
+        env: str = 'prod',
         runMode: str = None,
-        urlServer: str = None,
-        urlMundo: str = None,
         isDebug: bool = False,
     ) -> 'StartupDag':
         '''Factory method to create and initialize StartupDag'''
@@ -356,8 +352,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             *args,
             env=env,
             runMode=runMode,
-            urlServer=urlServer,
-            urlMundo=urlMundo,
             isDebug=isDebug)
         startupDag.startFunction()
         return startupDag
@@ -367,41 +361,27 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         *args,
         env: str = 'dev',
         runMode: str = None,
-        urlServer: str = None,
-        urlMundo: str = None,
         isDebug: bool = False,
     ):
         super(StartupDag, self).__init__(*args)
-        self.needsRestart: Union[str, None] = None
-        self.version = Version(VERSION)
         self.env = env
         self.runMode = RunMode.choose(runMode or config.get().get('mode', None))
-        # logging.debug(f'mode: {self.runMode.name}', print=True)
-        # Read UI port from environment and save to config
-        self.uiPort = int(os.environ.get('SATORI_UI_PORT', '24601'))
-        config.add(data={'uiport': self.uiPort})
-        self.userInteraction = time.time()
+        self.uiPort = self.getUiPort()
         self.walletManager: WalletManager
         self.isDebug: bool = isDebug
-        self.urlServer: str = urlServer
-        self.urlMundo: str = urlMundo
-        self.paused: bool = False
-        self.pauseThread: Union[threading.Thread, None] = None
         self.balances: dict = {}
-        # Central-lite only needs basic fields - no subscriptions/publications/keys
         self.aiengine: Union[Engine, None] = None
         self.publications: list[Stream] = []  # Keep for engine
         self.subscriptions: list[Stream] = []  # Keep for engine
         self.identity: EvrmoreIdentity = EvrmoreIdentity(config.walletPath('wallet.yaml'))
         self.latestObservationTime: float = 0
         self.configRewardAddress: str = None
-        self.setRewardAddress()
         self.setupWalletManager()
-        # Disabled: checkinCheck thread makes unnecessary health check requests every 6 hours
-        # self.checkinCheckThread = threading.Thread(
-        #     target=self.checkinCheck,
-        #     daemon=True)
-        # self.checkinCheckThread.start()
+        # Health check thread: monitors observations and restarts if none received in 24 hours
+        self.checkinCheckThread = threading.Thread(
+            target=self.checkinCheck,
+            daemon=True)
+        self.checkinCheckThread.start()
         alreadySetup: bool = os.path.exists(config.walletPath("wallet.yaml"))
         if not alreadySetup:
             threading.Thread(target=self.delayedEngine).start()
@@ -418,6 +398,17 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 target=self.restartEverythingPeriodic,
                 daemon=True)
             self.restartThread.start()
+
+    @staticmethod
+    def getUiPort() -> int:
+        """Get UI port with priority: config file > environment variable > default (24601)"""
+        existing_port = config.get().get('uiport')
+        if existing_port is not None:
+            return int(existing_port)
+        else:
+            port = int(os.environ.get('SATORI_UI_PORT', '24601'))
+            config.add(data={'uiport': port})
+            return port
 
     @property
     def walletOnlyMode(self) -> bool:
@@ -548,45 +539,53 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     def electrumxCheck(self):
         return self.walletManager.isConnected()
 
-    def watchForVersionUpdates(self):
-        """
-        if we notice the code version has updated, download code restart
-        in order to restart we have to kill the main thread manually.
-        """
+    def collectAndSubmitPredictions(self):
+        """Collect predictions from all models and submit in batch."""
+        try:
+            if not hasattr(self, 'aiengine') or self.aiengine is None:
+                logging.warning("AI Engine not initialized, skipping prediction collection", color='yellow')
+                return
 
-        def getPidByName(name: str) -> Union[int, None]:
-            import psutil
-            for proc in psutil.process_iter(["pid", "cmdline"]):
-                try:
-                    if name in " ".join(proc.info["cmdline"]):
-                        return proc.info["pid"]
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            return None
+            # Collect predictions from all models
+            predictions_collected = 0
+            for stream_uuid, model in self.aiengine.streamModels.items():
+                if hasattr(model, '_pending_prediction') and model._pending_prediction:
+                    # Queue prediction in engine
+                    pred = model._pending_prediction
+                    self.aiengine.queuePrediction(
+                        stream_uuid=pred['stream_uuid'],
+                        stream_name=pred['stream_name'],
+                        value=pred['value'],
+                        observed_at=pred['observed_at'],
+                        hash_val=pred['hash']
+                    )
+                    predictions_collected += 1
+                    # Clear the pending prediction
+                    model._pending_prediction = None
 
-        def terminatePid(pid: int):
-            import signal
-            os.kill(pid, signal.SIGTERM)
+            if predictions_collected > 0:
+                logging.info(f"Collected {predictions_collected} predictions from models", color='cyan')
+                # Submit all queued predictions in batch
+                result = self.aiengine.flushPredictionQueue()
+                if result:
+                    logging.info(f"✓ Batch predictions submitted: {result['successful']}/{result['total_submitted']}", color='green')
+                else:
+                    logging.warning("Failed to submit batch predictions", color='yellow')
+            else:
+                logging.debug("No predictions ready to submit")
 
-        def watchForever():
-            latestTag = LatestTag(self.version, serverURL=self.urlServer)
-            while True:
-                time.sleep(60 * 60 * 24)
-                if latestTag.mustUpdate():
-                    terminatePid(getPidByName("satori.py"))
-
-        self.watchVersionThread = threading.Thread(
-            target=watchForever,
-            daemon=True)
-        self.watchVersionThread.start()
+        except Exception as e:
+            logging.error(f"Error collecting and submitting predictions: {e}", color='red')
 
     def pollObservationsForever(self):
         """
         Poll for new observations - P2P first, central fallback.
         In P2P/hybrid mode, also subscribes to real-time P2P observations.
-        Polling every 11 hours as backup for missed real-time events.
+        Initial delay: random (0-11 hours) to distribute load.
+        Subsequent polls: every 11 hours as backup for missed real-time events.
         """
         import pandas as pd
+        import random
 
         def processObservation(observation: dict):
             """Process an observation from any source (P2P or central)."""
@@ -664,31 +663,144 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     logging.warning(f"Failed to subscribe to P2P observations: {e}", color='yellow')
 
         def pollForever():
-            # Subscribe to real-time P2P observations
+            # Subscribe to real-time P2P observations first
             subscribeToP2PObservations()
 
+            # First poll: random delay between 1 and 11 hours to distribute load
+            initial_delay = random.randint(60 * 60, 60 * 60 * 11)
+            logging.info(f"First observation poll in {initial_delay / 3600:.1f} hours", color='blue')
+            time.sleep(initial_delay)
+
+            # Subsequent polls: every 11 hours as backup for P2P
             while True:
-                time.sleep(60 * 60 * 11)  # 11 hours backup poll
                 try:
                     if not hasattr(self, 'server') or self.server is None:
                         logging.warning("Server not initialized, skipping observation poll", color='yellow')
+                        time.sleep(60 * 60 * 11)
                         continue
 
                     if not hasattr(self, 'aiengine') or self.aiengine is None:
                         logging.warning("AI Engine not initialized, skipping observation poll", color='yellow')
+                        time.sleep(60 * 60 * 11)
                         continue
 
-                    # Get latest observation - P2P first, central fallback
+                    # Try P2P first for single observation
                     observation = getObservationP2PFirst()
+                    if observation:
+                        processObservation(observation)
 
-                    if observation is None:
+                    # Also get batch of observations from central-lite
+                    # This includes Bitcoin, multi-crypto, and SafeTrade observations
+                    storage = getattr(self.aiengine, 'storage', None)
+                    observations = self.server.getObservationsBatch(storage=storage)
+
+                    if observations is None or len(observations) == 0:
                         logging.info("No new observations available", color='blue')
+                        time.sleep(60 * 60 * 11)
                         continue
 
-                    processObservation(observation)
+                    logging.info(f"Received {len(observations)} observations from server", color='cyan')
+
+                    # Update last observation time
+                    self.latestObservationTime = time.time()
+
+                    # Process each observation
+                    observations_processed = 0
+                    for observation in observations:
+                        try:
+                            # Extract values
+                            value = observation.get('value')
+                            hash_val = observation.get('hash') or observation.get('id')
+                            stream_uuid = observation.get('stream_uuid')
+                            stream = observation.get('stream')
+                            stream_name = stream.get('name', 'unknown') if stream else 'unknown'
+
+                            if value is None:
+                                logging.warning(f"Skipping observation with no value (stream: {stream_name})", color='yellow')
+                                continue
+
+                            # Convert observation to DataFrame for engine
+                            df = pd.DataFrame([{
+                                'ts': observation.get('observed_at') or observation.get('ts'),
+                                'value': float(value),
+                                'hash': str(hash_val) if hash_val is not None else None,
+                            }])
+
+                            # Store using server-provided stream UUID
+                            if stream_uuid:
+                                observations_processed += 1
+
+                                # Create stream model if it doesn't exist
+                                if stream_uuid not in self.aiengine.streamModels:
+                                    try:
+                                        # Import required classes
+                                        from satoriengine.veda.engine import StreamModel
+
+                                        # Create StreamId objects for subscription and publication
+                                        sub_id = StreamId(
+                                            source='central-lite',
+                                            author='satori',
+                                            stream=stream_name,
+                                            target=''
+                                        )
+
+                                        # Prediction stream uses "_pred" suffix
+                                        pub_id = StreamId(
+                                            source='central-lite',
+                                            author='satori',
+                                            stream=f"{stream_name}_pred",
+                                            target=''
+                                        )
+
+                                        # Create Stream objects
+                                        subscriptionStream = Stream(streamId=sub_id)
+                                        publicationStream = Stream(streamId=pub_id, predicting=sub_id)
+
+                                        # Create StreamModel using factory method
+                                        self.aiengine.streamModels[stream_uuid] = StreamModel.createFromServer(
+                                            streamUuid=stream_uuid,
+                                            predictionStreamUuid=pub_id.uuid,
+                                            server=self.server,
+                                            wallet=self.wallet,
+                                            subscriptionStream=subscriptionStream,
+                                            publicationStream=publicationStream,
+                                            pauseAll=self.aiengine.pause,
+                                            resumeAll=self.aiengine.resume,
+                                            storage=self.aiengine.storage
+                                        )
+
+                                        # Choose and initialize appropriate adapter
+                                        self.aiengine.streamModels[stream_uuid].chooseAdapter(inplace=True)
+
+                                        logging.info(f"✓ Created model for stream: {stream_name} (UUID: {stream_uuid[:8]}...)", color='magenta')
+                                    except Exception as e:
+                                        logging.error(f"Failed to create model for {stream_name}: {e}", color='red')
+                                        import traceback
+                                        logging.error(traceback.format_exc())
+
+                                # Pass data to the model
+                                if stream_uuid in self.aiengine.streamModels:
+                                    try:
+                                        self.aiengine.streamModels[stream_uuid].onDataReceived(df)
+                                        logging.info(f"✓ Stored {stream_name}: ${float(value):,.2f} (UUID: {stream_uuid[:8]}...)", color='green')
+                                    except Exception as e:
+                                        logging.error(f"Error passing to engine for {stream_name}: {e}", color='red')
+                            else:
+                                logging.warning(f"Observation for {stream_name} missing stream_uuid", color='yellow')
+
+                        except Exception as e:
+                            logging.error(f"Error processing individual observation: {e}", color='red')
+
+                    logging.info(f"✓ Processed and stored {observations_processed}/{len(observations)} observations", color='cyan')
+
+                    # After processing all observations, collect predictions and submit in batch
+                    self.collectAndSubmitPredictions()
 
                 except Exception as e:
                     logging.error(f"Error polling observations: {e}", color='red')
+
+                # Wait 11 hours before next poll
+                time.sleep(60 * 60 * 11)
 
         self.pollObservationsThread = threading.Thread(
             target=pollForever,
@@ -701,13 +813,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
     def checkinCheck(self):
         while True:
-            time.sleep(60 * 60 * 6)
+            time.sleep(60 * 60 * 6)  # Check every 6 hours
             current_time = time.time()
-            if self.latestObservationTime and (current_time - self.latestObservationTime > 60*60*6):
-                logging.warning("No observations in 6 hours, restarting")
+            if self.latestObservationTime and (current_time - self.latestObservationTime > 60*60*24):
+                logging.warning("No observations in 24 hours, restarting", print=True)
                 self.triggerRestart()
             if hasattr(self, 'server') and hasattr(self.server, 'checkinCheck') and self.server.checkinCheck():
-                logging.warning("Server check failed, restarting")
+                logging.warning("Server check failed, restarting", print=True)
                 self.triggerRestart()
 
     def networkIsTest(self, network: str = None) -> bool:
@@ -731,18 +843,22 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             self.createServerConn()
             if networking_mode != 'p2p':
                 self.authWithCentral()  # Skip in pure P2P mode
+            self.setRewardAddress(globally=True)  # Sync reward address with server
             self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
             self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
             logging.info("in WALLETONLYMODE")
+            startWebUI(self, port=self.uiPort)  # Start web UI after sync
             return
         self.setMiningMode()
         self.createServerConn()
         if networking_mode != 'p2p':
             self.authWithCentral()  # Skip in pure P2P mode
+        self.setRewardAddress(globally=True)  # Sync reward address with server
         self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
         self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
         self.setupDefaultStream()
         self.spawnEngine()
+        startWebUI(self, port=self.uiPort)  # Start web UI after sync
 
     def startWalletOnly(self):
         """start the satori engine."""
@@ -764,10 +880,12 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.setMiningMode()
         self.createServerConn()
         self.authWithCentral()
+        self.setRewardAddress(globally=True)  # Sync reward address with server
         self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
         self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
         self.setupDefaultStream()
         self.spawnEngine()
+        startWebUI(self, port=self.uiPort)  # Start web UI after sync
         threading.Event().wait()
 
     def serverConnectedRecently(self, threshold_minutes: int = 10) -> bool:
@@ -784,9 +902,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
     def createServerConn(self):
         # logging.debug(self.urlServer, color="teal")
-        self.server = SatoriServerClient(
-            self.wallet, url=self.urlServer, sendingUrl=self.urlMundo
-        )
+        self.server = SatoriServerClient(self.wallet)
 
     def authWithCentral(self):
         """Register peer with central-lite server."""
@@ -2195,20 +2311,66 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         address: Union[str, None] = None,
         globally: bool = False
     ) -> bool:
+        """
+        Set or sync reward address between local config and central server.
+
+        Args:
+            address: Reward address to set. If None, loads from config or syncs from server.
+            globally: If True, also syncs with central server (requires production env).
+
+        Returns:
+            True if successfully set/synced, False otherwise.
+        """
+        # If address is provided, validate and save to config
         if EvrmoreWallet.addressIsValid(address):
             self.configRewardAddress = address
             config.add(data={'reward address': address})
-            if not globally:
-                return True
-        else:
-            self.configRewardAddress: str = str(config.get().get('reward address', ''))
-        if (
-            globally and
-            self.env in ['prod', 'local', 'testprod'] and
-            EvrmoreWallet.addressIsValid(self.configRewardAddress)
-        ):
-            self.server.setRewardAddress(address=self.configRewardAddress)
+
+            # If globally=True, check if server needs update
+            if globally and self.env in ['prod', 'local', 'testprod', 'dev']:
+                try:
+                    serverAddress = self.server.mineToAddressStatus()
+                    # Only send to server if addresses differ
+                    if address != serverAddress:
+                        self.server.setRewardAddress(address=address)
+                        logging.info(f"Updated server reward address: {address[:8]}...", color="green")
+                except Exception as e:
+                    logging.debug(f"Could not sync reward address with server: {e}")
             return True
+        else:
+            # No address provided - load from config
+            self.configRewardAddress: str = str(config.get().get('reward address', ''))
+
+            # If we need to sync with server, check if addresses match
+            if (
+                hasattr(self, 'server') and
+                self.server is not None and
+                self.env in ['prod', 'local', 'testprod', 'dev']
+            ):
+                try:
+                    serverAddress = self.server.mineToAddressStatus()
+
+                    # If config is empty but server has address, fetch and save
+                    if not self.configRewardAddress and serverAddress and EvrmoreWallet.addressIsValid(serverAddress):
+                        self.configRewardAddress = serverAddress
+                        config.add(data={'reward address': serverAddress})
+                        logging.info(f"Synced reward address from server: {serverAddress[:8]}...", color="green")
+                        return True
+
+                    # If config has address and globally=True, check if server needs update
+                    if (
+                        globally and
+                        EvrmoreWallet.addressIsValid(self.configRewardAddress) and
+                        self.configRewardAddress != serverAddress
+                    ):
+                        # Only send to server if addresses differ
+                        self.server.setRewardAddress(address=self.configRewardAddress)
+                        logging.info(f"Updated server reward address: {self.configRewardAddress[:8]}...", color="green")
+                        return True
+
+                except Exception as e:
+                    logging.debug(f"Could not sync reward address with server: {e}")
+
         return False
 
     @staticmethod
@@ -2299,32 +2461,6 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         except Exception as e:
             logging.error(f"Failed to spawn AI Engine: {e}")
 
-    # def findMatchingPubSubStream(self, uuid: str, sub: bool = True) -> Stream:
-    #         if sub:
-    #             for sub in self.subscriptions:
-    #                 if sub.streamId.uuid == uuid:
-    #                     return sub
-    #         else:
-    #             for pub in self.publications:
-    #                 if pub.streamId.uuid == uuid:
-    #                     return pub
-
-    def pause(self, timeout: int = 60):
-        """pause the engine."""
-        self.paused = True
-        self.pauseTimer = threading.Timer(timeout, self.unpause)
-        self.pauseTimer.daemon = True
-        self.pauseTimer.start()
-        logging.info("AI engine paused", color="green")
-
-    def unpause(self):
-        """unpause the engine."""
-        self.paused = False
-        if hasattr(self, 'pauseTimer') and self.pauseTimer is not None:
-            self.pauseTimer.cancel()
-        self.pauseTimer = None
-        logging.info("AI engine unpaused", color="green")
-
     def delayedStart(self):
         alreadySetup: bool = os.path.exists(config.walletPath("wallet.yaml"))
         if alreadySetup:
@@ -2381,13 +2517,14 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
     """Start the Flask web UI in a background thread with WebSocket support."""
     try:
         from web.app import create_app, get_socketio, sendToUI
-        from web.routes import set_vault
+        from web.routes import set_vault, set_startup
 
         app = create_app()
         socketio = get_socketio()
 
-        # Connect vault to web routes
+        # Connect vault and startup to web routes
         set_vault(startupDag.walletManager)
+        set_startup(startupDag)  # Set startup immediately - initialization is complete
 
         # Start P2P WebSocket bridge for real-time UI updates
         try:
@@ -2438,23 +2575,20 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
         return None
 
 
+def getStart() -> Union[StartupDag, None]:
+    """Get the singleton instance of StartupDag.
+
+    Returns:
+        The singleton StartupDag instance if it exists, None otherwise.
+    """
+    return StartupDag._instances.get(StartupDag, None)
+
+
 if __name__ == "__main__":
     logging.info("Starting Satori Neuron", color="green")
 
-    # Start web UI early (before blocking server connection)
-    def start_web_early():
-        """Start web UI after a brief delay to let StartupDag initialize."""
-        import time
-        time.sleep(2)  # Wait for StartupDag to be created
-        try:
-            startup = getStart()
-            startWebUI(startup, port=startup.uiPort)
-        except Exception as e:
-            logging.warning(f"Early web UI start failed: {e}")
-
-    web_early_thread = threading.Thread(target=start_web_early, daemon=True)
-    web_early_thread.start()
-
+    # Web UI will be started after initialization completes
+    # (called from start() or startWorker() methods after reward address sync)
     startup = StartupDag.create(env=os.environ.get('SATORI_ENV', 'prod'), runMode='worker')
 
     threading.Event().wait()

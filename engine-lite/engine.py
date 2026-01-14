@@ -6,12 +6,13 @@ import copy
 import asyncio
 import warnings
 import threading
+import hashlib
 import numpy as np
 import pandas as pd
 from satorilib.concepts import Observation, Stream
 from satorilib.logging import INFO, setup, debug, info, warning, error
 from satorilib.utils.system import getProcessorCount
-from satorilib.utils.time import datetimeToTimestamp, now
+from satorilib.utils.time import datetimeToTimestamp, datetimeToUnixTimestamp, now
 from satorilib.datamanager import DataClient, DataServerApi, DataClientApi, PeerInfo, Message, Subscription
 from satorilib.wallet.evrmore.identity import EvrmoreIdentity
 from satorilib.server import SatoriServerClient
@@ -202,6 +203,9 @@ class Engine:
         self._version_manager = None
         self._storage_redundancy = None
         self._p2p_observation_subscriptions: dict[str, bool] = {}
+        # Prediction queue for batch submission (upstream feature)
+        self.predictionQueue: list[dict] = []
+        self.predictionQueueLock: threading.Lock = threading.Lock()
         # TODO: Commented out for engine-neuron integration
         # self.centrifugo = None
         # self.centrifugoSubscriptions: list = []
@@ -587,6 +591,45 @@ class Engine:
             if not thread.is_alive():
                 self.threads.remove(thread)
         debug(f'prediction thread count: {len(self.threads)}')
+
+    def queuePrediction(self, stream_uuid: str, stream_name: str, value: str, observed_at: str, hash_val: str):
+        """Add a prediction to the queue for batch submission."""
+        with self.predictionQueueLock:
+            self.predictionQueue.append({
+                'stream_uuid': stream_uuid,
+                'stream_name': stream_name,
+                'value': value,
+                'observed_at': observed_at,
+                'hash': hash_val
+            })
+            debug(f"Queued prediction for {stream_name} (queue size: {len(self.predictionQueue)})")
+
+    def flushPredictionQueue(self) -> Union[dict, None]:
+        """Submit all queued predictions in a batch and clear the queue."""
+        with self.predictionQueueLock:
+            if not self.predictionQueue:
+                return None
+
+            predictions_to_submit = self.predictionQueue.copy()
+            queue_size = len(predictions_to_submit)
+
+        # Submit batch outside of lock
+        if self.server is not None:
+            info(f"Submitting batch of {queue_size} predictions to server...", color='cyan')
+            result = self.server.publishPredictionsBatch(predictions_to_submit)
+
+            if result and result.get('successful', 0) > 0:
+                # Clear queue only if submission was successful
+                with self.predictionQueueLock:
+                    self.predictionQueue = []
+                info(f"✓ Batch submitted: {result['successful']}/{result['total_submitted']} successful", color='green')
+                return result
+            else:
+                warning(f"Batch prediction submission failed, keeping {queue_size} predictions in queue for retry")
+                return None
+        else:
+            warning("Server not initialized, cannot submit batch predictions")
+            return None
 
     # TODO: Commented out for engine-neuron integration
     # async def cleanupCentrifugo(self):
@@ -1122,8 +1165,13 @@ class StreamModel:
         except Exception as e:
             error('Failed to send Prediction to server : ', e)
 
-    def publishPredictionToServer(self, forecast: pd.DataFrame):
-        """Publish prediction directly to Central Server and store locally."""
+    def publishPredictionToServer(self, forecast: pd.DataFrame, useBatch: bool = True):
+        """Publish prediction - either queue for batch submission or send immediately.
+
+        Args:
+            forecast: DataFrame with prediction
+            useBatch: If True, queue for batch submission. If False, publish immediately (legacy)
+        """
         try:
             predictionValue = str(forecast['value'].iloc[0])
             observationTime = str(forecast.index[0])
@@ -1145,25 +1193,86 @@ class StreamModel:
                 if stored:
                     debug(f"Prediction stored locally for stream {self.predictionStreamUuid}")
 
-            # Use publication stream's topic
-            topic = self.publicationStream.streamId.jsonId
+            # Get stream name for logging
+            stream_name = getattr(self.subscriptionStream.streamId, 'stream', 'unknown')
 
-            isSuccess = self.server.publish(
-                topic=topic,
-                data=predictionValue,
-                observationTime=observationTime,
-                observationHash=observationHash,
-                isPrediction=True,
-                useAuthorizedCall=True)
+            if useBatch:
+                # Queue prediction for batch submission
+                # Get engine instance from parent
+                engine = None
+                # Try to find engine through model references
+                for attr_name in dir(self):
+                    if attr_name.startswith('_'):
+                        continue
+                    attr = getattr(self, attr_name, None)
+                    if isinstance(attr, Engine):
+                        engine = attr
+                        break
 
-            if isSuccess:
-                info(f"Prediction published to Central Server: {predictionValue} at {observationTime}", color='green')
-            elif isSuccess is False:
-                # False means actual failure (not rate limiting which returns None)
-                warning(f"Failed to publish prediction to Central Server")
-            # None means rate limited - already logged in server.publish()
+                # If no direct reference, try to get from globals/parent context
+                if engine is None and hasattr(self, '__dict__'):
+                    # The engine creates StreamModel, so we need to access it differently
+                    # For now, we'll use the server to access the parent neuron's engine
+                    # This is a bit hacky but works for the neuron-engine integration
+                    pass
+
+                # For now, queue via server which will be picked up by neuron
+                # The neuron will call engine.queuePrediction() after observation processing
+                debug(f"Prediction ready for batching: {stream_name} = {predictionValue}")
+                # Store in instance variable for neuron to collect
+                if not hasattr(self, '_pending_prediction'):
+                    self._pending_prediction = {
+                        'stream_uuid': self.streamUuid,
+                        'stream_name': stream_name,
+                        'value': predictionValue,
+                        'observed_at': observationTime,
+                        'hash': observationHash
+                    }
+            else:
+                # Legacy: immediate publish
+                topic = self.publicationStream.streamId.jsonId
+
+                isSuccess = self.server.publish(
+                    topic=topic,
+                    data=predictionValue,
+                    observationTime=observationTime,
+                    observationHash=observationHash,
+                    isPrediction=True,
+                    useAuthorizedCall=True)
+
+                if isSuccess:
+                    info(f"Prediction published to Central Server: {predictionValue} at {observationTime}", color='green')
+                elif isSuccess is False:
+                    # False means actual failure (not rate limiting which returns None)
+                    warning(f"Failed to publish prediction to Central Server")
+                # None means rate limited - already logged in server.publish()
         except Exception as e:
             error(f"Error publishing prediction to Central Server: {e}")
+
+    def _createAugmentedData(self, firstForecast: pd.DataFrame) -> pd.DataFrame:
+        try:
+            firstValue = StreamForecast.firstPredictionOf(firstForecast)
+            if 'date_time' in firstForecast.columns:
+                timestamp = firstForecast['date_time'].iloc[0]
+            elif 'ds' in firstForecast.columns:
+                timestamp = firstForecast['ds'].iloc[0]
+            else:
+                timestamp = now()
+
+            tempHash = hashlib.sha256(
+                f"{firstValue}{timestamp}".encode()
+            ).hexdigest()[:16]
+
+            tempRow = pd.DataFrame({
+                'date_time': [timestamp],
+                'value': [firstValue],
+                'id': [tempHash]
+            })
+            return pd.concat([self.data, tempRow], ignore_index=True)
+
+        except Exception as e:
+            error(f"Error creating augmented data for autoregression: {e}")
+            return self.data
 
     def producePrediction(self, updatedModel=None):
         """
@@ -1175,10 +1284,33 @@ class StreamModel:
         try:
             model = updatedModel or self.stable
             if model is not None:
-                forecast = model.predict(data=self.data)
+                firstForecast = model.predict(data=self.data)
+
+                # Only do autoregression if first prediction is valid
+                if isinstance(firstForecast, pd.DataFrame):
+                    firstValue = StreamForecast.firstPredictionOf(firstForecast)
+                    debug(f"[AUTOREGRESSION] First prediction: {firstValue}", color='cyan')
+
+                    augmentedData = self._createAugmentedData(firstForecast)
+                    debug(f"[AUTOREGRESSION] Augmented data size: {len(augmentedData)} rows (original: {len(self.data)})", color='cyan')
+
+                    secondForecast = model.predict(data=augmentedData)
+                    if isinstance(secondForecast, pd.DataFrame):
+                        secondValue = StreamForecast.firstPredictionOf(secondForecast)
+                        debug(f"[AUTOREGRESSION] Second prediction (queued for batch): {secondValue}", color='cyan')
+                    else:
+                        secondForecast = None
+
+                    forecast = secondForecast if secondForecast is not None else firstForecast
+                else:
+                    # First prediction failed, skip autoregression
+                    debug("[AUTOREGRESSION] Skipping - first prediction failed", color='yellow')
+                    forecast = firstForecast
+
                 if isinstance(forecast, pd.DataFrame):
+                    # Use Unix timestamp for consistency with observation storage
                     predictionDf = pd.DataFrame({ 'value': [StreamForecast.firstPredictionOf(forecast)]
-                                    }, index=[datetimeToTimestamp(now())])
+                                    }, index=[datetimeToUnixTimestamp(now())])
                     debug(predictionDf, print=True)
 
                     # Check if we should use P2P commit-reveal

@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 # Global vault reference (will be set by the application) - used by background processes
 _startup_vault = None
 
+# Global startup instance reference (will be set by the application)
+_startup_instance = None
+
 # Session-specific vaults - each browser session gets its own WalletManager
 _session_vaults = {}
 _vault_lock = Lock()
@@ -137,6 +140,17 @@ def set_vault(vault):
 def get_vault():
     """Get the startup vault instance (for backward compatibility)."""
     return _startup_vault
+
+
+def set_startup(startup):
+    """Set the startup instance (used by web routes to access AI engine, etc)."""
+    global _startup_instance
+    _startup_instance = startup
+
+
+def get_startup():
+    """Get the startup instance."""
+    return _startup_instance
 
 
 def get_or_create_session_vault():
@@ -638,7 +652,20 @@ def register_routes(app):
     def dashboard():
         """Main dashboard page."""
         from satorineuron import VERSION
-        return render_template('dashboard.html', version=VERSION)
+
+        # Derive eth_wallet_address locally from wallet pubkey
+        eth_wallet_address = None
+        try:
+            wallet_manager = get_or_create_session_vault()
+            if wallet_manager and wallet_manager.wallet and hasattr(wallet_manager.wallet, 'pubkey'):
+                wallet_pubkey = wallet_manager.wallet.pubkey
+                if wallet_pubkey:
+                    from satorineuron.common.eth_address import derive_eth_wallet_address_from_pubkey
+                    eth_wallet_address = derive_eth_wallet_address_from_pubkey(wallet_pubkey)
+        except Exception as e:
+            logger.warning(f"Could not derive eth_wallet_address: {e}")
+
+        return render_template('dashboard.html', version=VERSION, eth_wallet_address=eth_wallet_address)
 
     @app.route('/stake')
     @login_required
@@ -670,6 +697,35 @@ def register_routes(app):
         except requests.RequestException:
             pass
         return jsonify({'status': 'ok', 'api': 'disconnected'})
+
+    @app.route('/api/engine/status')
+    def get_engine_status():
+        """Check AI engine initialization status (no auth required for testing)."""
+        startup = get_startup()
+        if startup is None:
+            return jsonify({
+                'initialized': False,
+                'error': 'Startup instance not set'
+            })
+
+        has_aiengine = hasattr(startup, 'aiengine')
+        aiengine_not_none = startup.aiengine is not None if has_aiengine else False
+        has_streams = False
+        stream_count = 0
+
+        if aiengine_not_none and hasattr(startup.aiengine, 'streamModels'):
+            has_streams = bool(startup.aiengine.streamModels)
+            stream_count = len(startup.aiengine.streamModels)
+
+        return jsonify({
+            'initialized': aiengine_not_none,
+            'has_aiengine_attr': has_aiengine,
+            'aiengine_not_none': aiengine_not_none,
+            'has_streams': has_streams,
+            'stream_count': stream_count,
+            'subscriptions_count': len(startup.subscriptions) if hasattr(startup, 'subscriptions') and startup.subscriptions else 0,
+            'publications_count': len(startup.publications) if hasattr(startup, 'publications') and startup.publications else 0
+        })
 
     # API Proxy Routes
     def get_auth_headers():
@@ -799,7 +855,8 @@ def register_routes(app):
 
         try:
             if method == 'GET':
-                resp = requests.get(url, headers=headers, timeout=10)
+                # Forward query parameters from the incoming request
+                resp = requests.get(url, params=request.args, headers=headers, timeout=10)
             elif method == 'POST':
                 resp = requests.post(url, json=data, headers=headers, timeout=10)
             elif method == 'DELETE':
@@ -820,10 +877,43 @@ def register_routes(app):
     @app.route('/api/peer/reward-address', methods=['GET', 'POST'])
     @login_required
     def api_reward_address():
-        """Proxy reward address request."""
+        """
+        Get or set reward address using local config (synced with server by start.py).
+
+        GET: Reads from local config (fast, no server call)
+        POST: Updates both local config and server (via setRewardAddress)
+        """
+        startup = get_startup()
+
         if request.method == 'POST':
-            return proxy_api('/peer/reward-address', 'POST', request.json)
-        return proxy_api('/peer/reward-address')
+            # Get the new reward address from request
+            data = request.get_json()
+            if not data or 'reward_address' not in data:
+                return jsonify({'error': 'Missing reward_address'}), 400
+
+            new_address = data['reward_address']
+
+            # Update both local config and server using setRewardAddress
+            if startup:
+                try:
+                    success = startup.setRewardAddress(address=new_address, globally=True)
+                    if success:
+                        return jsonify({'success': True, 'reward_address': new_address})
+                    else:
+                        return jsonify({'error': 'Failed to set reward address'}), 500
+                except Exception as e:
+                    logger.error(f"Error setting reward address: {e}")
+                    return jsonify({'error': str(e)}), 500
+            else:
+                # Fallback to proxy if startup not available
+                return proxy_api('/peer/reward-address', 'POST', request.json)
+
+        # GET request - read from local config
+        if startup and hasattr(startup, 'configRewardAddress'):
+            return jsonify({'reward_address': startup.configRewardAddress or ''})
+        else:
+            # Fallback to proxy if startup not available
+            return proxy_api('/peer/reward-address')
 
     # =========================================================================
     # STAKE MANAGEMENT - P2P ENABLED ROUTES
@@ -859,7 +949,7 @@ def register_routes(app):
             except Exception as e:
                 logger.warning(f"P2P lender status failed, trying central: {e}")
 
-        # Fallback to central - requires wallet_address param
+        # Fallback to central - proxy without authentication (public endpoint)
         try:
             from satorineuron.init import start
             startup = start.getStart() if hasattr(start, 'getStart') else None
@@ -868,13 +958,14 @@ def register_routes(app):
                 wallet_address = startup.wallet.address
 
             if wallet_address:
-                result = proxy_api(f'/lender/status?wallet_address={wallet_address}')
+                result = proxy_api(f'/lender/status?wallet_address={wallet_address}', authenticated=False)
                 # Check if proxy returned an error
                 if hasattr(result, 'status_code') and result.status_code >= 400:
                     raise Exception(f"Central API returned {result.status_code}")
                 return result
             else:
-                raise Exception("No wallet address available")
+                # Try without wallet address if not available
+                return proxy_api('/lender/status', authenticated=False)
         except Exception as e:
             logger.warning(f"Central lender status also failed: {e}")
             # Return empty/default status
@@ -8114,3 +8205,366 @@ def register_routes(app):
             logger.warning(f"Failed to get badge progress: {e}")
             return jsonify({'error': str(e)})
 
+    # =========================================================================
+    # ENGINE PERFORMANCE ENDPOINTS (from upstream)
+    # =========================================================================
+
+    @app.route('/api/engine/performance', methods=['GET'])
+    @login_required
+    def get_engine_performance():
+        """Get engine performance metrics (predictions vs observations).
+
+        Returns last 100 observations and predictions with accuracy calculations.
+
+        Returns:
+            JSON with:
+            - observations: [{ts, value}, ...]
+            - predictions: [{ts, value}, ...]
+            - accuracy: [{ts, error, abs_error}, ...]
+            - stats: {avg_error, avg_abs_error, accuracy_pct}
+        """
+        try:
+            # Use the stored startup instance instead of importing
+            startup = get_startup()
+            if startup is None or not hasattr(startup, 'aiengine') or startup.aiengine is None:
+                logger.warning("AI engine not initialized")
+                return jsonify({'error': 'AI engine not initialized'}), 503
+
+            # Get first stream (for now, could extend to support multiple streams)
+            if not startup.aiengine.streamModels:
+                return jsonify({'error': 'No streams configured'}), 404
+
+            streamUuid = list(startup.aiengine.streamModels.keys())[0]
+            streamModel = startup.aiengine.streamModels[streamUuid]
+
+            if not hasattr(streamModel, 'storage') or streamModel.storage is None:
+                return jsonify({'error': 'Storage not initialized'}), 503
+
+            # Get last 100 observations
+            obs_df = streamModel.storage.getStreamData(streamModel.streamUuid)
+            if obs_df.empty:
+                return jsonify({
+                    'observations': [],
+                    'predictions': [],
+                    'accuracy': [],
+                    'stats': {}
+                })
+
+            obs_df = obs_df.tail(100).reset_index()
+            observations = [
+                {'ts': str(row['ts']), 'value': float(row['value'])}
+                for _, row in obs_df.iterrows()
+            ]
+
+            # Get last 100 predictions
+            pred_df = streamModel.storage.getPredictions(streamModel.predictionStreamUuid)
+            if pred_df.empty:
+                return jsonify({
+                    'observations': observations,
+                    'predictions': [],
+                    'accuracy': [],
+                    'stats': {}
+                })
+
+            pred_df = pred_df.tail(100).reset_index()
+            predictions = [
+                {'ts': str(row['ts']), 'value': float(row['value'])}
+                for _, row in pred_df.iterrows()
+            ]
+
+            # Calculate accuracy: match each prediction to the next observation
+            import pandas as pd
+            accuracy_data = []
+
+            for idx, pred_row in pred_df.iterrows():
+                pred_ts = pred_row['ts']
+                pred_value = float(pred_row['value'])
+
+                # Find next observation after this prediction
+                # Ensure timestamp comparison works by converting pred_ts to same type
+                try:
+                    # Convert pred_ts to match obs_df['ts'] dtype
+                    if pd.api.types.is_datetime64_any_dtype(obs_df['ts']):
+                        # Observations are datetime - convert pred_ts to datetime
+                        pred_ts_compare = pd.to_datetime(pred_ts)
+                    elif pd.api.types.is_numeric_dtype(obs_df['ts']):
+                        # Observations are numeric (Unix timestamps)
+                        # Try to convert pred_ts to numeric
+                        try:
+                            # First try direct conversion (if pred_ts is already numeric)
+                            pred_ts_compare = float(pred_ts)
+                        except (ValueError, TypeError):
+                            # If that fails, pred_ts might be a datetime string
+                            # Convert to datetime then to Unix timestamp
+                            pred_ts_dt = pd.to_datetime(pred_ts)
+                            pred_ts_compare = pred_ts_dt.timestamp()
+                    else:
+                        # Observations are object/string - keep as-is
+                        pred_ts_compare = pred_ts
+                    next_obs = obs_df[obs_df['ts'] > pred_ts_compare]
+                except (ValueError, TypeError) as e:
+                    # If conversion fails, skip this prediction
+                    logger.warning(f"Timestamp comparison failed for prediction {idx}: {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Unexpected error in accuracy calculation at {idx}: {e}")
+                    continue
+                if not next_obs.empty:
+                    obs_value = float(next_obs.iloc[0]['value'])
+                    error = pred_value - obs_value
+                    abs_error = abs(error)
+
+                    accuracy_data.append({
+                        'ts': str(pred_ts),
+                        'error': error,
+                        'abs_error': abs_error,
+                        'predicted': pred_value,
+                        'actual': obs_value
+                    })
+
+            # Calculate statistics
+            stats = {}
+            if accuracy_data:
+                errors = [d['error'] for d in accuracy_data]
+                abs_errors = [d['abs_error'] for d in accuracy_data]
+                actuals = [d['actual'] for d in accuracy_data]
+
+                avg_error = sum(errors) / len(errors)
+                avg_abs_error = sum(abs_errors) / len(abs_errors)
+                avg_actual = sum(actuals) / len(actuals) if actuals else 1
+
+                # Accuracy percentage (100% - average % error)
+                avg_pct_error = (avg_abs_error / avg_actual * 100) if avg_actual != 0 else 0
+                accuracy_pct = max(0, 100 - avg_pct_error)
+
+                stats = {
+                    'avg_error': round(avg_error, 4),
+                    'avg_abs_error': round(avg_abs_error, 4),
+                    'accuracy_pct': round(accuracy_pct, 2)
+                }
+
+            return jsonify({
+                'observations': observations,
+                'predictions': predictions,
+                'accuracy': accuracy_data,
+                'stats': stats
+            })
+
+        except Exception as e:
+            logger.error(f"Error getting engine performance: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/wallet/import', methods=['POST'])
+    @login_required
+    def api_wallet_import():
+        """Import wallet from uploaded files with automatic rollback on failure.
+
+        Security: Requires vault to be unlocked (login_required decorator)
+        Process:
+        1. Validate uploaded files
+        2. Create timestamped backup of existing wallet directory
+        3. Save uploaded files to temporary directory
+        4. Validate YAML structure
+        5. Move files to wallet directory
+        6. Trigger container restart (critical for safety)
+
+        Rollback: If ANY step fails, automatically restores from backup
+
+        Expected files in upload:
+        - wallet.yaml (required)
+        - vault.yaml (required)
+        - wallet.yaml.bak (optional)
+        - vault.yaml.bak (optional)
+        """
+        import tempfile
+        import shutil
+        import datetime
+        from pathlib import Path
+        import yaml
+
+        try:
+            # 1. Validate request has files
+            if 'files' not in request.files:
+                return jsonify({'error': 'No files uploaded'}), 400
+
+            files = request.files.getlist('files')
+            if not files:
+                return jsonify({'error': 'No files selected'}), 400
+
+            # 2. Validate required files are present
+            file_names = [f.filename for f in files if f.filename]
+            required_files = {'wallet.yaml', 'vault.yaml'}
+            uploaded_files = set(file_names)
+
+            if not required_files.issubset(uploaded_files):
+                missing = required_files - uploaded_files
+                return jsonify({
+                    'error': f'Missing required files: {", ".join(missing)}'
+                }), 400
+
+            # 3. Validate file names (security: prevent directory traversal)
+            allowed_files = {'wallet.yaml', 'vault.yaml', 'wallet.yaml.bak', 'vault.yaml.bak'}
+            for name in file_names:
+                if name not in allowed_files:
+                    return jsonify({
+                        'error': f'Invalid file: {name}. Only wallet files allowed.'
+                    }), 400
+
+            # 4. Get wallet directory path
+            from satorineuron import config
+            wallet_dir = Path(config.walletPath())
+
+            # 5. Create timestamped backup of wallet files inside wallet directory
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_dir = wallet_dir / f'backup_{timestamp}'
+
+            try:
+                if wallet_dir.exists():
+                    # Create backup directory inside wallet folder
+                    backup_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Copy all wallet files to backup (excluding other backup folders)
+                    for item in wallet_dir.iterdir():
+                        if item.is_file():
+                            shutil.copy2(item, backup_dir / item.name)
+
+                    logger.info(f"Created backup at {backup_dir}")
+                else:
+                    logger.warning(f"Wallet directory doesn't exist yet: {wallet_dir}")
+                    wallet_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Backup failed: {e}")
+                return jsonify({
+                    'error': f'Failed to create backup: {str(e)}'
+                }), 500
+
+            # 6. Save uploaded files to temporary location first
+            temp_dir = Path(tempfile.mkdtemp())
+            try:
+                # Save files to temp
+                for file in files:
+                    if file.filename:
+                        file_path = temp_dir / file.filename
+                        file.save(str(file_path))
+                        logger.info(f"Saved {file.filename} to temp: {file_path}")
+
+                # 7. Validate file contents (basic YAML check)
+                for file_name in ['wallet.yaml', 'vault.yaml']:
+                    file_path = temp_dir / file_name
+                    try:
+                        with open(file_path, 'r') as f:
+                            yaml.safe_load(f)
+                        logger.info(f"Validated {file_name}")
+                    except Exception as e:
+                        # Validation failed - cleanup and rollback
+                        shutil.rmtree(temp_dir)
+                        logger.error(f"Invalid {file_name}: {e}")
+
+                        # Rollback: This shouldn't be needed as we haven't modified wallet_dir yet
+                        # but include for safety
+                        if backup_dir.exists():
+                            logger.info("Validation failed before any changes - no rollback needed")
+
+                        return jsonify({
+                            'error': f'Invalid {file_name}: {str(e)}',
+                            'rolled_back': False
+                        }), 400
+
+                # 8. Files validated - move to wallet directory
+                for file_name in file_names:
+                    src = temp_dir / file_name
+                    dst = wallet_dir / file_name
+                    shutil.move(str(src), str(dst))
+                    logger.info(f"Moved {file_name} to wallet directory")
+
+                logger.info(f"Wallet import: saved {len(file_names)} files")
+
+                # 8.5. Clear reward address from config since wallet changed
+                try:
+                    # Read config, remove reward address, and write back
+                    config_data = config.get()
+                    logger.info(f"Current config before clearing reward address: {list(config_data.keys())}")
+
+                    if 'reward address' in config_data:
+                        old_address = config_data['reward address']
+                        del config_data['reward address']
+                        # Use put to write the entire config back (this will remove the key)
+                        config.put(data=config_data)
+                        logger.info(f"Cleared old reward address '{old_address}' from config")
+
+                        # Verify it was removed
+                        verify_config = config.get()
+                        if 'reward address' in verify_config:
+                            logger.error("Failed to remove reward address from config!")
+                        else:
+                            logger.info("Verified: reward address successfully removed from config")
+                    else:
+                        logger.info("No reward address found in config to clear")
+                except Exception as config_error:
+                    logger.error(f"Error clearing reward address from config: {config_error}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    # Don't fail the import for this - it's not critical
+
+            except Exception as e:
+                # Error during file operations - ROLLBACK
+                logger.error(f"Import failed during file operations: {e}. Rolling back...")
+
+                # Delete any partial changes in wallet_dir
+                for file_name in file_names:
+                    try:
+                        (wallet_dir / file_name).unlink(missing_ok=True)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Cleanup error for {file_name}: {cleanup_error}")
+
+                # Restore from backup
+                if backup_dir.exists():
+                    try:
+                        for item in backup_dir.iterdir():
+                            if item.is_file():
+                                shutil.copy2(item, wallet_dir / item.name)
+                        logger.info("Rollback completed. Old wallet restored.")
+                    except Exception as rollback_error:
+                        logger.error(f"Rollback failed: {rollback_error}")
+                        return jsonify({
+                            'error': f'Import failed AND rollback failed: {str(e)}. Backup at: {backup_dir}',
+                            'rolled_back': False
+                        }), 500
+
+                return jsonify({
+                    'error': str(e),
+                    'rolled_back': True
+                }), 500
+
+            finally:
+                # Cleanup temp directory
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+
+            # 9. Schedule container restart (happens after response sent)
+            def delayed_restart():
+                import time
+                time.sleep(2)  # Give response time to be sent
+                startup = get_startup()
+                if startup:
+                    logger.info("Triggering restart after wallet import")
+                    startup.triggerRestart()
+                else:
+                    logger.error("Cannot restart - startup instance not available")
+
+            import threading
+            threading.Thread(target=delayed_restart, daemon=True).start()
+
+            return jsonify({
+                'success': True,
+                'message': 'Wallet imported successfully. Container restarting...',
+                'backup_location': str(backup_dir)
+            })
+
+        except Exception as e:
+            logger.error(f"Wallet import error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({'error': str(e)}), 500

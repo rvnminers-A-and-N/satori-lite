@@ -1,5 +1,5 @@
 """
-Unit tests for satori-lite web UI.
+Unit tests for neuron web UI.
 
 Tests the Flask application, routes, and templates.
 """

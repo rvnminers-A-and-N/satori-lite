@@ -1,5 +1,5 @@
 """
-Unit tests for satori-lite client methods.
+Unit tests for neuron client methods.
 
 Tests client functionality in isolation using mocked dependencies.
 """

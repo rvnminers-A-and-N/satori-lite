@@ -1,5 +1,5 @@
 """
-Load tests for satori-lite client and server.
+Load tests for neuron client and server.
 
 Tests concurrent request handling, multiple clients, and behavior under load.
 """

@@ -7,7 +7,7 @@ A simplified, lightweight version of the Satori neuron system with a CLI interfa
 ## Structure
 
 ```
-satori-lite/
+neuron/
 ├── lib-lite/          # Minimal satorilib with only essential features
 ├── neuron-lite/       # Lightweight neuron implementation
 ├── engine-lite/       # AI engine for predictions
@@ -168,7 +168,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000 &
 
 **Run all tests:**
 ```bash
-cd /app/satori-lite
+cd /app/neuron
 pytest tests/ -v
 # 206 tests pass in ~25 seconds
 ```

@@ -1,5 +1,5 @@
 """
-Integration tests for satori-lite client + server.
+Integration tests for neuron client + server.
 
 Tests actual HTTP communication between SatoriServerClient and the FastAPI server.
 """

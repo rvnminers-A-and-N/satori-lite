@@ -213,7 +213,7 @@ def test_checkin_calls_health_endpoint(client_instance, mock_response):
 
 @pytest.mark.unit
 def test_checkin_returns_minimal_data_for_central_lite(client_instance, mock_response):
-    """Test checkin() returns minimal data when connecting to central-lite."""
+    """Test checkin() returns minimal data when connecting to central."""
     mock_response.status_code = 200
 
     with patch('requests.get', return_value=mock_response):

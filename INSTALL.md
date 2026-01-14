@@ -8,7 +8,7 @@
 ## Quick Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SatoriNetwork/satori-lite/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/SatoriNetwork/neuron/main/install.sh | bash
 ```
 
 This will:
@@ -21,7 +21,7 @@ This will:
 ### 1. Pull the Docker image
 
 ```bash
-docker pull satorinet/satori-lite:latest
+docker pull satorinet/neuron:latest
 ```
 
 ### 2. Start the neuron
@@ -29,13 +29,13 @@ docker pull satorinet/satori-lite:latest
 ```bash
 docker run -d --name satori \
     -v satori-data:/Satori/Neuron/data \
-    satorinet/satori-lite:latest
+    satorinet/neuron:latest
 ```
 
 ### 3. Install the CLI command
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/SatoriNetwork/satori-lite/main/satori -o /usr/local/bin/satori
+sudo curl -fsSL https://raw.githubusercontent.com/SatoriNetwork/neuron/main/satori -o /usr/local/bin/satori
 sudo chmod +x /usr/local/bin/satori
 ```
 
@@ -107,10 +107,10 @@ docker volume rm satori-data
 ```bash
 docker stop satori
 docker rm satori
-docker pull satorinet/satori-lite:latest
+docker pull satorinet/neuron:latest
 docker run -d --name satori \
     -v satori-data:/Satori/Neuron/data \
-    satorinet/satori-lite:latest
+    satorinet/neuron:latest
 ```
 
 ## Troubleshooting
@@ -127,7 +127,7 @@ docker start satori
 # Or recreate if missing
 docker run -d --name satori \
     -v satori-data:/Satori/Neuron/data \
-    satorinet/satori-lite:latest
+    satorinet/neuron:latest
 ```
 
 ### Cannot connect to CLI

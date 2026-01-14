@@ -95,22 +95,47 @@ def path(of='data'):
     return get().get(verbose(f'{of}Path'), root(f'./{of}'))
 
 
-# Central server URL - single source of truth
-DEFAULT_CENTRAL_URL = 'http://137.184.38.13:8000'
+# Central server URL configuration
+DEFAULT_CENTRAL_URL_PROD = 'https://network.satorinet.io'
+DEFAULT_CENTRAL_URL_DEV = 'http://localhost:8000'
+
+
+def get_satori_env() -> str:
+    """
+    Get the Satori environment (dev or prod).
+    Checks SATORI_ENV env var first, falls back to 'prod' for safety.
+    """
+    return os.environ.get('SATORI_ENV', 'prod').lower()
 
 
 def get_central_url() -> str:
     """
-    Get the central server URL.
-    Checks SATORI_CENTRAL_URL env var first, falls back to default.
+    Get the central server URL based on environment.
+
+    Priority:
+    1. SATORI_CENTRAL_URL (explicit override)
+    2. SATORI_API_URL (alias for backwards compatibility)
+    3. Environment-specific default (dev vs prod)
     """
-    return os.environ.get('SATORI_CENTRAL_URL', DEFAULT_CENTRAL_URL)
+    # Explicit URL override
+    if os.environ.get('SATORI_CENTRAL_URL'):
+        return os.environ.get('SATORI_CENTRAL_URL')
+
+    # Backwards compatibility with SATORI_API_URL
+    if os.environ.get('SATORI_API_URL'):
+        return os.environ.get('SATORI_API_URL')
+
+    # Environment-based default
+    satori_env = get_satori_env()
+    if satori_env == 'dev':
+        return DEFAULT_CENTRAL_URL_DEV
+    else:
+        return DEFAULT_CENTRAL_URL_PROD
 
 
 def get_api_url() -> str:
     """
     Get the API URL (alias for central URL).
-    Checks SATORI_API_URL first, then SATORI_CENTRAL_URL, falls back to default.
     """
     return os.environ.get('SATORI_API_URL', get_central_url())
 

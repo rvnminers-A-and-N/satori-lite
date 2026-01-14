@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for satori-lite tests.
+Shared pytest fixtures for neuron tests.
 
 Uses REAL wallet implementations - NO mocking.
 """
@@ -10,7 +10,7 @@ import pytest
 import requests
 from pathlib import Path
 
-# Add satori-lite lib-lite to Python path
+# Add neuron lib-lite to Python path
 SATORI_LITE_PATH = Path(__file__).parent.parent / "lib-lite"
 if str(SATORI_LITE_PATH) not in sys.path:
     sys.path.insert(0, str(SATORI_LITE_PATH))

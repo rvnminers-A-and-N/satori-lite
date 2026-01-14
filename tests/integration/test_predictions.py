@@ -136,7 +136,7 @@ def test_client_checkin_connects_to_server(client_instance, server_available):
     # Should return a dict with server response
     assert isinstance(result, dict)
 
-    # Should have minimal central-lite response
+    # Should have minimal central response
     assert "key" in result or "wallet" in result
 
 

@@ -1,5 +1,5 @@
 """
-Integration test fixtures for satori-lite client + server tests.
+Integration test fixtures for neuron client + server tests.
 
 These fixtures provide real server connections and authentication
 for integration testing.
