@@ -88,12 +88,21 @@ def run_in_p2p_context(async_fn, *args, **kwargs):
 
 
 def _initialize_p2p_for_web():
-    """Initialize P2P directly in the gunicorn worker.
+    """Initialize P2P state for web worker.
 
-    Creates identity and P2P peers directly without relying on StartupDag
-    state, which may not be available in the subprocess.
+    NOTE: The web worker no longer creates its own P2P Peers instance.
+    The main neuron process (start.py) manages P2P networking in a
+    persistent Trio context. Creating a second Peers instance in the
+    web worker causes race conditions and "Pubsub _manager" errors.
 
-    Runs trio in a persistent loop to keep P2P alive.
+    Instead, the web worker:
+    1. Loads identity from wallet (for display purposes)
+    2. Signals ready immediately (no P2P initialization)
+    3. Web routes that need P2P data should use the main process's
+       P2P state via StartupDag singleton or internal APIs
+
+    This avoids duplicate P2P networking, reduces resource usage,
+    and eliminates async/trio conflicts between processes.
     """
     global _web_identity, _web_p2p_peers, _p2p_init_error
 
@@ -106,141 +115,51 @@ def _initialize_p2p_for_web():
         logger.info(f"Web worker: Networking mode is '{mode}'")
 
         if mode == 'central':
-            logger.info("Web worker: Central mode, skipping P2P initialization")
+            logger.info("Web worker: Central mode, no P2P needed")
             _p2p_init_complete.set()
             return
 
-        # Create identity directly from wallet file
-        logger.info("Web worker: Creating identity from wallet file...")
-        from satorilib.wallet.evrmore.identity import EvrmoreIdentity
-        wallet_path = config.walletPath('wallet.yaml')
-        _web_identity = EvrmoreIdentity(wallet_path)
-
-        if _web_identity and hasattr(_web_identity, 'address'):
-            logger.info(f"Web worker: Identity loaded - {_web_identity.address[:16]}...")
-        else:
-            logger.warning("Web worker: Identity loaded but no address available")
-            _p2p_init_complete.set()
-            return
-
-        # Initialize P2P peers directly using trio - keep loop running
-        logger.info("Web worker: Starting P2P peers...")
-
-        import trio
-        from satorip2p import Peers
-
-        async def _run_p2p():
-            """Run P2P in a persistent trio loop."""
-            global _web_p2p_peers, _trio_token
-
-            try:
-                # Store the trio token for cross-thread async calls
-                _trio_token = trio.lowlevel.current_trio_token()
-                logger.info("Web worker: Trio token stored for cross-thread calls")
-
-                _web_p2p_peers = Peers(
-                    identity=_web_identity,
-                    listen_port=config.get().get('p2p port', 24600),
-                )
-                await _web_p2p_peers.start()
-                logger.info(f"Web worker: P2P peers started - peer_id={_web_p2p_peers.peer_id}")
-                logger.info(f"Web worker: _web_p2p_peers global set to {_web_p2p_peers}")
-
-                # Initialize UptimeTracker for the web worker's P2P peers
-                # (main process has its own, but gunicorn is a separate process)
-                _web_uptime_tracker = None
-                try:
-                    from satorip2p.protocol.uptime import UptimeTracker
-                    _web_uptime_tracker = UptimeTracker(
-                        peers=_web_p2p_peers,
-                        wallet=_web_identity,
-                    )
-                    await _web_uptime_tracker.start()
-                    _web_p2p_peers.spawn_background_task(_web_uptime_tracker.run_heartbeat_loop)
-                    logger.info("Web worker: Uptime tracker initialized with heartbeat loop")
-
-                    # Wire uptime tracker to P2P bridge for real-time UI updates
-                    try:
-                        from web.p2p_bridge import get_bridge
-                        bridge = get_bridge()
-                        bridge.wire_protocol('uptime_tracker', _web_uptime_tracker)
-                        logger.info("Web worker: Uptime tracker wired to P2P bridge")
-                    except Exception as e:
-                        logger.warning(f"Web worker: Failed to wire uptime tracker to bridge: {e}")
-                except Exception as e:
-                    logger.warning(f"Web worker: Failed to initialize uptime tracker: {e}")
-
-                # Also update StartupDag singleton so other code can access it
-                try:
-                    startup = start.getStart() if hasattr(start, 'getStart') else None
-                    if startup:
-                        startup._p2p_peers = _web_p2p_peers
-                        startup._uptime_tracker = _web_uptime_tracker
-                        if not hasattr(startup, 'identity') or startup.identity is None:
-                            startup.identity = _web_identity
-                        logger.info("Web worker: Updated StartupDag with P2P state")
-
-                        # Initialize Storage Manager for web worker
-                        try:
-                            from satorip2p.protocol.storage import StorageManager, DeferredRewardsStorage, AlertStorage
-                            from pathlib import Path
-                            storage_dir = Path.home() / '.satori' / 'storage'
-                            startup._storage_manager = StorageManager(storage_dir=storage_dir)
-                            startup._deferred_rewards_storage = DeferredRewardsStorage(
-                                storage_dir=storage_dir,
-                                peers=_web_p2p_peers,
-                            )
-                            startup._alert_storage = AlertStorage(
-                                storage_dir=storage_dir,
-                                peers=_web_p2p_peers,
-                            )
-                            logger.info("Web worker: Storage manager initialized")
-                        except Exception as e:
-                            logger.warning(f"Web worker: Failed to initialize storage manager: {e}")
-
-                        # Initialize Bandwidth Tracker for web worker
-                        try:
-                            from satorip2p.protocol.bandwidth import create_qos_manager
-                            startup._bandwidth_tracker, startup._qos_manager = create_qos_manager()
-                            if hasattr(_web_p2p_peers, 'set_bandwidth_tracker'):
-                                _web_p2p_peers.set_bandwidth_tracker(startup._bandwidth_tracker)
-                            logger.info("Web worker: Bandwidth tracker initialized")
-                        except Exception as e:
-                            logger.warning(f"Web worker: Failed to initialize bandwidth tracker: {e}")
-
-                except Exception as e:
-                    logger.warning(f"Web worker: Could not update StartupDag: {e}")
-
-                # Signal that P2P is ready
-                _p2p_init_complete.set()
-                logger.info("Web worker: P2P initialization complete")
-
-                # Run the P2P network (starts protocols like Ping, Identify, etc.)
-                # This blocks indefinitely and keeps the P2P network alive
-                await _web_p2p_peers.run_forever()
-
-            except Exception as e:
-                logger.error(f"Web worker: P2P error: {e}")
-                _p2p_init_complete.set()
-                raise
-
-        # Run trio in this thread - it will block indefinitely
+        # Load identity for display purposes (no P2P initialization)
+        logger.info("Web worker: Loading identity from wallet file...")
         try:
-            trio.run(_run_p2p)
+            from satorilib.wallet.evrmore.identity import EvrmoreIdentity
+            wallet_path = config.walletPath('wallet.yaml')
+            _web_identity = EvrmoreIdentity(wallet_path)
+
+            if _web_identity and hasattr(_web_identity, 'address'):
+                logger.info(f"Web worker: Identity loaded - {_web_identity.address[:16]}...")
+            else:
+                logger.info("Web worker: Identity loaded (no address)")
         except Exception as e:
-            logger.error(f"Web worker: Trio loop exited: {e}")
+            logger.debug(f"Web worker: Could not load identity: {e}")
+
+        # Try to get P2P peers reference from main process's StartupDag
+        # (This works because gunicorn with threads shares memory within worker)
+        try:
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if startup and hasattr(startup, '_p2p_peers') and startup._p2p_peers:
+                _web_p2p_peers = startup._p2p_peers
+                logger.info(f"Web worker: Using main process P2P peers - {_web_p2p_peers.peer_id if hasattr(_web_p2p_peers, 'peer_id') else 'unknown'}")
+            else:
+                logger.info("Web worker: Main process P2P peers not available yet (will be set later)")
+        except Exception as e:
+            logger.debug(f"Web worker: Could not get StartupDag P2P peers: {e}")
+
+        # Signal ready - web worker doesn't run its own P2P
+        _p2p_init_complete.set()
+        logger.info("Web worker: Ready (P2P managed by main process)")
 
     except ImportError as e:
         _p2p_init_error = f"Import error: {e}"
-        logger.warning(f"Web worker: P2P not available - {e}")
+        logger.debug(f"Web worker: P2P modules not available - {e}")
         _p2p_init_complete.set()
     except Exception as e:
         _p2p_init_error = str(e)
-        logger.error(f"Web worker: P2P initialization failed: {e}")
+        logger.debug(f"Web worker: Initialization note: {e}")
         _p2p_init_complete.set()
 
 
-# Initialize P2P in a background thread when gunicorn worker starts
-# This runs once per worker process - the trio loop runs indefinitely
+# Initialize identity in a background thread when gunicorn worker starts
+# NOTE: No longer starts P2P - main process handles that
 _p2p_init_thread = threading.Thread(target=_initialize_p2p_for_web, daemon=True)
 _p2p_init_thread.start()
