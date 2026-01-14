@@ -1376,14 +1376,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         from satorip2p.protocol.governance import GovernanceProtocol
                         self._governance = GovernanceProtocol(
                             peers=self._p2p_peers,
-                            wallet=self.identity,
                         )
                         await self._governance.start()
                         # Wire uptime tracker for uptime-based voting power
                         if hasattr(self, '_uptime_tracker') and self._uptime_tracker is not None:
                             if hasattr(self._governance, 'set_uptime_tracker'):
                                 self._governance.set_uptime_tracker(self._uptime_tracker)
-                        # Wire wallet for stake-based voting power
+                        # Wire wallet for stake-based voting power (via setter, not __init__)
                         if self.identity is not None:
                             if hasattr(self._governance, 'set_wallet'):
                                 self._governance.set_wallet(self.identity)
