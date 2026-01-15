@@ -6,5 +6,5 @@ mining mode: true
 networking mode: hybrid
 reward address: EZDfZiJcvx1Ymrj8otCeiY4eLfPsZkHri9
 logging level: debug
-electrumx servers: [electrum1-mainnet.evrmorecoin.org:50002, evr-electrum.wutup.io:50002]
+electrumx servers: [167.71.11.203:50002, evrx-1.satoriog.com:50002]
 invited by: EMxw897Kowx2i8c5YALE6jVh5JEpswapYj
