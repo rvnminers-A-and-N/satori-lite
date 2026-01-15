@@ -230,10 +230,10 @@ def encrypt_vault_password(password):
 
 
 def get_p2p_state():
-    """Get P2P identity and peers from web worker or StartupDag.
+    """Get P2P identity and peers from StartupDag.
 
-    Tries web worker first (for gunicorn subprocess), then falls back
-    to StartupDag singleton.
+    Since we use waitress (runs in-process), we can directly access
+    the StartupDag singleton which has the P2P state.
 
     Returns:
         tuple: (identity, peers) - either may be None if not available
@@ -241,34 +241,32 @@ def get_p2p_state():
     identity = None
     peers = None
 
-    # First try web worker state (gunicorn subprocess)
-    try:
-        from web.wsgi import get_web_identity, get_web_p2p_peers, wait_for_p2p_init
-        # Wait briefly for P2P init to complete
-        init_ok = wait_for_p2p_init(timeout=2)
-        identity = get_web_identity()
-        peers = get_web_p2p_peers()
-        logger.debug(f"get_p2p_state: web worker init_ok={init_ok}, identity={identity is not None}, peers={peers is not None}")
-    except ImportError as e:
-        # Not running under gunicorn, try StartupDag
-        logger.debug(f"get_p2p_state: web worker import failed: {e}")
+    # Use the module-level _startup_instance set by set_startup()
+    global _startup_instance
+    if _startup_instance:
+        identity = getattr(_startup_instance, 'identity', None)
+        peers = getattr(_startup_instance, '_p2p_peers', None)
+        if identity or peers:
+            logger.debug(f"get_p2p_state: using _startup_instance, identity={identity is not None}, peers={peers is not None}")
+            return identity, peers
 
-    # Fall back to StartupDag if web worker state not available
-    if identity is None or peers is None:
-        try:
-            from satorineuron.init import start
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup:
-                if identity is None and hasattr(startup, 'identity'):
-                    identity = startup.identity
-                if peers is None:
-                    peers = getattr(startup, '_p2p_peers', None)
-                    logger.debug(f"get_p2p_state: StartupDag fallback, peers={peers is not None}")
-        except Exception as e:
-            logger.debug(f"get_p2p_state: StartupDag fallback failed: {e}")
+    # Fallback: try StartupDag singleton via getStart()
+    try:
+        from satorineuron.init import start
+        startup = start.getStart() if hasattr(start, 'getStart') else None
+        if startup:
+            if identity is None:
+                identity = getattr(startup, 'identity', None)
+            if peers is None:
+                peers = getattr(startup, '_p2p_peers', None)
+            logger.debug(f"get_p2p_state: StartupDag singleton, identity={identity is not None}, peers={peers is not None}")
+    except Exception as e:
+        logger.debug(f"get_p2p_state: StartupDag lookup failed: {e}")
 
     logger.info(f"get_p2p_state: returning identity={identity is not None}, peers={peers is not None}")
     return identity, peers
+
+
 
 
 def decrypt_vault_password_from_session():

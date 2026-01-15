@@ -1026,6 +1026,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 from satorip2p.protocol.peer_registry import PeerRegistry
                 from satorip2p import Peers
 
+                # Store trio token for cross-thread async calls (used by web routes)
+                self._trio_token = trio.lowlevel.current_trio_token()
+
                 # Phase 1: Create and start Peers
                 logging.info("Starting P2P network services...", color="cyan")
                 self._p2p_peers = Peers(
@@ -2576,28 +2579,25 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
             logging.warning(f"Failed to start P2P WebSocket bridge: {e}")
 
         def run_flask():
-            import subprocess
-            import sys
+            # Use waitress for production-ready WSGI serving
+            # Unlike gunicorn, waitress runs in-process (same memory space),
+            # allowing web routes to directly access StartupDag and P2P state.
+            # This solves the subprocess isolation problem that prevented
+            # P2P operations from working in the web UI.
+            from waitress import serve
 
-            # Use gunicorn for production-ready WSGI serving
-            # This works with threading mode which is compatible with trio (P2P/libp2p)
-            # gunicorn is required - no fallback to avoid unsafe werkzeug dev server
-            cmd = [
-                sys.executable, '-m', 'gunicorn',
-                '--bind', f'{host}:{port}',
-                '--workers', '1',
-                '--threads', '4',
-                '--worker-class', 'gthread',
-                '--timeout', '120',
-                '--log-level', 'warning',
-                'web.wsgi:app'
-            ]
-            logging.info(f"Starting Web UI with gunicorn at http://{host}:{port}", color="cyan")
-            subprocess.run(cmd, check=True)
+            logging.info(f"Starting Web UI with waitress at http://{host}:{port}", color="cyan")
+            serve(
+                app,
+                host=host,
+                port=port,
+                threads=4,
+                _quiet=True,  # Suppress access logs
+            )
 
         web_thread = threading.Thread(target=run_flask, daemon=True)
         web_thread.start()
-        logging.info(f"Web UI started at http://{host}:{port} (WebSocket enabled)", color="green")
+        logging.info(f"Web UI started at http://{host}:{port}", color="green")
         return web_thread
     except ImportError as e:
         logging.warning(f"Web UI not available: {e}")
