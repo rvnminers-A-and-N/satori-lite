@@ -1062,13 +1062,17 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 # Signal that P2P is ready
                 self._p2p_ready.set()
 
-                # Phase 4: Keep running - this Trio context must stay alive
-                # for all P2P operations to work properly
-                logging.info("P2P services running in persistent context", color="cyan")
+                # Phase 4: Run forever - starts background tasks including:
+                # - KadDHT service (peer routing, content routing)
+                # - Pubsub message processing
+                # - Mesh repair task (fixes py-libp2p GossipSub race conditions)
+                # - Bootstrap connections to seed nodes
+                # - Subscription re-advertisement
+                # This keeps the Trio context alive for all P2P operations
+                logging.info("P2P services running (starting background tasks...)", color="cyan")
 
-                # Run forever - the thread stays alive for P2P operations
-                while True:
-                    await trio.sleep(60)  # Heartbeat to keep context alive
+                # run_forever() never returns - runs until cancelled
+                await self._p2p_peers.run_forever()
 
             except ImportError as e:
                 logging.debug(f"satorip2p not available: {e}")
@@ -1115,7 +1119,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         wallet=self.identity,
                     )
                     await self._uptime_tracker.start()
-                    logging.info("P2P uptime tracker initialized", color="cyan")
+                    # Spawn heartbeat loop as background task (will start when run_forever creates nursery)
+                    self._p2p_peers.spawn_background_task(self._uptime_tracker.run_heartbeat_loop)
+                    logging.info("P2P uptime tracker initialized (heartbeat loop queued)", color="cyan")
                     # Wire to WebSocket bridge for real-time UI updates
                     try:
                         from web.p2p_bridge import get_bridge
@@ -2548,6 +2554,625 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         return constants.stakeRequired
 
 
+def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
+    """Start the internal P2P IPC API server.
+
+    This runs a lightweight HTTP API on 127.0.0.1 that the gunicorn web worker
+    can call to perform P2P operations. This solves the subprocess isolation
+    problem - gunicorn can't access main process memory, but it can make HTTP
+    requests to this internal API.
+
+    The API runs in-process so it has direct access to StartupDag and P2P state.
+    """
+    try:
+        from flask import Flask, jsonify, request
+        import trio
+
+        ipc_app = Flask(__name__)
+
+        @ipc_app.route('/p2p/status')
+        def p2p_status():
+            """Get P2P status including peer ID, connected peers, etc."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            identity = getattr(startupDag, 'identity', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'available': False}), 503
+
+            try:
+                # connected_peers is an int property in satorip2p
+                connected_count = peers.connected_peers if hasattr(peers, 'connected_peers') else 0
+
+                # Get actual peer IDs using satorip2p method
+                connected_peer_ids = []
+                if hasattr(peers, 'get_connected_peers'):
+                    connected_peer_ids = peers.get_connected_peers()
+
+                mesh_count = 0
+                if hasattr(peers, 'get_pubsub_debug'):
+                    try:
+                        debug = peers.get_pubsub_debug()
+                        # Calculate mesh peer count from mesh dict
+                        # mesh is {topic: [peer_ids...], ...}
+                        # Count unique peers across all topics in the mesh
+                        mesh = debug.get('mesh', {})
+                        unique_mesh_peers = set()
+                        for topic_peers in mesh.values():
+                            unique_mesh_peers.update(topic_peers)
+                        mesh_count = len(unique_mesh_peers)
+                    except:
+                        pass
+
+                return jsonify({
+                    'available': True,
+                    'peer_id': str(peers.peer_id) if hasattr(peers, 'peer_id') else None,
+                    'identity_address': identity.address if identity and hasattr(identity, 'address') else None,
+                    'connected_peers': connected_peer_ids,
+                    'connected_count': connected_count,
+                    'mesh_peer_count': mesh_count,
+                    'listen_port': getattr(peers, 'listen_port', None),
+                })
+            except Exception as e:
+                return jsonify({'error': str(e), 'available': False}), 500
+
+        @ipc_app.route('/p2p/peers')
+        def p2p_peers():
+            """List all connected peers with details."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                peer_list = []
+                # Use satorip2p's get_connected_peers method
+                if hasattr(peers, 'get_connected_peers'):
+                    connected = peers.get_connected_peers()
+                    for peer_id in connected:
+                        peer_list.append({
+                            'peer_id': str(peer_id),
+                            'info': None
+                        })
+                return jsonify({'peers': peer_list, 'count': len(peer_list)})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/ping/<peer_id>', methods=['POST'])
+        def p2p_ping(peer_id):
+            """Ping a peer to test connectivity."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            count = request.json.get('count', 3) if request.json else 3
+
+            try:
+                async def do_ping():
+                    return await peers.ping_peer(peer_id, count=count)
+
+                if trio_token:
+                    latencies = trio.from_thread.run(do_ping, trio_token=trio_token)
+                else:
+                    latencies = trio.run(do_ping)
+
+                if latencies:
+                    return jsonify({
+                        'success': True,
+                        'peer_id': peer_id,
+                        'latencies_ms': [l * 1000 for l in latencies],
+                        'avg_ms': sum(latencies) / len(latencies) * 1000,
+                        'count': len(latencies),
+                    })
+                else:
+                    return jsonify({'success': False, 'peer_id': peer_id, 'error': 'No response'})
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/connect', methods=['POST'])
+        def p2p_connect():
+            """Connect to a peer by multiaddr."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            multiaddr = request.json.get('multiaddr') if request.json else None
+            if not multiaddr:
+                return jsonify({'error': 'multiaddr required', 'success': False}), 400
+
+            try:
+                async def do_connect():
+                    return await peers.connect_peer(multiaddr)
+
+                if trio_token:
+                    result = trio.from_thread.run(do_connect, trio_token=trio_token)
+                else:
+                    result = trio.run(do_connect)
+
+                return jsonify({'success': bool(result), 'multiaddr': multiaddr})
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/disconnect/<peer_id>', methods=['POST'])
+        def p2p_disconnect(peer_id):
+            """Disconnect from a peer."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            try:
+                async def do_disconnect():
+                    return await peers.disconnect_peer(peer_id)
+
+                if trio_token:
+                    result = trio.from_thread.run(do_disconnect, trio_token=trio_token)
+                else:
+                    result = trio.run(do_disconnect)
+
+                return jsonify({'success': bool(result), 'peer_id': peer_id})
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/identity')
+        def p2p_identity():
+            """Get identity information."""
+            identity = getattr(startupDag, 'identity', None)
+            peers = getattr(startupDag, '_p2p_peers', None)
+
+            return jsonify({
+                'address': identity.address if identity and hasattr(identity, 'address') else None,
+                'peer_id': str(peers.peer_id) if peers and hasattr(peers, 'peer_id') else None,
+            })
+
+        @ipc_app.route('/p2p/multiaddrs')
+        def p2p_multiaddrs():
+            """Get listen multiaddresses."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                addrs = []
+                # satorip2p uses _host (private)
+                host = getattr(peers, '_host', None) or getattr(peers, 'host', None)
+                if host:
+                    addrs = [str(a) for a in host.get_addrs()]
+                return jsonify({'multiaddrs': addrs})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/identify/known')
+        def p2p_identify_known():
+            """Get known peer identities from the Identify protocol."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                identities = {}
+                if hasattr(peers, 'get_known_peer_identities'):
+                    raw_identities = peers.get_known_peer_identities()
+                    # Convert PeerIdentity objects to dicts
+                    # Use field names that match what routes.py expects
+                    for peer_id, identity in raw_identities.items():
+                        # Handle both possible attribute names for addresses
+                        listen_addrs = getattr(identity, 'listen_addresses', None) or getattr(identity, 'listen_addrs', [])
+                        evrmore_addr = getattr(identity, 'evrmore_address', None) or getattr(identity, 'wallet_address', None) or ''
+
+                        identities[str(peer_id)] = {
+                            'peer_id': str(peer_id),
+                            'protocol_version': getattr(identity, 'protocol_version', None),
+                            'agent_version': getattr(identity, 'agent_version', None),
+                            'listen_addresses': [str(a) for a in listen_addrs],
+                            'protocols': list(getattr(identity, 'protocols', [])),
+                            'observed_addr': str(getattr(identity, 'observed_addr', '')) if getattr(identity, 'observed_addr', None) else None,
+                            'roles': list(getattr(identity, 'roles', [])),
+                            'evrmore_address': evrmore_addr,
+                            'capabilities': list(getattr(identity, 'capabilities', [])),
+                            'timestamp': getattr(identity, 'timestamp', 0),
+                        }
+                return jsonify({'identities': identities, 'count': len(identities)})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/identify/announce', methods=['POST'])
+        def p2p_identify_announce():
+            """Announce our identity to the network."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            try:
+                async def do_announce():
+                    if hasattr(peers, 'announce_identity'):
+                        await peers.announce_identity()
+                        return True
+                    return False
+
+                if trio_token:
+                    result = trio.from_thread.run(do_announce, trio_token=trio_token)
+                else:
+                    result = trio.run(do_announce)
+
+                return jsonify({'success': result})
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/full-status')
+        def p2p_full_status():
+            """Get comprehensive P2P status including all properties."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            identity = getattr(startupDag, 'identity', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'available': False}), 503
+
+            try:
+                result = {
+                    'available': True,
+                    'peer_id': str(peers.peer_id) if hasattr(peers, 'peer_id') else None,
+                    'public_key': peers.public_key if hasattr(peers, 'public_key') else None,
+                    'evrmore_address': peers.evrmore_address if hasattr(peers, 'evrmore_address') else None,
+                    'nat_type': peers.nat_type if hasattr(peers, 'nat_type') else 'unknown',
+                    'is_relay': peers.is_relay if hasattr(peers, 'is_relay') else False,
+                    'is_connected': peers.is_connected if hasattr(peers, 'is_connected') else False,
+                    'connected_count': peers.connected_peers if hasattr(peers, 'connected_peers') else 0,
+                    # Protocol flags
+                    'enable_pubsub': getattr(peers, 'enable_pubsub', True),
+                    'enable_dht': getattr(peers, 'enable_dht', True),
+                    'enable_ping': getattr(peers, 'enable_ping', True),
+                    'enable_identify': getattr(peers, 'enable_identify', True),
+                    'enable_relay': getattr(peers, 'enable_relay', True),
+                    'enable_mdns': getattr(peers, 'enable_mdns', True),
+                    'enable_rendezvous': getattr(peers, 'enable_rendezvous', False),
+                    'enable_upnp': getattr(peers, 'enable_upnp', True),
+                }
+                # Add public addresses
+                if hasattr(peers, 'public_addresses'):
+                    result['public_addresses'] = [str(a) for a in peers.public_addresses]
+                return jsonify(result)
+            except Exception as e:
+                return jsonify({'error': str(e), 'available': False}), 500
+
+        @ipc_app.route('/p2p/latencies')
+        def p2p_latencies():
+            """Get peer latencies."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                latencies = {}
+                avg_latency = None
+                if hasattr(peers, 'get_all_peer_latencies'):
+                    latencies = peers.get_all_peer_latencies()
+                    # Convert peer IDs to strings
+                    latencies = {str(k): v for k, v in latencies.items()}
+                if hasattr(peers, 'get_network_avg_latency'):
+                    avg_latency = peers.get_network_avg_latency()
+                return jsonify({'latencies': latencies, 'avg_latency': avg_latency})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/pubsub/debug')
+        def p2p_pubsub_debug():
+            """Get pubsub debug info."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                if hasattr(peers, 'get_pubsub_debug'):
+                    return jsonify(peers.get_pubsub_debug())
+                return jsonify({})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/rendezvous')
+        def p2p_rendezvous():
+            """Get rendezvous/bootstrap status."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                if hasattr(peers, 'get_rendezvous_status'):
+                    return jsonify(peers.get_rendezvous_status())
+                return jsonify({})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/peers/by-role/<role>')
+        def p2p_peers_by_role(role):
+            """Get peers filtered by role."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                peer_list = []
+                if hasattr(peers, 'get_peers_by_role'):
+                    peer_list = [str(p) for p in peers.get_peers_by_role(role)]
+                return jsonify({'peers': peer_list, 'role': role})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/forget/<peer_id>', methods=['POST'])
+        def p2p_forget(peer_id):
+            """Forget a peer."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            try:
+                if hasattr(peers, 'forget_peer'):
+                    result = peers.forget_peer(peer_id)
+                    return jsonify({'success': bool(result), 'peer_id': peer_id})
+                return jsonify({'success': False, 'error': 'forget_peer not available'})
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/discover', methods=['POST'])
+        def p2p_discover():
+            """Discover peers on the network.
+
+            This triggers active peer discovery via DHT/rendezvous.
+            Optionally filter by stream_id to find publishers for a specific stream.
+            """
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            stream_id = request.json.get('stream_id') if request.json else None
+
+            try:
+                async def do_discover():
+                    if hasattr(peers, 'discover_peers'):
+                        return await peers.discover_peers(stream_id=stream_id)
+                    return []
+
+                if trio_token:
+                    discovered = trio.from_thread.run(do_discover, trio_token=trio_token)
+                else:
+                    discovered = trio.run(do_discover)
+
+                return jsonify({
+                    'success': True,
+                    'discovered_peers': [str(p) for p in discovered],
+                    'count': len(discovered),
+                    'stream_id': stream_id,
+                })
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/network-map')
+        def p2p_network_map():
+            """Get the network topology map.
+
+            Returns information about the network structure including
+            connected peers, their relationships, and mesh topology.
+            """
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                if hasattr(peers, 'get_network_map'):
+                    network_map = peers.get_network_map()
+                    return jsonify(network_map)
+                return jsonify({})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/subscriptions')
+        def p2p_subscriptions():
+            """Get our pubsub subscriptions."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                subscriptions = []
+                publications = []
+                if hasattr(peers, 'get_my_subscriptions'):
+                    subscriptions = peers.get_my_subscriptions()
+                if hasattr(peers, 'get_my_publications'):
+                    publications = peers.get_my_publications()
+                return jsonify({
+                    'subscriptions': subscriptions,
+                    'publications': publications,
+                })
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/subscription-map')
+        def p2p_subscription_map():
+            """Get the subscription map showing who subscribes to what."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                if hasattr(peers, 'get_subscription_map'):
+                    return jsonify(peers.get_subscription_map())
+                return jsonify({})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/publishers/<stream_id>')
+        def p2p_publishers(stream_id):
+            """Get publishers for a specific stream."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                publishers = []
+                if hasattr(peers, 'get_publishers'):
+                    publishers = [str(p) for p in peers.get_publishers(stream_id)]
+                return jsonify({'publishers': publishers, 'stream_id': stream_id})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/subscribers/<stream_id>')
+        def p2p_subscribers(stream_id):
+            """Get subscribers for a specific stream."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                subscribers = []
+                if hasattr(peers, 'get_subscribers'):
+                    subscribers = [str(p) for p in peers.get_subscribers(stream_id)]
+                return jsonify({'subscribers': subscribers, 'stream_id': stream_id})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/peer-subscriptions/<peer_id>')
+        def p2p_peer_subscriptions(peer_id):
+            """Get what streams a specific peer subscribes to."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                subscriptions = []
+                if hasattr(peers, 'get_peer_subscriptions'):
+                    subscriptions = peers.get_peer_subscriptions(peer_id)
+                return jsonify({'peer_id': peer_id, 'subscriptions': subscriptions})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/discover-publishers/<stream_id>', methods=['POST'])
+        def p2p_discover_publishers(stream_id):
+            """Discover publishers for a specific stream via DHT."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not peers:
+                return jsonify({'error': 'P2P not initialized', 'success': False}), 503
+
+            try:
+                async def do_discover():
+                    if hasattr(peers, 'discover_publishers'):
+                        return await peers.discover_publishers(stream_id)
+                    return []
+
+                if trio_token:
+                    publishers = trio.from_thread.run(do_discover, trio_token=trio_token)
+                else:
+                    publishers = trio.run(do_discover)
+
+                return jsonify({
+                    'success': True,
+                    'publishers': [str(p) for p in publishers],
+                    'count': len(publishers),
+                    'stream_id': stream_id,
+                })
+            except Exception as e:
+                return jsonify({'error': str(e), 'success': False}), 500
+
+        @ipc_app.route('/p2p/connection-changes')
+        def p2p_connection_changes():
+            """Check for recent connection changes."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+            if not peers:
+                return jsonify({'error': 'P2P not initialized'}), 503
+
+            try:
+                changes = []
+                if hasattr(peers, 'check_connection_changes'):
+                    raw_changes = peers.check_connection_changes()
+                    for peer_id, connected in raw_changes:
+                        changes.append({
+                            'peer_id': str(peer_id),
+                            'connected': connected,
+                        })
+                return jsonify({'changes': changes})
+            except Exception as e:
+                return jsonify({'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/uptime')
+        def p2p_uptime():
+            """Get uptime tracker information."""
+            uptime_tracker = getattr(startupDag, '_uptime_tracker', None)
+            identity = getattr(startupDag, 'identity', None)
+
+            result = {
+                'success': True,
+                'streak_days': 0,
+                'heartbeats_sent': 0,
+                'heartbeats_received': 0,
+                'current_round': '--',
+                'is_relay_qualified': False,
+                'uptime_percentage': 0.0,
+            }
+
+            if not uptime_tracker:
+                return jsonify(result)
+
+            try:
+                evrmore_address = identity.address if identity and hasattr(identity, 'address') else ''
+
+                # Streak days
+                if hasattr(uptime_tracker, 'get_uptime_streak_days'):
+                    result['streak_days'] = uptime_tracker.get_uptime_streak_days(evrmore_address)
+
+                # Heartbeat counts
+                if hasattr(uptime_tracker, '_heartbeats_sent'):
+                    result['heartbeats_sent'] = uptime_tracker._heartbeats_sent
+                if hasattr(uptime_tracker, '_heartbeats_received'):
+                    result['heartbeats_received'] = uptime_tracker._heartbeats_received
+
+                # Current round
+                if hasattr(uptime_tracker, '_current_round') and uptime_tracker._current_round:
+                    result['current_round'] = uptime_tracker._current_round
+
+                # Uptime percentage
+                if hasattr(uptime_tracker, 'get_uptime_percentage'):
+                    try:
+                        # Try with address first (newer API), fallback to no args (older API)
+                        result['uptime_percentage'] = uptime_tracker.get_uptime_percentage(evrmore_address)
+                    except TypeError:
+                        result['uptime_percentage'] = uptime_tracker.get_uptime_percentage()
+
+                # Relay qualification (95% uptime threshold)
+                if hasattr(uptime_tracker, 'is_relay_qualified'):
+                    result['is_relay_qualified'] = uptime_tracker.is_relay_qualified(evrmore_address)
+
+                # Active node count
+                if hasattr(uptime_tracker, 'get_active_node_count'):
+                    result['active_node_count'] = uptime_tracker.get_active_node_count()
+
+                return jsonify(result)
+            except Exception as e:
+                result['error'] = str(e)
+                return jsonify(result)
+
+        def run_ipc_server():
+            from waitress import serve
+            logging.info(f"Starting P2P IPC API on 127.0.0.1:{port}", color="cyan")
+            serve(ipc_app, host='127.0.0.1', port=port, threads=2, _quiet=True)
+
+        ipc_thread = threading.Thread(target=run_ipc_server, daemon=True)
+        ipc_thread.start()
+        logging.info(f"P2P IPC API started on 127.0.0.1:{port}", color="green")
+        return ipc_thread
+
+    except Exception as e:
+        logging.warning(f"Failed to start P2P IPC API: {e}")
+        return None
+
+
 def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601):
     """Start the Flask web UI in a background thread with WebSocket support."""
     try:
@@ -2560,6 +3185,9 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
         # Connect vault and startup to web routes
         set_vault(startupDag.walletManager)
         set_startup(startupDag)  # Set startup immediately - initialization is complete
+
+        # Start P2P IPC API for web worker to access P2P state
+        startP2PInternalAPI(startupDag, port=24602)
 
         # Start P2P WebSocket bridge for real-time UI updates
         try:
@@ -2579,25 +3207,28 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
             logging.warning(f"Failed to start P2P WebSocket bridge: {e}")
 
         def run_flask():
-            # Use waitress for production-ready WSGI serving
-            # Unlike gunicorn, waitress runs in-process (same memory space),
-            # allowing web routes to directly access StartupDag and P2P state.
-            # This solves the subprocess isolation problem that prevented
-            # P2P operations from working in the web UI.
-            from waitress import serve
+            import subprocess
+            import sys
 
-            logging.info(f"Starting Web UI with waitress at http://{host}:{port}", color="cyan")
-            serve(
-                app,
-                host=host,
-                port=port,
-                threads=4,
-                _quiet=True,  # Suppress access logs
-            )
+            # Use gunicorn for production-ready WSGI serving with WebSocket support
+            # The gunicorn subprocess can't access P2P state directly, but it can
+            # call the P2P IPC API on 127.0.0.1:24602 for P2P operations.
+            cmd = [
+                sys.executable, '-m', 'gunicorn',
+                '--bind', f'{host}:{port}',
+                '--workers', '1',
+                '--threads', '4',
+                '--worker-class', 'gthread',
+                '--timeout', '120',
+                '--log-level', 'warning',
+                'web.wsgi:app'
+            ]
+            logging.info(f"Starting Web UI with gunicorn at http://{host}:{port}", color="cyan")
+            subprocess.run(cmd, check=True)
 
         web_thread = threading.Thread(target=run_flask, daemon=True)
         web_thread.start()
-        logging.info(f"Web UI started at http://{host}:{port}", color="green")
+        logging.info(f"Web UI started at http://{host}:{port} (WebSocket enabled)", color="green")
         return web_thread
     except ImportError as e:
         logging.warning(f"Web UI not available: {e}")

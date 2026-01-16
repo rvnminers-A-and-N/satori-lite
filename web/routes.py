@@ -230,41 +230,31 @@ def encrypt_vault_password(password):
 
 
 def get_p2p_state():
-    """Get P2P identity and peers from StartupDag.
+    """Get P2P identity and peers via IPC API.
 
-    Since we use waitress (runs in-process), we can directly access
-    the StartupDag singleton which has the P2P state.
+    The gunicorn web worker runs as a subprocess and cannot access the main
+    process's memory. Instead, we use the IPC API (127.0.0.1:24602) to get
+    P2P state and perform P2P operations.
 
     Returns:
-        tuple: (identity, peers) - either may be None if not available
+        tuple: (identity, peers) - peers is a P2PProxy object that calls IPC API
     """
-    identity = None
-    peers = None
-
-    # Use the module-level _startup_instance set by set_startup()
-    global _startup_instance
-    if _startup_instance:
-        identity = getattr(_startup_instance, 'identity', None)
-        peers = getattr(_startup_instance, '_p2p_peers', None)
-        if identity or peers:
-            logger.debug(f"get_p2p_state: using _startup_instance, identity={identity is not None}, peers={peers is not None}")
-            return identity, peers
-
-    # Fallback: try StartupDag singleton via getStart()
     try:
-        from satorineuron.init import start
-        startup = start.getStart() if hasattr(start, 'getStart') else None
-        if startup:
-            if identity is None:
-                identity = getattr(startup, 'identity', None)
-            if peers is None:
-                peers = getattr(startup, '_p2p_peers', None)
-            logger.debug(f"get_p2p_state: StartupDag singleton, identity={identity is not None}, peers={peers is not None}")
-    except Exception as e:
-        logger.debug(f"get_p2p_state: StartupDag lookup failed: {e}")
+        from web.wsgi import get_web_identity, get_web_p2p_peers, wait_for_p2p_init
 
-    logger.info(f"get_p2p_state: returning identity={identity is not None}, peers={peers is not None}")
-    return identity, peers
+        # Wait briefly for P2P IPC API to be available
+        if not wait_for_p2p_init(timeout=2):
+            logger.debug("get_p2p_state: IPC API not available")
+            return None, None
+
+        identity = get_web_identity()
+        peers = get_web_p2p_peers()
+
+        logger.debug(f"get_p2p_state: identity={identity is not None}, peers={peers is not None}")
+        return identity, peers
+    except Exception as e:
+        logger.debug(f"get_p2p_state: failed: {e}")
+        return None, None
 
 
 
@@ -3095,48 +3085,20 @@ def register_routes(app):
     @app.route('/api/p2p/uptime/details')
     @login_required
     def api_p2p_uptime_details():
-        """Get detailed uptime information for the current user."""
+        """Get detailed uptime information for the current user.
+
+        Uses IPC API to get uptime data from main process since gunicorn
+        worker can't access main process memory directly.
+        """
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_uptime
 
-            result = {
-                'success': True,
-                'streak_days': 0,
-                'heartbeats_sent': 0,
-                'heartbeats_received': 0,
-                'current_round': '--',
-                'is_relay_qualified': False,
-                'uptime_percentage': 0.0,
-            }
+            # Get uptime data via IPC API
+            result = get_web_uptime()
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup:
-                return jsonify(result)
-
-            evrmore_address = ""
-            if hasattr(startup, '_identity_bridge') and startup._identity_bridge:
-                evrmore_address = startup._identity_bridge.evrmore_address or ""
-
-            if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                uptime_tracker = startup._uptime_tracker
-
-                # Streak days
-                if hasattr(uptime_tracker, 'get_uptime_streak_days'):
-                    result['streak_days'] = uptime_tracker.get_uptime_streak_days(evrmore_address)
-
-                # Heartbeat counts
-                if hasattr(uptime_tracker, '_heartbeats_sent'):
-                    result['heartbeats_sent'] = uptime_tracker._heartbeats_sent
-                if hasattr(uptime_tracker, '_heartbeats_received'):
-                    result['heartbeats_received'] = uptime_tracker._heartbeats_received
-
-                # Current round
-                if hasattr(uptime_tracker, '_current_round') and uptime_tracker._current_round:
-                    result['current_round'] = uptime_tracker._current_round
-
-                # Relay qualification (95% uptime threshold)
-                if hasattr(uptime_tracker, 'is_relay_qualified'):
-                    result['is_relay_qualified'] = uptime_tracker.is_relay_qualified(evrmore_address)
+            # Ensure success flag is set
+            if 'success' not in result:
+                result['success'] = True
 
             return jsonify(result)
         except Exception as e:
@@ -4477,20 +4439,9 @@ def register_routes(app):
 
             count = request.json.get('count', 3) if request.json else 3
 
-            # Run ping in the P2P trio context (not a new context)
-            try:
-                from web.wsgi import run_in_p2p_context
-
-                async def do_ping():
-                    return await peers.ping_peer(peer_id, count=count)
-
-                latencies = run_in_p2p_context(do_ping)
-            except RuntimeError as e:
-                # Fallback to new trio context if token not available
-                import trio
-                async def do_ping():
-                    return await peers.ping_peer(peer_id, count=count)
-                latencies = trio.run(do_ping)
+            # P2PProxy.ping_peer is synchronous (handles IPC internally)
+            # It returns latencies in seconds, or None on failure
+            latencies = peers.ping_peer(peer_id, count=count)
 
             if latencies:
                 return jsonify({
@@ -4552,20 +4503,8 @@ def register_routes(app):
             if not multiaddr:
                 return jsonify({'error': 'multiaddr is required', 'success': False}), 400
 
-            # Run connect in the P2P trio context
-            try:
-                from web.wsgi import run_in_p2p_context
-
-                async def do_connect():
-                    return await peers.connect_peer(multiaddr)
-
-                success = run_in_p2p_context(do_connect)
-            except RuntimeError:
-                # Fallback to new trio context if token not available
-                import trio
-                async def do_connect():
-                    return await peers.connect_peer(multiaddr)
-                success = trio.run(do_connect)
+            # P2PProxy.connect is synchronous (handles IPC internally)
+            success = peers.connect(multiaddr)
 
             if success:
                 return jsonify({
@@ -4599,20 +4538,8 @@ def register_routes(app):
             if not peer_id:
                 return jsonify({'error': 'peer_id is required', 'success': False}), 400
 
-            # Run disconnect in the P2P trio context
-            try:
-                from web.wsgi import run_in_p2p_context
-
-                async def do_disconnect():
-                    return await peers.disconnect_peer(peer_id)
-
-                success = run_in_p2p_context(do_disconnect)
-            except RuntimeError:
-                # Fallback to new trio context if token not available
-                import trio
-                async def do_disconnect():
-                    return await peers.disconnect_peer(peer_id)
-                success = trio.run(do_disconnect)
+            # P2PProxy.disconnect is synchronous (handles IPC internally)
+            success = peers.disconnect(peer_id)
 
             if success:
                 return jsonify({
@@ -4829,21 +4756,20 @@ def register_routes(app):
             if not peers:
                 return jsonify({'error': 'P2P not initialized', 'success': False}), 503
 
-            async def do_announce():
-                await peers.announce_identity()
-
-            # Run in the P2P trio context (not a new context)
-            try:
-                from web.wsgi import run_in_p2p_context
-                run_in_p2p_context(do_announce)
-            except RuntimeError as e:
-                # Fallback to new trio context if token not available
+            # P2PProxy.announce_identity_sync is synchronous (handles IPC internally)
+            if hasattr(peers, 'announce_identity_sync'):
+                success = peers.announce_identity_sync()
+            else:
+                # Fallback for direct Peers object (async)
                 import trio
+                async def do_announce():
+                    await peers.announce_identity()
                 trio.run(do_announce)
+                success = True
 
             return jsonify({
-                'success': True,
-                'message': 'Identity announced to network',
+                'success': success,
+                'message': 'Identity announced to network' if success else 'Announce failed',
             })
 
         except Exception as e:

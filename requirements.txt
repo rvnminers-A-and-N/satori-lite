@@ -71,7 +71,9 @@ flask-cors==5.0.0
 flask-socketio==5.4.1
 # simple-websocket provides WebSocket support for Flask-SocketIO threading mode
 simple-websocket>=1.0.0
-# waitress for production-ready WSGI serving (runs in-process, allows P2P access)
+# gunicorn for production-ready WSGI serving with WebSocket support
+gunicorn>=21.0.0
+# waitress for internal IPC API server (lightweight, in-process)
 waitress>=3.0.0
 qrcode[pil]==8.0
 
