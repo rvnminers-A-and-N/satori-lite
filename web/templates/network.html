@@ -1438,7 +1438,7 @@
                     <div class="row mb-2">
                         <div class="col-6 text-center">
                             <p id="archiveIntegrityLabel" class="text-muted small mb-1">Network Integrity</p>
-                            <h6 id="archiveIntegrity" class="mb-0 text-success">--</h6>
+                            <h6 id="archiveIntegrity" class="mb-0 text-muted">--</h6>
                         </div>
                         <div class="col-6 text-center">
                             <p class="text-muted small mb-1">Redundancy</p>
@@ -5325,22 +5325,52 @@
             .catch(error => console.error('Error fetching P2P status:', error));
     }
 
+    // Track last seen event timestamp for polling
+    let lastEventTimestamp = 0;
+
     function pollHeartbeats() {
-        fetch('/api/p2p/heartbeats?limit=10', { method: 'GET' })
+        // Poll recent events from the bridge (IPC-based, works with gunicorn)
+        const since = lastEventTimestamp || (Date.now() / 1000 - 60);  // Last 60s on first poll
+        fetch(`/api/network/recent-events?limit=50&since=${since}`, { method: 'GET' })
             .then(response => response.json())
             .then(data => {
-                if (!data.heartbeats || data.heartbeats.length === 0) return;
+                if (!data.success || !data.events || data.events.length === 0) return;
 
-                data.heartbeats.forEach(hb => {
-                    const key = hb.node_id + '_' + hb.timestamp;
-                    if (!lastSeenHeartbeats[key]) {
-                        lastSeenHeartbeats[key] = true;
-                        counters.heartbeats++;
-                        document.getElementById('heartbeatsCount').textContent = counters.heartbeats;
-                        triggerNodePulse(hb.node_id, 'heartbeat');
-                        createStreamParticle('heartbeat');
+                data.events.forEach(evt => {
+                    const eventType = evt.event;
+                    const eventData = evt.data;
+                    const key = eventType + '_' + evt.timestamp;
+
+                    // Update last seen timestamp
+                    if (evt.timestamp > lastEventTimestamp) {
+                        lastEventTimestamp = evt.timestamp;
+                    }
+
+                    // Skip if already seen
+                    if (lastSeenHeartbeats[key]) return;
+                    lastSeenHeartbeats[key] = true;
+
+                    // Handle different event types
+                    if (eventType === 'network.heartbeat') {
+                        handleHeartbeat(eventData);
+                    } else if (eventType === 'network.prediction') {
+                        handlePrediction(eventData);
+                    } else if (eventType === 'network.observation') {
+                        handleObservation(eventData);
+                    } else if (eventType === 'network.consensus.vote') {
+                        handleConsensusVote(eventData);
+                    } else if (eventType === 'network.governance' ||
+                               eventType === 'network.governance.vote' ||
+                               eventType === 'network.governance.proposal') {
+                        handleGovernance(eventData);
                     }
                 });
+
+                // Cleanup old entries
+                const keys = Object.keys(lastSeenHeartbeats);
+                if (keys.length > 500) {
+                    keys.slice(0, 250).forEach(k => delete lastSeenHeartbeats[k]);
+                }
             })
             .catch(() => {});
     }
@@ -7251,7 +7281,8 @@
                     // Rendezvous server
                     const rendezvousPeer = data.rendezvous_peer || '--';
                     const rendezvousLatency = data.rendezvous_latency_ms;
-                    document.getElementById('infraRendezvous').textContent = rendezvousPeer.substring(0, 20) + '...';
+                    // Show full peer ID (element has word-break: break-all for wrapping)
+                    document.getElementById('infraRendezvous').textContent = rendezvousPeer;
                     document.getElementById('infraRendezvous').title = rendezvousPeer;
 
                     const latencyBadge = document.getElementById('infraRendezvousLatency');

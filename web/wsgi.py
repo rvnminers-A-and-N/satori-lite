@@ -123,6 +123,155 @@ def get_web_uptime():
     }
 
 
+def get_web_heartbeats(limit=20):
+    """Get recent heartbeats via IPC API.
+
+    Returns list of heartbeat dicts.
+    """
+    result = _ipc_get(f'/p2p/heartbeats?limit={limit}')
+    return result.get('heartbeats', []) if result else []
+
+
+def get_web_consensus_status():
+    """Get consensus manager status via IPC API.
+
+    Returns dict with consensus status.
+    """
+    result = _ipc_get('/p2p/consensus/status')
+    return result if result else {
+        'success': False,
+        'current_round': None,
+        'phase': 'inactive',
+        'vote_count': 0,
+        'my_vote_submitted': False,
+    }
+
+
+def get_web_consensus_history(limit=10):
+    """Get consensus round history via IPC API.
+
+    Returns list of completed rounds.
+    """
+    result = _ipc_get(f'/p2p/consensus/history?limit={limit}')
+    return result.get('rounds', []) if result else []
+
+
+def get_web_activity_stats():
+    """Get live activity stats via IPC API.
+
+    Returns dict with counts and hourly activity.
+    """
+    result = _ipc_get('/p2p/activity-stats')
+    return result if result else {
+        'success': False,
+        'counts': {
+            'predictions': 0,
+            'observations': 0,
+            'heartbeats': 0,
+            'consensus_votes': 0,
+            'governance': 0,
+        },
+        'hourly': {},
+    }
+
+
+def get_web_recent_events(limit=50, since=None):
+    """Get recent events via IPC API.
+
+    Returns list of recent events for polling.
+    """
+    url = f'/p2p/recent-events?limit={limit}'
+    if since:
+        url += f'&since={since}'
+    result = _ipc_get(url)
+    return result.get('events', []) if result else []
+
+
+def get_web_version():
+    """Get protocol version info via IPC API.
+
+    Returns dict with version info and enabled features.
+    """
+    result = _ipc_get('/p2p/version')
+    return result if result else {
+        'success': False,
+        'current_version': '1.0.0',
+        'features': [],
+    }
+
+
+def get_web_bandwidth():
+    """Get bandwidth usage statistics via IPC API.
+
+    Returns dict with bandwidth stats and QoS info.
+    """
+    result = _ipc_get('/p2p/bandwidth')
+    return result if result else {
+        'success': False,
+        'status': 'unavailable',
+        'global': {
+            'bytes_sent': 0,
+            'bytes_received': 0,
+            'messages_sent': 0,
+            'messages_received': 0,
+            'bytes_per_second': 0.0,
+            'messages_per_second': 0.0,
+        },
+        'topics': {},
+        'qos': {
+            'enabled': False,
+            'drops_low_priority': 0,
+            'drops_rate_limited': 0,
+            'policy': 'none',
+        },
+        'peers': {},
+    }
+
+
+def get_web_bandwidth_history():
+    """Get bandwidth usage history via IPC API.
+
+    Returns dict with history data for charting.
+    """
+    result = _ipc_get('/p2p/bandwidth/history')
+    return result if result else {
+        'success': False,
+        'history': [],
+        'interval_seconds': 60,
+        'points': 60,
+    }
+
+
+def get_web_storage():
+    """Get storage redundancy status via IPC API.
+
+    Returns dict with storage backend info and disk usage.
+    """
+    result = _ipc_get('/p2p/storage')
+    return result if result else {
+        'success': False,
+        'status': 'unavailable',
+        'disk_usage': {
+            'used_bytes': 0,
+            'used_mb': 0.0,
+            'storage_dir': '~/.satori/storage',
+        },
+        'backends': {
+            'memory': {'enabled': False, 'items': 0},
+            'file': {'enabled': False, 'items': 0},
+            'dht': {'enabled': False, 'items': 0},
+        },
+        'deferred_rewards': {
+            'stored_count': 0,
+            'pending_sync': 0,
+        },
+        'alerts': {
+            'stored_count': 0,
+            'pending_sync': 0,
+        },
+    }
+
+
 class P2PProxy:
     """Proxy class that provides P2P-like interface via IPC API.
 

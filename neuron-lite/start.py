@@ -1056,13 +1056,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 except Exception as e:
                     logging.debug(f"P2P announcement phase: {e}")
 
-                # Phase 3: Initialize all P2P components
-                await self._initializeP2PComponentsAsync()
-
-                # Signal that P2P is ready
+                # Signal that P2P basic services are ready (peers started)
                 self._p2p_ready.set()
 
-                # Phase 4: Run forever - starts background tasks including:
+                # Phase 3: Run forever - starts background tasks including:
                 # - KadDHT service (peer routing, content routing)
                 # - Pubsub message processing
                 # - Mesh repair task (fixes py-libp2p GossipSub race conditions)
@@ -1070,6 +1067,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                 # - Subscription re-advertisement
                 # This keeps the Trio context alive for all P2P operations
                 logging.info("P2P services running (starting background tasks...)", color="cyan")
+
+                # Queue P2P protocol initialization to run after nursery is created
+                # This ensures DHT is available for subscription announcements
+                self._p2p_peers.spawn_background_task(self._initializeP2PComponentsAsync)
 
                 # run_forever() never returns - runs until cancelled
                 await self._p2p_peers.run_forever()
@@ -3153,10 +3154,354 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 if hasattr(uptime_tracker, 'get_active_node_count'):
                     result['active_node_count'] = uptime_tracker.get_active_node_count()
 
+                # Last status message from our own heartbeat
+                if hasattr(uptime_tracker, '_last_status_message'):
+                    result['last_status_message'] = uptime_tracker._last_status_message
+                elif hasattr(uptime_tracker, 'last_status_message'):
+                    result['last_status_message'] = uptime_tracker.last_status_message
+
                 return jsonify(result)
             except Exception as e:
                 result['error'] = str(e)
                 return jsonify(result)
+
+        @ipc_app.route('/p2p/heartbeats')
+        def p2p_heartbeats():
+            """Get recent heartbeats from the network."""
+            uptime_tracker = getattr(startupDag, '_uptime_tracker', None)
+            limit = request.args.get('limit', 20, type=int)
+
+            heartbeats = []
+            if uptime_tracker and hasattr(uptime_tracker, 'get_recent_heartbeats'):
+                try:
+                    raw = uptime_tracker.get_recent_heartbeats(limit=limit)
+                    for hb in raw:
+                        heartbeats.append({
+                            'node_id': hb.node_id[:12] + '...' if len(hb.node_id) > 12 else hb.node_id,
+                            'full_node_id': hb.node_id,
+                            'address': getattr(hb, 'evrmore_address', '')[:12] + '...',
+                            'full_address': getattr(hb, 'evrmore_address', ''),
+                            'timestamp': hb.timestamp,
+                            'roles': list(getattr(hb, 'roles', [])),
+                            'status': getattr(hb, 'status', ''),
+                        })
+                except Exception as e:
+                    return jsonify({'heartbeats': [], 'error': str(e)})
+
+            return jsonify({'heartbeats': heartbeats})
+
+        @ipc_app.route('/p2p/consensus/status')
+        def p2p_consensus_status():
+            """Get consensus manager status."""
+            consensus = getattr(startupDag, '_consensus_manager', None)
+
+            result = {
+                'success': True,
+                'current_round': None,
+                'phase': 'inactive',
+                'vote_count': 0,
+                'my_vote_submitted': False,
+                'round_start_time': None,
+                'phase_deadline': None,
+            }
+
+            if not consensus:
+                return jsonify(result)
+
+            try:
+                if hasattr(consensus, '_current_round'):
+                    result['current_round'] = consensus._current_round
+                if hasattr(consensus, '_phase'):
+                    result['phase'] = consensus._phase.value if hasattr(consensus._phase, 'value') else str(consensus._phase)
+                if hasattr(consensus, '_votes'):
+                    result['vote_count'] = len(consensus._votes)
+                if hasattr(consensus, '_my_vote_submitted'):
+                    result['my_vote_submitted'] = consensus._my_vote_submitted
+                if hasattr(consensus, '_round_start_time'):
+                    result['round_start_time'] = consensus._round_start_time
+                if hasattr(consensus, 'get_phase_deadline'):
+                    result['phase_deadline'] = consensus.get_phase_deadline()
+            except Exception as e:
+                result['error'] = str(e)
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/consensus/history')
+        def p2p_consensus_history():
+            """Get consensus round history."""
+            consensus = getattr(startupDag, '_consensus_manager', None)
+            limit = request.args.get('limit', 10, type=int)
+
+            rounds = []
+            if consensus and hasattr(consensus, 'get_round_history'):
+                try:
+                    history = consensus.get_round_history(limit=limit)
+                    for r in history:
+                        rounds.append({
+                            'round_id': r.round_id,
+                            'merkle_root': r.merkle_root,
+                            'vote_count': r.vote_count,
+                            'consensus_reached': r.consensus_reached,
+                            'timestamp': r.timestamp,
+                        })
+                except Exception:
+                    pass
+
+            return jsonify({'rounds': rounds})
+
+        @ipc_app.route('/p2p/activity-stats')
+        def p2p_activity_stats():
+            """Get live activity stats for the Live Data Streams display."""
+            try:
+                from web.p2p_bridge import get_bridge
+                bridge = get_bridge()
+                counts = bridge.get_counts()
+                hourly = bridge.get_hourly_activity(hours=24)
+                return jsonify({
+                    'success': True,
+                    'counts': counts,
+                    'hourly': hourly,
+                })
+            except Exception as e:
+                return jsonify({
+                    'success': False,
+                    'error': str(e),
+                    'counts': {
+                        'predictions': 0,
+                        'observations': 0,
+                        'heartbeats': 0,
+                        'consensus_votes': 0,
+                        'governance': 0,
+                    },
+                    'hourly': {},
+                })
+
+        @ipc_app.route('/p2p/recent-events')
+        def p2p_recent_events():
+            """Get recent events for live display (polling fallback for WebSocket)."""
+            try:
+                from web.p2p_bridge import get_bridge
+                bridge = get_bridge()
+                # Get events since last poll (returns recent events list)
+                events = bridge.get_recent_events(limit=50)
+                return jsonify({
+                    'success': True,
+                    'events': events,
+                })
+            except Exception as e:
+                return jsonify({
+                    'success': False,
+                    'error': str(e),
+                    'events': [],
+                })
+
+        @ipc_app.route('/p2p/bandwidth')
+        def p2p_bandwidth():
+            """Get bandwidth usage statistics and QoS status."""
+            result = {
+                'success': True,
+                'status': 'unavailable',
+                'global': {
+                    'bytes_sent': 0,
+                    'bytes_received': 0,
+                    'messages_sent': 0,
+                    'messages_received': 0,
+                    'bytes_per_second': 0.0,
+                    'messages_per_second': 0.0,
+                },
+                'topics': {},
+                'qos': {
+                    'enabled': False,
+                    'drops_low_priority': 0,
+                    'drops_rate_limited': 0,
+                    'policy': 'none',
+                },
+                'peers': {},
+            }
+
+            # Get bandwidth tracker stats
+            tracker = getattr(startupDag, '_bandwidth_tracker', None)
+            if tracker:
+                result['status'] = 'active'
+
+                # Global metrics
+                if hasattr(tracker, 'get_global_metrics'):
+                    global_metrics = tracker.get_global_metrics()
+                    if isinstance(global_metrics, dict):
+                        # Flatten the nested structure for the UI
+                        cumulative = global_metrics.get('cumulative', {})
+                        rates = global_metrics.get('rates', {})
+                        result['global'] = {
+                            'bytes_sent': cumulative.get('bytes_sent', 0),
+                            'bytes_received': cumulative.get('bytes_received', 0),
+                            'messages_sent': cumulative.get('messages_sent', 0),
+                            'messages_received': cumulative.get('messages_received', 0),
+                            'bytes_per_second': rates.get('bytes_out_1s', 0) + rates.get('bytes_in_1s', 0),
+                            'messages_per_second': rates.get('msgs_out_1s', 0) + rates.get('msgs_in_1s', 0),
+                        }
+
+                # Per-topic metrics (get all topic rates)
+                if hasattr(tracker, 'get_all_topic_rates'):
+                    topic_rates = tracker.get_all_topic_rates()
+                    for topic, rate in topic_rates.items():
+                        # Get detailed metrics for each topic
+                        if hasattr(tracker, 'get_topic_metrics'):
+                            result['topics'][topic] = tracker.get_topic_metrics(topic)
+                            result['topics'][topic]['rate_bytes_sec'] = rate
+
+                # Per-peer metrics (summarized)
+                if hasattr(tracker, 'get_top_peers'):
+                    top_peers = tracker.get_top_peers(20)
+                    result['peers'] = {
+                        'count': len(top_peers),
+                        'top_by_bandwidth': [
+                            {'peer_id': peer_id[:16] + '...', 'bytes_per_second': rate}
+                            for peer_id, rate in top_peers
+                        ],
+                    }
+
+            # Get QoS manager stats
+            qos = getattr(startupDag, '_qos_manager', None)
+            if qos:
+                result['qos']['enabled'] = True
+                if hasattr(qos, 'get_stats'):
+                    qos_stats = qos.get_stats()
+                    result['qos']['drops_low_priority'] = qos_stats.get('drops_low_priority', 0)
+                    result['qos']['drops_rate_limited'] = qos_stats.get('drops_rate_limited', 0)
+                    result['qos']['policy'] = qos_stats.get('policy', 'default')
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/bandwidth/history')
+        def p2p_bandwidth_history():
+            """Get bandwidth usage history for charting."""
+            result = {
+                'success': True,
+                'history': [],
+                'interval_seconds': 60,
+                'points': 60,
+            }
+
+            tracker = getattr(startupDag, '_bandwidth_tracker', None)
+            if tracker and hasattr(tracker, 'get_history'):
+                result['history'] = tracker.get_history(points=60)
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/storage')
+        def p2p_storage():
+            """Get storage redundancy status."""
+            import os
+
+            result = {
+                'success': True,
+                'status': 'unavailable',
+                'disk_usage': {
+                    'used_bytes': 0,
+                    'used_mb': 0.0,
+                    'storage_dir': '~/.satori/storage',
+                },
+                'backends': {
+                    'memory': {'enabled': False, 'items': 0},
+                    'file': {'enabled': False, 'items': 0},
+                    'dht': {'enabled': False, 'items': 0},
+                },
+                'deferred_rewards': {
+                    'stored_count': 0,
+                    'pending_sync': 0,
+                },
+                'alerts': {
+                    'stored_count': 0,
+                    'pending_sync': 0,
+                },
+            }
+
+            # Calculate actual disk usage
+            storage_dir = os.path.expanduser('~/.satori/storage')
+            if os.path.exists(storage_dir):
+                total_size = 0
+                for dirpath, dirnames, filenames in os.walk(storage_dir):
+                    for f in filenames:
+                        fp = os.path.join(dirpath, f)
+                        if os.path.exists(fp):
+                            total_size += os.path.getsize(fp)
+                result['disk_usage']['used_bytes'] = total_size
+                result['disk_usage']['used_mb'] = round(total_size / (1024 * 1024), 2)
+                result['disk_usage']['storage_dir'] = storage_dir
+
+            # Get storage manager status
+            manager = getattr(startupDag, '_storage_manager', None)
+            if manager:
+                result['status'] = 'active'
+                if hasattr(manager, 'get_status'):
+                    status = manager.get_status()
+                    result['backends'] = status.get('backends', result['backends'])
+
+            # Get deferred rewards storage status
+            deferred_storage = getattr(startupDag, '_deferred_rewards_storage', None)
+            if deferred_storage:
+                result['backends']['file']['enabled'] = True
+                if hasattr(deferred_storage, 'count'):
+                    result['deferred_rewards']['stored_count'] = deferred_storage.count()
+                if hasattr(deferred_storage, 'pending_sync_count'):
+                    result['deferred_rewards']['pending_sync'] = deferred_storage.pending_sync_count()
+
+            # Get alert storage status
+            alert_storage = getattr(startupDag, '_alert_storage', None)
+            if alert_storage:
+                if hasattr(alert_storage, 'count'):
+                    result['alerts']['stored_count'] = alert_storage.count()
+                if hasattr(alert_storage, 'pending_sync_count'):
+                    result['alerts']['pending_sync'] = alert_storage.pending_sync_count()
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/version')
+        def p2p_version():
+            """Get protocol version and enabled features."""
+            peers = getattr(startupDag, '_p2p_peers', None)
+
+            result = {
+                'success': True,
+                'current_version': '1.0.0',
+                'features': [],
+            }
+
+            if peers:
+                # Build feature list from enabled protocols
+                features = []
+                if getattr(peers, 'enable_pubsub', False):
+                    features.append({'name': 'pubsub_gossipsub', 'enabled': True})
+                if getattr(peers, 'enable_dht', False):
+                    features.append({'name': 'dht_kademlia', 'enabled': True})
+                if getattr(peers, 'enable_ping', False):
+                    features.append({'name': 'ping_protocol', 'enabled': True})
+                if getattr(peers, 'enable_identify', False):
+                    features.append({'name': 'identify_protocol', 'enabled': True})
+                if getattr(peers, 'enable_relay', False):
+                    features.append({'name': 'circuit_relay', 'enabled': True})
+                if getattr(peers, 'enable_mdns', False):
+                    features.append({'name': 'mdns_discovery', 'enabled': True})
+                if getattr(peers, 'enable_rendezvous', False):
+                    features.append({'name': 'rendezvous', 'enabled': True})
+                if getattr(peers, 'enable_upnp', False):
+                    features.append({'name': 'upnp_nat', 'enabled': True})
+
+                # Add satori-specific protocols
+                if getattr(startupDag, '_uptime_tracker', None):
+                    features.append({'name': 'heartbeat_uptime', 'enabled': True})
+                if getattr(startupDag, '_consensus_manager', None):
+                    features.append({'name': 'consensus', 'enabled': True})
+                if getattr(startupDag, '_lending_manager', None):
+                    features.append({'name': 'lending_protocol', 'enabled': True})
+                if getattr(startupDag, '_delegation_manager', None):
+                    features.append({'name': 'delegation', 'enabled': True})
+                if getattr(startupDag, '_governance_manager', None):
+                    features.append({'name': 'governance', 'enabled': True})
+
+                result['features'] = features
+
+            return jsonify(result)
 
         def run_ipc_server():
             from waitress import serve

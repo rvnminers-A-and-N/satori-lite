@@ -168,7 +168,7 @@ def get_or_create_session_vault():
     if not session_id:
         session_id = str(uuid.uuid4())
         session['session_id'] = session_id
-        session.permanent = False  # Session expires when browser closes
+        session.permanent = True  # Use PERMANENT_SESSION_LIFETIME (24 hours)
         logger.info(f"Generated new session ID: {session_id}")
 
     # Get or create vault for this session
@@ -400,7 +400,7 @@ def login_required(f):
         # Ensure session ID exists for tracking
         if not session.get('session_id'):
             session['session_id'] = str(uuid.uuid4())
-            session.permanent = False  # Session expires when browser closes
+            session.permanent = True  # Use PERMANENT_SESSION_LIFETIME (24 hours)
 
         # Check if user is logged in via session flag
         if not session.get('vault_open'):
@@ -1630,6 +1630,7 @@ def register_routes(app):
         """Get P2P network health status."""
         try:
             from satorineuron.init import start
+            from web.wsgi import get_web_p2p_peers, get_web_uptime
 
             result = {
                 'mode': 'unknown',
@@ -1644,24 +1645,23 @@ def register_routes(app):
             if hasattr(start, '_get_networking_mode'):
                 result['mode'] = start._get_networking_mode()
 
-            # Get P2P peers info using helper
-            _, peers = get_p2p_state()
+            # Get P2P peers info using helper (via IPC)
+            peers = get_web_p2p_peers()
             if peers:
                 result['connected'] = True
                 if hasattr(peers, 'get_peer_count'):
                     result['peer_count'] = peers.get_peer_count()
 
-            # Get uptime tracker info from StartupDag
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                tracker = startup._uptime_tracker
-                if hasattr(tracker, 'get_uptime_percentage'):
-                    # get_uptime_percentage returns 0.0-1.0
-                    result['uptime_pct'] = tracker.get_uptime_percentage()
-                if hasattr(tracker, '_last_heartbeat') and tracker._last_heartbeat:
-                    result['last_heartbeat_ago'] = int(time.time() - tracker._last_heartbeat)
+            # Get uptime tracker info via IPC API
+            uptime_data = get_web_uptime()
+            if uptime_data and uptime_data.get('success'):
+                result['uptime_pct'] = uptime_data.get('uptime_percentage', 0.0)
                 # relay_eligible threshold is 95% (0.95)
                 result['relay_eligible'] = result['uptime_pct'] >= 0.95
+                # Calculate last_heartbeat_ago from heartbeats_sent count
+                # (approximation - actual timestamp would need IPC extension)
+                if uptime_data.get('heartbeats_sent', 0) > 0:
+                    result['last_heartbeat_ago'] = 60  # Heartbeats sent every 60s
 
             return jsonify(result)
         except Exception as e:
@@ -1678,24 +1678,10 @@ def register_routes(app):
     def api_p2p_heartbeats():
         """Get recent heartbeats from the network."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_heartbeats
 
-            heartbeats = []
             limit = request.args.get('limit', 20, type=int)
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                tracker = startup._uptime_tracker
-                if hasattr(tracker, 'get_recent_heartbeats'):
-                    raw = tracker.get_recent_heartbeats(limit=limit)
-                    for hb in raw:
-                        heartbeats.append({
-                            'node_id': hb.node_id[:12] + '...' if len(hb.node_id) > 12 else hb.node_id,
-                            'address': getattr(hb, 'evrmore_address', '')[:12] + '...',
-                            'timestamp': hb.timestamp,
-                            'roles': getattr(hb, 'roles', []),
-                        })
-
+            heartbeats = get_web_heartbeats(limit=limit)
             return jsonify({'heartbeats': heartbeats})
         except Exception as e:
             logger.warning(f"Failed to get heartbeats: {e}")
@@ -1706,8 +1692,8 @@ def register_routes(app):
     def api_p2p_heartbeat_stats():
         """Get heartbeat statistics for our own node."""
         try:
-            from satorineuron.init import start
-            import time
+            from web.wsgi import get_web_uptime
+            from datetime import datetime, timezone
 
             result = {
                 'active': False,
@@ -1722,67 +1708,32 @@ def register_routes(app):
                 'is_heartbeating': False,
             }
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                tracker = startup._uptime_tracker
+            # Get uptime data via IPC API
+            uptime_data = get_web_uptime()
+            if uptime_data and uptime_data.get('success'):
+                result['heartbeats_sent'] = uptime_data.get('heartbeats_sent', 0)
+                result['heartbeats_received'] = uptime_data.get('heartbeats_received', 0)
+                result['uptime_percentage'] = uptime_data.get('uptime_percentage', 0.0)
+                result['current_round'] = uptime_data.get('current_round')
+                result['heartbeat_round'] = uptime_data.get('current_round')
+                result['streak_days'] = uptime_data.get('streak_days', 0)
+                result['last_status_message'] = uptime_data.get('last_status_message')
 
-                # Check if heartbeat loop is running
-                if hasattr(tracker, '_is_heartbeating'):
-                    result['is_heartbeating'] = tracker._is_heartbeating
-                    result['active'] = tracker._is_heartbeating
+                # If heartbeats are being sent, we're active
+                if result['heartbeats_sent'] > 0:
+                    result['active'] = True
+                    result['is_heartbeating'] = True
+                    # Approximate last heartbeat as ~60 seconds ago (heartbeat interval)
+                    result['last_heartbeat_ago'] = 60
 
-                # Current round
-                if hasattr(tracker, '_current_round') and tracker._current_round:
-                    result['current_round'] = tracker._current_round
-
-                # Last heartbeat time
-                if hasattr(tracker, '_last_heartbeat') and tracker._last_heartbeat:
-                    result['last_heartbeat'] = tracker._last_heartbeat
-                    result['last_heartbeat_ago'] = int(time.time() - tracker._last_heartbeat)
-
-                # Count heartbeats sent - use persisted dictionary for accuracy across restarts
-                current_round = getattr(tracker, '_current_round', None)
-                node_id = getattr(tracker, 'node_id', None)
-                if current_round and node_id and hasattr(tracker, '_heartbeats'):
-                    timestamps = tracker._heartbeats.get(current_round, {}).get(node_id, [])
-                    result['heartbeats_sent'] = len(timestamps)
-                elif hasattr(tracker, '_heartbeats_sent'):
-                    # Fallback to counter if dictionary not available
-                    result['heartbeats_sent'] = tracker._heartbeats_sent
-
-                # Count heartbeats received (from tracker counter)
-                if hasattr(tracker, '_heartbeats_received'):
-                    result['heartbeats_received'] = tracker._heartbeats_received
-
-                # Uptime percentage
-                if hasattr(tracker, 'get_uptime_percentage'):
-                    result['uptime_percentage'] = tracker.get_uptime_percentage()
-
-                # Calculate expected heartbeats based on time elapsed in current round
-                # This tells us how many heartbeats SHOULD have been sent if uptime was 100%
-                round_start = getattr(tracker, '_round_start', 0)
-                if round_start > 0:
-                    elapsed = int(time.time()) - round_start
-                    # Heartbeat interval is 60 seconds
-                    result['heartbeats_expected'] = max(1, elapsed // 60)
-                else:
-                    # Fallback: expected = sent
-                    result['heartbeats_expected'] = result['heartbeats_sent']
-
-                # Last status message - get directly from tracker
-                if hasattr(tracker, '_last_status_message') and tracker._last_status_message:
-                    result['last_status_message'] = tracker._last_status_message
-
-                # Heartbeat round (for uptime tracking)
-                if hasattr(tracker, '_current_round') and tracker._current_round:
-                    result['heartbeat_round'] = tracker._current_round
+                # Expected heartbeats based on time since round start
+                # (approximation - rounds are daily)
+                now = datetime.now(timezone.utc)
+                seconds_since_midnight = now.hour * 3600 + now.minute * 60 + now.second
+                result['heartbeats_expected'] = max(1, seconds_since_midnight // 60)
 
             # Network Epoch and Round (for rewards/badges)
-            # Epoch = week number since Unix epoch (or a simpler calculation)
-            # Round = day of week (1-7, Monday=1)
-            from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
-            # Calculate epoch as ISO week number of the year
             iso_cal = now.isocalendar()
             result['network_epoch'] = f"{iso_cal.year}-W{iso_cal.week:02d}"
             result['network_round'] = iso_cal.weekday  # 1=Monday to 7=Sunday
@@ -1797,7 +1748,7 @@ def register_routes(app):
     def api_p2p_uptime_streak():
         """Get our own uptime streak info."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_uptime
 
             result = {
                 'streak_days': 0,
@@ -1807,25 +1758,32 @@ def register_routes(app):
                 'streak_start_date': None,
             }
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                tracker = startup._uptime_tracker
-                my_node_id = tracker.node_id
+            # Get uptime data via IPC API
+            uptime_data = get_web_uptime()
+            if uptime_data and uptime_data.get('success'):
+                streak_days = uptime_data.get('streak_days', 0)
+                result['streak_days'] = streak_days
+                result['longest_streak'] = streak_days  # TODO: Track separately in IPC
 
-                if hasattr(tracker, 'get_uptime_streak_record'):
-                    record = tracker.get_uptime_streak_record(my_node_id)
-                    if record:
-                        result['streak_days'] = record.streak_days
-                        result['longest_streak'] = record.longest_streak
-                        result['streak_start_date'] = record.streak_start_date or None
-
-                        # Get tier and bonus from rewards module
-                        from satorip2p.protocol.rewards import (
-                            get_uptime_streak_tier,
-                            calculate_uptime_streak_bonus
-                        )
-                        result['streak_tier'] = get_uptime_streak_tier(record.streak_days)
-                        result['streak_bonus'] = calculate_uptime_streak_bonus(record.streak_days)
+                # Get tier and bonus from rewards module
+                try:
+                    from satorip2p.protocol.rewards import (
+                        get_uptime_streak_tier,
+                        calculate_uptime_streak_bonus
+                    )
+                    result['streak_tier'] = get_uptime_streak_tier(streak_days)
+                    result['streak_bonus'] = calculate_uptime_streak_bonus(streak_days)
+                except ImportError:
+                    # Calculate manually if rewards module not available
+                    if streak_days >= 90:
+                        result['streak_tier'] = 'Legend'
+                        result['streak_bonus'] = 0.10
+                    elif streak_days >= 30:
+                        result['streak_tier'] = 'Veteran'
+                        result['streak_bonus'] = 0.05
+                    elif streak_days >= 7:
+                        result['streak_tier'] = 'Regular'
+                        result['streak_bonus'] = 0.02
 
             return jsonify(result)
         except Exception as e:
@@ -3110,7 +3068,7 @@ def register_routes(app):
     def api_p2p_infrastructure():
         """Get network infrastructure information (rendezvous, bootstrap peers, etc.)."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_p2p_peers, _ipc_get
 
             result = {
                 'success': True,
@@ -3122,47 +3080,33 @@ def register_routes(app):
                 'relay_enabled': None,
             }
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup:
+            # Get P2P peers proxy via IPC
+            peers = get_web_p2p_peers()
+            if not peers:
                 return jsonify(result)
 
-            if hasattr(startup, '_p2p_peers') and startup._p2p_peers:
-                peers = startup._p2p_peers
+            # Rendezvous status via IPC
+            if hasattr(peers, 'get_rendezvous_status'):
+                rendezvous_status = peers.get_rendezvous_status()
+                if rendezvous_status:
+                    result['rendezvous_peer'] = rendezvous_status.get('current_peer', '--')
+                    result['rendezvous_latency_ms'] = rendezvous_status.get('latency_ms')
+                    # Bootstrap peers from rendezvous status
+                    if 'bootstrap_peers' in rendezvous_status:
+                        result['bootstrap_peers'] = rendezvous_status['bootstrap_peers']
 
-                # Rendezvous status
-                if hasattr(peers, 'get_rendezvous_status'):
-                    rendezvous_status = peers.get_rendezvous_status()
-                    if rendezvous_status:
-                        result['rendezvous_peer'] = rendezvous_status.get('current_peer', '--')
-                        result['rendezvous_latency_ms'] = rendezvous_status.get('latency_ms')
+            # Mesh peers from status
+            if hasattr(peers, 'get_status'):
+                status = peers.get_status()
+                if status:
+                    result['mesh_peers'] = status.get('mesh_peer_count', 0)
+                    result['dht_nodes'] = status.get('connected_count', 0)
 
-                # Bootstrap peers with latencies
-                if hasattr(peers, '_rendezvous_peers_by_latency'):
-                    bootstrap_peers = []
-                    current_rendezvous = result.get('rendezvous_peer', '')
-                    for peer_id, latency in peers._rendezvous_peers_by_latency:
-                        bootstrap_peers.append({
-                            'peer_id': peer_id,
-                            'latency_ms': latency,
-                            'is_rendezvous': peer_id == current_rendezvous,
-                        })
-                    result['bootstrap_peers'] = bootstrap_peers
-
-                # DHT nodes (from peer registry)
-                if hasattr(peers, '_peer_info'):
-                    result['dht_nodes'] = len(peers._peer_info)
-
-                # Mesh peers
-                if hasattr(peers, '_pubsub') and peers._pubsub:
-                    try:
-                        mesh_count = len(peers._pubsub.mesh) if hasattr(peers._pubsub, 'mesh') else 0
-                        result['mesh_peers'] = mesh_count
-                    except Exception:
-                        pass
-
-                # Relay status
-                if hasattr(peers, '_relay_enabled'):
-                    result['relay_enabled'] = peers._relay_enabled
+            # Relay status - check if relay is ENABLED (can use relays), not if we ARE a relay
+            # Use full-status IPC endpoint to get enable_relay flag
+            full_status = _ipc_get('/p2p/full-status')
+            if full_status:
+                result['relay_enabled'] = full_status.get('enable_relay', False)
 
             return jsonify(result)
         except Exception as e:
@@ -3455,6 +3399,7 @@ def register_routes(app):
         """
         try:
             from satorineuron.init import start
+            from web.wsgi import get_web_uptime
             identity, peers = get_p2p_state()
 
             # Get connected peer IDs first (atomic snapshot)
@@ -3611,14 +3556,11 @@ def register_routes(app):
                     if full_addrs:
                         result['multiaddr'] = full_addrs[0]
 
-            # Add uptime info
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                tracker = startup._uptime_tracker
-                if hasattr(tracker, 'get_uptime_percentage'):
-                    result['uptime_pct'] = tracker.get_uptime_percentage()
-                if hasattr(tracker, '_last_status_message'):
-                    result['last_heartbeat_message'] = tracker._last_status_message
+            # Add uptime info via IPC (gunicorn can't access main process memory)
+            uptime_data = get_web_uptime()
+            if uptime_data and uptime_data.get('success'):
+                result['uptime_pct'] = uptime_data.get('uptime_percentage', 0)
+                # last_heartbeat_message would need separate IPC endpoint if needed
 
             # Add network average latency
             if peers and hasattr(peers, 'get_network_avg_latency'):
@@ -3721,20 +3663,31 @@ def register_routes(app):
     def api_network_activity():
         """Get hourly network activity data for charts.
 
-        Returns real-time activity counts from the P2P WebSocket bridge.
+        Returns real-time activity counts from the P2P WebSocket bridge via IPC.
         """
         try:
-            from web.p2p_bridge import get_bridge
+            from web.wsgi import get_web_activity_stats
 
-            bridge = get_bridge()
-            activity = bridge.get_hourly_activity(hours=24)
-            counts = bridge.get_counts()
-
-            return jsonify({
-                'success': True,
-                'activity': activity,
-                'counts': counts,
-            })
+            result = get_web_activity_stats()
+            if result and result.get('success'):
+                return jsonify({
+                    'success': True,
+                    'activity': result.get('hourly', {}),
+                    'counts': result.get('counts', {}),
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'activity': {},
+                    'counts': {
+                        'predictions': 0,
+                        'observations': 0,
+                        'heartbeats': 0,
+                        'consensus_votes': 0,
+                        'governance': 0,
+                    },
+                    'error': result.get('error', 'IPC unavailable')
+                })
         except Exception as e:
             logger.warning(f"Network activity failed: {e}")
             # Return empty data structure on error
@@ -3746,13 +3699,41 @@ def register_routes(app):
                     'observations': [],
                     'heartbeats': [],
                     'consensus': [],
+                    'governance': [],
                 },
                 'counts': {
                     'predictions': 0,
                     'observations': 0,
                     'heartbeats': 0,
                     'consensus_votes': 0,
+                    'governance': 0,
                 },
+                'error': str(e)
+            })
+
+    @app.route('/api/network/recent-events')
+    @login_required
+    def api_network_recent_events():
+        """Get recent network events for polling-based live updates.
+
+        This is a fallback for when WebSocket is not available.
+        The frontend can poll this endpoint to get real-time events.
+        """
+        try:
+            from web.wsgi import get_web_recent_events
+
+            limit = request.args.get('limit', 50, type=int)
+            since = request.args.get('since', None, type=float)
+            events = get_web_recent_events(limit=limit, since=since)
+            return jsonify({
+                'success': True,
+                'events': events,
+            })
+        except Exception as e:
+            logger.warning(f"Recent events failed: {e}")
+            return jsonify({
+                'success': False,
+                'events': [],
                 'error': str(e)
             })
 
@@ -4286,76 +4267,22 @@ def register_routes(app):
     def api_p2p_version():
         """Get protocol version info and peer version distribution."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_version
+
+            # Use IPC to get version info (gunicorn can't access main process)
+            version_data = get_web_version()
 
             result = {
-                'current_version': '1.0.0',
+                'current_version': version_data.get('current_version', '1.0.0'),
                 'min_supported': '1.0.0',
                 'peer_stats': {
                     'total_peers': 0,
                     'compatible_peers': 0,
                     'version_distribution': {},
                 },
-                'features': [],
+                'features': version_data.get('features', []),
                 'upgrade_progress': 0.0,
             }
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup:
-                # Get protocol version
-                if hasattr(startup, '_protocol_version'):
-                    result['current_version'] = startup._protocol_version
-
-                # Get version tracker stats
-                if hasattr(startup, '_version_tracker') and startup._version_tracker:
-                    tracker = startup._version_tracker
-                    if hasattr(tracker, 'get_network_stats'):
-                        stats = tracker.get_network_stats()
-                        result['peer_stats'] = {
-                            'total_peers': stats.get('total_peers', 0),
-                            'compatible_peers': stats.get('compatible_peers', 0),
-                            'version_distribution': stats.get('version_distribution', {}),
-                        }
-                    if hasattr(tracker, 'get_upgrade_progress'):
-                        result['upgrade_progress'] = tracker.get_upgrade_progress()
-
-                # Get current features from versioning module or detect from enabled protocols
-                try:
-                    from satorip2p.protocol.versioning import get_current_features
-                    result['features'] = get_current_features()
-                except ImportError:
-                    # Build feature list from detected capabilities
-                    features = []
-                    if hasattr(startup, 'peers') and startup.peers:
-                        peers = startup.peers
-                        if peers.enable_pubsub:
-                            features.append({'name': 'pubsub_gossipsub', 'enabled': True})
-                        if peers.enable_dht:
-                            features.append({'name': 'dht_kademlia', 'enabled': True})
-                        if peers.enable_ping:
-                            features.append({'name': 'ping_protocol', 'enabled': True})
-                        if peers.enable_identify:
-                            features.append({'name': 'identify_protocol', 'enabled': True})
-                        if peers.enable_relay:
-                            features.append({'name': 'circuit_relay', 'enabled': True})
-                        if peers.enable_mdns:
-                            features.append({'name': 'mdns_discovery', 'enabled': True})
-                        if peers.enable_rendezvous:
-                            features.append({'name': 'rendezvous', 'enabled': True})
-                        if peers.enable_upnp:
-                            features.append({'name': 'upnp_nat', 'enabled': True})
-                    # Add satori-specific protocols
-                    if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                        features.append({'name': 'heartbeat_uptime', 'enabled': True})
-                    if hasattr(startup, '_consensus_manager') and startup._consensus_manager:
-                        features.append({'name': 'consensus', 'enabled': True})
-                    if hasattr(startup, '_treasury_alerts') and startup._treasury_alerts:
-                        features.append({'name': 'treasury_alerts', 'enabled': True})
-                    if hasattr(startup, '_lending_manager') and startup._lending_manager:
-                        features.append({'name': 'lending_protocol', 'enabled': True})
-                    if hasattr(startup, '_delegation_manager') and startup._delegation_manager:
-                        features.append({'name': 'delegation', 'enabled': True})
-                    result['features'] = features
 
             return jsonify(result)
         except Exception as e:
@@ -4612,7 +4539,8 @@ def register_routes(app):
                     if hasattr(peers, 'enable_dht') and peers.enable_dht:
                         protocols.append("/ipfs/kad/1.0.0")
                     if hasattr(peers, 'enable_pubsub') and peers.enable_pubsub:
-                        protocols.extend(["/meshsub/1.1.0", "/floodsub/1.0.0"])
+                        # Include meshsub v1.2 (latest), v1.1 (compat), and floodsub
+                        protocols.extend(["/meshsub/1.2.0", "/meshsub/1.1.0", "/floodsub/1.0.0"])
                     if hasattr(peers, 'enable_relay') and peers.enable_relay:
                         protocols.append("/libp2p/circuit/relay/0.2.0/hop")
                     result['protocols'] = protocols
@@ -5048,71 +4976,10 @@ def register_routes(app):
     def api_p2p_storage():
         """Get storage redundancy status and disk usage."""
         try:
-            from satorineuron.init import start
-            import os
+            from web.wsgi import get_web_storage
 
-            result = {
-                'status': 'unavailable',
-                'disk_usage': {
-                    'used_bytes': 0,
-                    'used_mb': 0.0,
-                    'storage_dir': '~/.satori/storage',
-                },
-                'backends': {
-                    'memory': {'enabled': False, 'items': 0},
-                    'file': {'enabled': False, 'items': 0},
-                    'dht': {'enabled': False, 'items': 0},
-                },
-                'deferred_rewards': {
-                    'stored_count': 0,
-                    'pending_sync': 0,
-                },
-                'alerts': {
-                    'stored_count': 0,
-                    'pending_sync': 0,
-                },
-            }
-
-            # Calculate actual disk usage
-            storage_dir = os.path.expanduser('~/.satori/storage')
-            if os.path.exists(storage_dir):
-                total_size = 0
-                for dirpath, dirnames, filenames in os.walk(storage_dir):
-                    for f in filenames:
-                        fp = os.path.join(dirpath, f)
-                        if os.path.exists(fp):
-                            total_size += os.path.getsize(fp)
-                result['disk_usage']['used_bytes'] = total_size
-                result['disk_usage']['used_mb'] = round(total_size / (1024 * 1024), 2)
-                result['disk_usage']['storage_dir'] = storage_dir
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup:
-                # Get storage manager status
-                if hasattr(startup, '_storage_manager') and startup._storage_manager:
-                    manager = startup._storage_manager
-                    result['status'] = 'active'
-                    if hasattr(manager, 'get_status'):
-                        status = manager.get_status()
-                        result['backends'] = status.get('backends', result['backends'])
-
-                # Get deferred rewards storage status
-                if hasattr(startup, '_deferred_rewards_storage') and startup._deferred_rewards_storage:
-                    storage = startup._deferred_rewards_storage
-                    result['backends']['file']['enabled'] = True
-                    if hasattr(storage, 'count'):
-                        result['deferred_rewards']['stored_count'] = storage.count()
-                    if hasattr(storage, 'pending_sync_count'):
-                        result['deferred_rewards']['pending_sync'] = storage.pending_sync_count()
-
-                # Get alert storage status
-                if hasattr(startup, '_alert_storage') and startup._alert_storage:
-                    storage = startup._alert_storage
-                    if hasattr(storage, 'count'):
-                        result['alerts']['stored_count'] = storage.count()
-                    if hasattr(storage, 'pending_sync_count'):
-                        result['alerts']['pending_sync'] = storage.pending_sync_count()
-
+            # Use IPC to get storage status (gunicorn can't access main process)
+            result = get_web_storage()
             return jsonify(result)
         except Exception as e:
             logger.warning(f"Storage status failed: {e}")
@@ -5221,81 +5088,10 @@ def register_routes(app):
     def api_p2p_bandwidth():
         """Get bandwidth usage statistics and QoS status."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_bandwidth
 
-            result = {
-                'status': 'unavailable',
-                'global': {
-                    'bytes_sent': 0,
-                    'bytes_received': 0,
-                    'messages_sent': 0,
-                    'messages_received': 0,
-                    'bytes_per_second': 0.0,
-                    'messages_per_second': 0.0,
-                },
-                'topics': {},
-                'qos': {
-                    'enabled': False,
-                    'drops_low_priority': 0,
-                    'drops_rate_limited': 0,
-                    'policy': 'none',
-                },
-                'peers': {},
-            }
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup:
-                # Get bandwidth tracker stats
-                if hasattr(startup, '_bandwidth_tracker') and startup._bandwidth_tracker:
-                    tracker = startup._bandwidth_tracker
-                    result['status'] = 'active'
-
-                    # Global metrics
-                    if hasattr(tracker, 'get_global_metrics'):
-                        global_metrics = tracker.get_global_metrics()
-                        if isinstance(global_metrics, dict):
-                            # Flatten the nested structure for the UI
-                            cumulative = global_metrics.get('cumulative', {})
-                            rates = global_metrics.get('rates', {})
-                            result['global'] = {
-                                'bytes_sent': cumulative.get('bytes_sent', 0),
-                                'bytes_received': cumulative.get('bytes_received', 0),
-                                'messages_sent': cumulative.get('messages_sent', 0),
-                                'messages_received': cumulative.get('messages_received', 0),
-                                'bytes_per_second': rates.get('bytes_out_1s', 0) + rates.get('bytes_in_1s', 0),
-                                'messages_per_second': rates.get('msgs_out_1s', 0) + rates.get('msgs_in_1s', 0),
-                            }
-
-                    # Per-topic metrics (get all topic rates)
-                    if hasattr(tracker, 'get_all_topic_rates'):
-                        topic_rates = tracker.get_all_topic_rates()
-                        for topic, rate in topic_rates.items():
-                            # Get detailed metrics for each topic
-                            if hasattr(tracker, 'get_topic_metrics'):
-                                result['topics'][topic] = tracker.get_topic_metrics(topic)
-                                result['topics'][topic]['rate_bytes_sec'] = rate
-
-                    # Per-peer metrics (summarized using get_top_peers)
-                    if hasattr(tracker, 'get_top_peers'):
-                        top_peers = tracker.get_top_peers(20)
-                        result['peers'] = {
-                            'count': len(top_peers),
-                            'top_by_bandwidth': [
-                                {'peer_id': peer_id[:16] + '...', 'bytes_per_second': rate}
-                                for peer_id, rate in top_peers
-                            ],
-                        }
-
-                # Get QoS manager stats
-                if hasattr(startup, '_qos_manager') and startup._qos_manager:
-                    qos = startup._qos_manager
-                    result['qos']['enabled'] = True
-                    if hasattr(qos, 'get_stats'):
-                        qos_stats = qos.get_stats()
-                        result['qos']['drops_low_priority'] = qos_stats.get('drops_low_priority', 0)
-                        result['qos']['drops_rate_limited'] = qos_stats.get('drops_rate_limited', 0)
-                        result['qos']['policy'] = qos_stats.get('policy', 'default')
-
+            # Use IPC to get bandwidth stats (gunicorn can't access main process)
+            result = get_web_bandwidth()
             return jsonify(result)
         except Exception as e:
             logger.warning(f"Bandwidth stats failed: {e}")
@@ -5306,20 +5102,10 @@ def register_routes(app):
     def api_p2p_bandwidth_history():
         """Get bandwidth usage history for charting."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_bandwidth_history
 
-            result = {
-                'history': [],
-                'interval_seconds': 60,
-                'points': 60,  # Last 60 minutes
-            }
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_bandwidth_tracker') and startup._bandwidth_tracker:
-                tracker = startup._bandwidth_tracker
-                if hasattr(tracker, 'get_history'):
-                    result['history'] = tracker.get_history(points=60)
-
+            # Use IPC to get bandwidth history (gunicorn can't access main process)
+            result = get_web_bandwidth_history()
             return jsonify(result)
         except Exception as e:
             logger.warning(f"Bandwidth history failed: {e}")
@@ -7404,18 +7190,12 @@ def register_routes(app):
     def api_p2p_consensus_status():
         """Get current consensus round status."""
         try:
-            from satorineuron.init import start
-            import time
+            from web.wsgi import get_web_consensus_status
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
+            status = get_web_consensus_status()
 
-            # Try to get consensus manager from startup
-            consensus = None
-            if startup:
-                consensus = getattr(startup, '_consensus_manager', None)
-
-            if not consensus:
-                # Return placeholder data when consensus not running
+            # Return placeholder data when consensus not running
+            if not status or not status.get('success'):
                 return jsonify({
                     'current_round': 0,
                     'phase': 'inactive',
@@ -7429,19 +7209,17 @@ def register_routes(app):
                     'my_participation': None,
                 })
 
-            status = consensus.get_current_status()
-
             return jsonify({
-                'current_round': status.get('round_id', 0),
+                'current_round': status.get('current_round', 0),
                 'phase': status.get('phase', 'unknown'),
-                'progress_percent': status.get('progress_percent', 0),
-                'start_time': status.get('start_time'),
-                'end_time': status.get('end_time'),
-                'validators': status.get('validator_count', 0),
-                'total_votes': status.get('total_votes', 0),
-                'streams_in_round': status.get('streams_count', 0),
-                'quorum_percent': status.get('quorum_percent', 0),
-                'my_participation': status.get('my_participation'),
+                'progress_percent': 0,  # TODO: Calculate from timestamps
+                'start_time': status.get('round_start_time'),
+                'end_time': status.get('phase_deadline'),
+                'validators': 0,  # TODO: Add to IPC
+                'total_votes': status.get('vote_count', 0),
+                'streams_in_round': 0,  # TODO: Add to IPC
+                'quorum_percent': 0,  # TODO: Calculate
+                'my_participation': 'voted' if status.get('my_vote_submitted') else None,
             })
 
         except Exception as e:
@@ -7457,27 +7235,16 @@ def register_routes(app):
     def api_p2p_consensus_history():
         """Get recent consensus round history."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import get_web_consensus_history
 
             limit = request.args.get('limit', 10, type=int)
             limit = min(limit, 50)  # Cap at 50
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            consensus = None
-            if startup:
-                consensus = getattr(startup, '_consensus_manager', None)
-
-            if not consensus:
-                return jsonify({
-                    'rounds': [],
-                    'total_completed': 0,
-                })
-
-            history = consensus.get_round_history(limit=limit)
+            rounds = get_web_consensus_history(limit=limit)
 
             return jsonify({
-                'rounds': history.get('rounds', []),
-                'total_completed': history.get('total_completed', 0),
+                'rounds': rounds,
+                'total_completed': len(rounds),
             })
 
         except Exception as e:

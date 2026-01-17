@@ -62,6 +62,10 @@ class P2PWebSocketBridge:
         # Track hourly activity for charts
         self._hourly_activity: Dict[int, Dict[str, int]] = {}
 
+        # Store recent events for polling (when WebSocket is unavailable)
+        self._recent_events: list = []
+        self._max_recent_events = 100
+
         # Reference to uptime tracker for loading persisted stats
         self._uptime_tracker = None
 
@@ -495,7 +499,10 @@ class P2PWebSocketBridge:
     # ========================================================================
 
     def _emit(self, event: str, data: dict) -> None:
-        """Emit event to WebSocket."""
+        """Emit event to WebSocket and store for polling."""
+        # Store event for polling (IPC fallback)
+        self._store_event(event, data)
+
         try:
             from web.app import sendToUI
             sendToUI(event, data)
@@ -505,6 +512,34 @@ class P2PWebSocketBridge:
             logger.warning(f"Cannot emit {event}: web.app not available")
         except Exception as e:
             logger.warning(f"Failed to emit {event}: {e}")
+
+    def _store_event(self, event: str, data: dict) -> None:
+        """Store event for polling retrieval."""
+        event_record = {
+            'event': event,
+            'data': data,
+            'timestamp': time.time(),
+        }
+        self._recent_events.append(event_record)
+        # Keep only the most recent events
+        if len(self._recent_events) > self._max_recent_events:
+            self._recent_events = self._recent_events[-self._max_recent_events:]
+
+    def get_recent_events(self, limit: int = 50, since: float = None) -> list:
+        """Get recent events for polling.
+
+        Args:
+            limit: Maximum number of events to return
+            since: Only return events after this timestamp
+
+        Returns:
+            List of recent events, newest first
+        """
+        events = self._recent_events
+        if since:
+            events = [e for e in events if e['timestamp'] > since]
+        # Return newest first, limited
+        return list(reversed(events[-limit:]))
 
     def _record_hourly_activity(self, event_type: str) -> None:
         """Record activity for hourly chart data."""
