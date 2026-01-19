@@ -424,17 +424,32 @@
                 </div>
                 <div class="card-body">
                     <div class="row mb-3">
-                        <div class="col-6">
+                        <div class="col-4">
                             <div class="text-center">
                                 <div class="h4 mb-0" id="p2pPeerCount">--</div>
                                 <small class="text-muted">Peers</small>
                             </div>
                         </div>
-                        <div class="col-6">
+                        <div class="col-4">
                             <div class="text-center">
                                 <div class="h4 mb-0" id="p2pUptimePct">--%</div>
                                 <small class="text-muted">Uptime</small>
                             </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="text-center">
+                                <div class="h4 mb-0" id="p2pStreakDays">--</div>
+                                <small class="text-muted">Streak</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Current Round</label>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span id="p2pCurrentRound" class="badge bg-primary">--</span>
+                            <small class="text-muted" id="p2pRoundStatus">
+                                <span id="p2pHeartbeatsSent">--</span> heartbeats sent
+                            </small>
                         </div>
                     </div>
                     <div class="mb-3">
@@ -446,7 +461,7 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Recent Heartbeats</label>
-                        <div id="heartbeatFeed" class="list-group" style="max-height: 150px; overflow-y: auto; font-size: 0.85em;">
+                        <div id="heartbeatFeed" class="list-group" style="max-height: 120px; overflow-y: auto; font-size: 0.85em;">
                             <div class="text-muted small p-2">Loading heartbeats...</div>
                         </div>
                     </div>
@@ -584,6 +599,69 @@
                         <a href="{{ url_for('network') }}" class="small text-muted">
                             <i class="material-icons align-middle" style="font-size: 14px;">open_in_new</i>
                             View Full Distribution History on Network Page
+                        </a>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prediction Stats Section -->
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#predictionStatsCollapse"
+                     aria-expanded="false"
+                     aria-controls="predictionStatsCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">analytics</i>
+                        Prediction Stats
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadPredictionStats()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="collapse" id="predictionStatsCollapse">
+                <div class="card-body">
+                    <!-- Prediction Summary -->
+                    <div class="row text-center mb-3">
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-primary" id="predictionCount">--</div>
+                            <small class="text-muted">Predictions</small>
+                        </div>
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-success" id="predictionAccuracy">--%</div>
+                            <small class="text-muted">Accuracy</small>
+                        </div>
+                        <div class="col-4">
+                            <div class="h5 mb-0 text-info" id="predictionStreams">--</div>
+                            <small class="text-muted">Streams</small>
+                        </div>
+                    </div>
+
+                    <!-- Status -->
+                    <div class="mb-3">
+                        <label class="form-label">Status</label>
+                        <div id="predictionStatus" class="alert alert-secondary py-2 mb-0">
+                            <span id="predictionStatusText">Loading...</span>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div class="mb-3">
+                        <label class="form-label">Recent Scores</label>
+                        <div id="recentScoresList" class="list-group list-group-flush" style="max-height: 120px; overflow-y: auto; font-size: 0.85em;">
+                            <div class="text-muted small p-2">Loading scores...</div>
+                        </div>
+                    </div>
+
+                    <!-- View More Link -->
+                    <div class="text-center mt-2">
+                        <a href="{{ url_for('predictions_page') }}" class="small text-muted">
+                            <i class="material-icons align-middle" style="font-size: 14px;">open_in_new</i>
+                            View Full Predictions Page
                         </a>
                     </div>
                 </div>
@@ -1179,6 +1257,7 @@
 
     async function loadP2PHealth() {
         try {
+            // Load basic health stats
             const health = await apiCall('/p2p/health');
             if (health) {
                 document.getElementById('p2pPeerCount').textContent = health.peer_count || 0;
@@ -1200,6 +1279,23 @@
                 }
 
                 relayBadge.style.display = health.relay_eligible ? 'inline' : 'none';
+            }
+
+            // Load round stats from heartbeat stats endpoint
+            const hbStats = await apiCall('/p2p/heartbeat/stats');
+            if (hbStats) {
+                // Current round display (e.g., "round_2026-01-19" -> "2026-01-19")
+                const roundDisplay = hbStats.current_round ?
+                    hbStats.current_round.replace('round_', '') : '--';
+                document.getElementById('p2pCurrentRound').textContent = roundDisplay;
+
+                // Heartbeats sent this round
+                document.getElementById('p2pHeartbeatsSent').textContent =
+                    hbStats.heartbeats_sent || 0;
+
+                // Streak days
+                document.getElementById('p2pStreakDays').textContent =
+                    hbStats.streak_days ? hbStats.streak_days + 'd' : '0d';
             }
         } catch (e) {
             console.error('Failed to load P2P health:', e);
@@ -2252,9 +2348,14 @@
                 const remaining = result.next_tier_threshold - result.total_donated;
                 document.getElementById('tierProgressText').textContent =
                     remaining > 0 ? remaining.toFixed(0) + ' EVR to ' + result.next_tier : 'Max tier reached!';
-            } else {
+            } else if (result.tier === 'Diamond') {
+                // Actually at Diamond tier
                 document.getElementById('tierProgressBar').style.width = '100%';
                 document.getElementById('tierProgressText').textContent = 'Diamond tier achieved!';
+            } else {
+                // No donations yet or at base tier
+                document.getElementById('tierProgressBar').style.width = '0%';
+                document.getElementById('tierProgressText').textContent = 'Donate to start earning tiers';
             }
         }
     }
@@ -2675,6 +2776,58 @@
             console.error('Failed to load rewards history:', e);
             document.getElementById('rewardsHistoryList').innerHTML =
                 '<div class="text-danger small text-center py-3">Error loading rewards</div>';
+        }
+    }
+
+    // =========================================================================
+    // PREDICTION STATS FUNCTIONS
+    // =========================================================================
+
+    async function loadPredictionStats() {
+        try {
+            // Load prediction stats
+            const stats = await apiCall('/p2p/predictions/stats');
+            if (stats) {
+                // Update summary stats
+                document.getElementById('predictionCount').textContent = stats.my_predictions || 0;
+                document.getElementById('predictionStreams').textContent = stats.subscribed_streams || 0;
+
+                // Accuracy from average score (score is 0-1, convert to %)
+                const accuracy = stats.my_average_score ? (stats.my_average_score * 100).toFixed(1) + '%' : '--%';
+                document.getElementById('predictionAccuracy').textContent = accuracy;
+
+                // Update status
+                const statusAlert = document.getElementById('predictionStatus');
+                const statusText = document.getElementById('predictionStatusText');
+
+                if (stats.started) {
+                    statusAlert.className = 'alert alert-success py-2 mb-0';
+                    statusText.textContent = 'Active - Predicting on ' + (stats.subscribed_streams || 0) + ' streams';
+                } else {
+                    statusAlert.className = 'alert alert-secondary py-2 mb-0';
+                    statusText.textContent = 'Not started - Subscribe to streams to begin';
+                }
+            }
+
+            // Load recent scores
+            const scores = await apiCall('/p2p/predictions/scores?limit=5');
+            const scoresList = document.getElementById('recentScoresList');
+
+            if (scores && scores.scores && scores.scores.length > 0) {
+                scoresList.innerHTML = scores.scores.map(score => {
+                    const scoreColor = score.score >= 0.7 ? 'text-success' : (score.score >= 0.4 ? 'text-warning' : 'text-danger');
+                    const scorePct = (score.score * 100).toFixed(0) + '%';
+                    const streamShort = score.stream_id ? score.stream_id.split('|').slice(-2).join('/') : 'unknown';
+                    return `<div class="list-group-item py-1 px-2 d-flex justify-content-between">
+                        <span class="text-muted small">${streamShort}</span>
+                        <span class="badge ${scoreColor}">${scorePct}</span>
+                    </div>`;
+                }).join('');
+            } else {
+                scoresList.innerHTML = '<div class="text-muted small p-2">No scores yet</div>';
+            }
+        } catch (e) {
+            console.error('Failed to load prediction stats:', e);
         }
     }
 
@@ -3248,11 +3401,13 @@
         loadReferralStats();  // Load referral stats
         loadTreasuryAlerts();  // Load treasury alerts and deferred rewards
         loadMyRewardsHistory();  // Load personal rewards history
+        loadPredictionStats();  // Load prediction stats
         loadPerformance();  // Load AI engine performance charts (upstream feature)
 
         // Periodic refresh of P2P data (every 30s)
         setInterval(loadP2PHealth, 30000);
         setInterval(loadHeartbeats, 15000);
+        setInterval(loadPredictionStats, 60000);  // Refresh prediction stats every minute
         setInterval(loadTreasuryAlerts, 60000);  // Refresh alerts every minute
         setInterval(loadMyRewardsHistory, 120000);  // Refresh rewards every 2 minutes
     });
