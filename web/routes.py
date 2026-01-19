@@ -643,6 +643,7 @@ def register_routes(app):
 
         # Derive eth_wallet_address locally from wallet pubkey
         eth_wallet_address = None
+        is_signer = False
         try:
             wallet_manager = get_or_create_session_vault()
             if wallet_manager and wallet_manager.wallet and hasattr(wallet_manager.wallet, 'pubkey'):
@@ -650,10 +651,19 @@ def register_routes(app):
                 if wallet_pubkey:
                     from satorineuron.common.eth_address import derive_eth_wallet_address_from_pubkey
                     eth_wallet_address = derive_eth_wallet_address_from_pubkey(wallet_pubkey)
+            # Check if user is an authorized signer
+            if wallet_manager and wallet_manager.wallet:
+                try:
+                    from satorip2p.protocol.signer import is_authorized_signer
+                    evrmore_address = wallet_manager.wallet.address
+                    if evrmore_address:
+                        is_signer = is_authorized_signer(evrmore_address)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Could not derive eth_wallet_address: {e}")
 
-        return render_template('dashboard.html', version=VERSION, eth_wallet_address=eth_wallet_address)
+        return render_template('dashboard.html', version=VERSION, eth_wallet_address=eth_wallet_address, is_signer=is_signer)
 
     @app.route('/stake')
     @login_required
@@ -5233,7 +5243,8 @@ def register_routes(app):
     @login_required
     def donate():
         """Treasury donation page."""
-        return render_template('donate.html', **get_base_context())
+        from satorineuron import VERSION
+        return render_template('donate.html', version=VERSION)
 
     @app.route('/donate/treasury-address')
     @login_required

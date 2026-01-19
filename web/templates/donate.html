@@ -3,6 +3,70 @@
 {% block title %}Satori - Donate{% endblock %}
 
 {% block content %}
+<!-- Navigation -->
+<nav class="navbar navbar-expand-lg px-4">
+    <span class="navbar-brand">
+        Satori
+        <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
+    </span>
+    <div class="ms-auto d-flex align-items-center">
+        <span class="me-3">
+            <span class="status-indicator status-online" id="statusIndicator"></span>
+            <span id="statusText">Connected</span>
+        </span>
+        <a href="{{ url_for('dashboard') }}" class="btn btn-outline-light btn-sm me-2" title="Dashboard">
+            <i class="material-icons align-middle" style="font-size: 16px;">dashboard</i>
+            Dashboard
+        </a>
+        <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2" title="P2P Network">
+            <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
+            Network
+        </a>
+        <a href="{{ url_for('oracle_page') }}" class="btn btn-outline-light btn-sm me-2" title="Oracle">
+            <i class="material-icons align-middle" style="font-size: 16px;">cloud_upload</i>
+            Oracle
+        </a>
+        <a href="{{ url_for('predictions_page') }}" class="btn btn-outline-light btn-sm me-2" title="Predictions">
+            <i class="material-icons align-middle" style="font-size: 16px;">trending_up</i>
+            Predictions
+        </a>
+        <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2" title="Governance">
+            <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
+            Governance
+        </a>
+        {% if is_signer %}
+        <a href="{{ url_for('signer_dashboard') }}" class="btn btn-outline-light btn-sm me-2" title="Signer">
+            <i class="material-icons align-middle" style="font-size: 16px;">key</i>
+            Signer
+        </a>
+        {% endif %}
+        <a href="{{ url_for('stake_management') }}" class="btn btn-outline-light btn-sm me-2" title="Stake Management">
+            <i class="material-icons align-middle" style="font-size: 16px;">handshake</i>
+            Stake
+        </a>
+        <a href="{{ url_for('badges_page') }}" class="btn btn-outline-light btn-sm me-2" title="Badges & Achievements">
+            <i class="material-icons align-middle" style="font-size: 16px;">military_tech</i>
+            Badges
+        </a>
+        <a href="{{ url_for('donate') }}" class="btn btn-outline-light btn-sm me-2 active" title="Donate to Treasury">
+            <i class="material-icons align-middle" style="font-size: 16px;">volunteer_activism</i>
+            Donate
+        </a>
+        <a href="{{ url_for('guide') }}" class="btn btn-outline-light btn-sm me-2" title="Rewards Guide">
+            <i class="material-icons align-middle" style="font-size: 16px;">menu_book</i>
+            Guide
+        </a>
+        <a href="{{ url_for('restart_neuron') }}" class="btn btn-outline-light btn-sm me-2" title="Restart Node" onclick="return confirm('Restart your Satori node?');">
+            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+        </a>
+        <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm me-2">Logout</a>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+            <i class="material-icons" id="themeIcon">light_mode</i>
+        </button>
+    </div>
+</nav>
+
+<div class="container-fluid py-4">
   <div class="row">
     <!-- Donation Form Card -->
     <div class="col-xl-6 col-sm-12 mb-xl-0 mb-4">

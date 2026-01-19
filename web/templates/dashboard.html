@@ -10,6 +10,11 @@
         <small class="text-muted ms-2" style="font-size: 0.65rem; font-weight: 400; opacity: 0.6;">{{ version }}</small>
     </span>
     <div class="ms-auto d-flex align-items-center">
+        <!-- Connected Status (left of wallet) -->
+        <span class="me-3">
+            <span class="status-indicator status-online" id="statusIndicator"></span>
+            <span id="statusText">Connected</span>
+        </span>
         <!-- Wallet Dropdown -->
         <div class="dropdown me-3">
             <button class="btn btn-outline-light btn-sm dropdown-toggle" type="button" id="walletDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -25,22 +30,40 @@
                 </li>
             </ul>
         </div>
-
-        <span class="me-3">
-            <span class="status-indicator status-online" id="statusIndicator"></span>
-            <span id="statusText">Connected</span>
-        </span>
+        <!-- Navigation Links -->
         <a href="{{ url_for('network') }}" class="btn btn-outline-light btn-sm me-2" title="P2P Network Dashboard">
             <i class="material-icons align-middle" style="font-size: 16px;">hub</i>
             Network
+        </a>
+        <a href="{{ url_for('oracle_page') }}" class="btn btn-outline-light btn-sm me-2" title="Oracle - Publish Data Streams">
+            <i class="material-icons align-middle" style="font-size: 16px;">cloud_upload</i>
+            Oracle
+        </a>
+        <a href="{{ url_for('predictions_page') }}" class="btn btn-outline-light btn-sm me-2" title="Predictions - Make & View Predictions">
+            <i class="material-icons align-middle" style="font-size: 16px;">trending_up</i>
+            Predictions
         </a>
         <a href="{{ url_for('governance') }}" class="btn btn-outline-light btn-sm me-2" title="Governance">
             <i class="material-icons align-middle" style="font-size: 16px;">how_to_vote</i>
             Governance
         </a>
-        <a href="{{ url_for('stake_management') }}" class="btn btn-outline-light btn-sm me-2">
+        {% if is_signer %}
+        <a href="{{ url_for('signer_dashboard') }}" class="btn btn-outline-light btn-sm me-2" title="Signer - Multi-sig Distribution">
+            <i class="material-icons align-middle" style="font-size: 16px;">key</i>
+            Signer
+        </a>
+        {% endif %}
+        <a href="{{ url_for('stake_management') }}" class="btn btn-outline-light btn-sm me-2" title="Stake Management">
             <i class="material-icons align-middle" style="font-size: 16px;">handshake</i>
             Stake
+        </a>
+        <a href="{{ url_for('badges_page') }}" class="btn btn-outline-light btn-sm me-2" title="Badges & Achievements">
+            <i class="material-icons align-middle" style="font-size: 16px;">military_tech</i>
+            Badges
+        </a>
+        <a href="{{ url_for('donate') }}" class="btn btn-outline-light btn-sm me-2" title="Donate to Treasury">
+            <i class="material-icons align-middle" style="font-size: 16px;">volunteer_activism</i>
+            Donate
         </a>
         <a href="{{ url_for('guide') }}" class="btn btn-outline-light btn-sm me-2" title="Rewards Guide">
             <i class="material-icons align-middle" style="font-size: 16px;">menu_book</i>
@@ -570,7 +593,7 @@
     </div>
 
     <!-- Pool Staking Row -->
-    <div class="row g-4 mb-4">
+    <div class="row g-4 mt-2">
         <!-- Pool Staking Section -->
         <div class="col-12 col-lg-6">
             <div class="card h-100">
@@ -1831,14 +1854,14 @@
         // Load P2P peer ID and multiaddress
         try {
             const result = await apiCall('/p2p/identify/stats');
-            if (result && result.success) {
+            if (result && !result.error) {
                 if (result.peer_id) {
                     document.getElementById('p2pPeerId').value = result.peer_id;
                 } else {
                     document.getElementById('p2pPeerId').value = 'P2P not initialized';
                 }
-                if (result.multiaddrs && result.multiaddrs.length > 0) {
-                    document.getElementById('p2pMultiaddr').value = result.multiaddrs[0];
+                if (result.multiaddr) {
+                    document.getElementById('p2pMultiaddr').value = result.multiaddr;
                 } else {
                     document.getElementById('p2pMultiaddr').value = 'No public address';
                 }
