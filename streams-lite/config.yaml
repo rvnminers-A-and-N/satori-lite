@@ -40,8 +40,8 @@ oracles:
   - type: crypto
     name: Bitcoin Price USD
     stream_id: crypto|satori|BTC|USD
-    enabled: false  # Enable when ready
-    poll_interval: 300  # 5 minutes
+    enabled: true  # Enabled for testing
+    poll_interval: 60  # 1 minute for testing
     extra:
       coin: bitcoin
       currency: usd
@@ -50,8 +50,8 @@ oracles:
   - type: crypto
     name: Ethereum Price USD
     stream_id: crypto|satori|ETH|USD
-    enabled: false
-    poll_interval: 300
+    enabled: true  # Enabled for testing
+    poll_interval: 60  # 1 minute for testing
     extra:
       coin: ethereum
       currency: usd
@@ -59,8 +59,8 @@ oracles:
   - type: crypto
     name: Evrmore Price USD
     stream_id: crypto|satori|EVR|USD
-    enabled: false
-    poll_interval: 600  # 10 minutes
+    enabled: true  # Enabled for testing
+    poll_interval: 120  # 2 minutes for testing
     extra:
       coin: evrmore
       currency: usd

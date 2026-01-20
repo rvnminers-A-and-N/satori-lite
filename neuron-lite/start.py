@@ -1408,7 +1408,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
             # 21. Initialize StreamManager (oracle data streams)
             try:
-                from streams_lite import StreamManager
+                try:
+                    from Streams import StreamManager
+                except ImportError:
+                    from streams_lite import StreamManager
                 if not hasattr(self, '_stream_manager') or self._stream_manager is None:
                     self._stream_manager = StreamManager(
                         peers=getattr(self, '_p2p_peers', None),
@@ -1417,6 +1420,14 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     )
                     await self._stream_manager.start()
                     logging.info(f"StreamManager initialized ({self._stream_manager.oracle_count} oracles)", color="cyan")
+
+                    # Spawn Trio polling task if oracles are configured
+                    if self._stream_manager.oracle_count > 0 and self._p2p_peers:
+                        if hasattr(self._p2p_peers, 'spawn_background_task'):
+                            self._p2p_peers.spawn_background_task(
+                                self._stream_manager.run_trio_polling
+                            )
+                            logging.info("Oracle polling task spawned", color="cyan")
             except ImportError:
                 logging.debug("streams-lite not available, oracle streams disabled")
             except Exception as e:

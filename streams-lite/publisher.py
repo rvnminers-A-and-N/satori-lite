@@ -39,6 +39,7 @@ def get_networking_mode() -> str:
         import yaml
         config_paths = [
             os.path.expanduser('~/.satori/config.yaml'),
+            '/Satori/Neuron/config/config.yaml',  # Container path
             '/satori/config.yaml',
             'config.yaml',
         ]

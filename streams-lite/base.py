@@ -12,6 +12,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Callable
 
+# Try to import trio for compatibility with py-libp2p environment
+try:
+    import trio
+    HAS_TRIO = True
+except ImportError:
+    HAS_TRIO = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -229,6 +236,21 @@ class BaseOracle(ABC):
             raise
 
         self._running = True
+
+        # Use trio.lowlevel.current_trio_token() to detect if we're in Trio
+        if HAS_TRIO:
+            try:
+                trio.lowlevel.current_trio_token()
+                # We're in a Trio context - start background task via trio
+                self._trio_cancel_scope = None
+                # Don't use trio.lowlevel.spawn_system_task as it's complex
+                # Instead, we'll run the poll loop in a way that works with trio
+                # For now, just mark as started - the manager will handle polling
+                logger.info(f"Oracle {self.name} started (interval: {self.config.poll_interval}s) [Trio mode]")
+                return
+            except RuntimeError:
+                pass  # Not in Trio context, use asyncio
+
         self._task = asyncio.create_task(self._poll_loop())
         logger.info(f"Oracle {self.name} started (interval: {self.config.poll_interval}s)")
 

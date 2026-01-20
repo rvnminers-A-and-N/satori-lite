@@ -8,6 +8,7 @@ configuration, and coordination with the main neuron.
 import os
 import asyncio
 import logging
+import time
 from typing import Dict, List, Optional, Any, Type
 from pathlib import Path
 
@@ -15,6 +16,13 @@ import yaml
 
 from .base import BaseOracle, OracleConfig, Observation
 from .publisher import P2PPublisher, get_networking_mode
+
+# Try to import trio for compatibility with py-libp2p environment
+try:
+    import trio
+    HAS_TRIO = True
+except ImportError:
+    HAS_TRIO = False
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +205,15 @@ class StreamManager:
 
         oracles_config = self._config.get('oracles', [])
 
+        # Check if we're in a Trio context
+        in_trio = False
+        if HAS_TRIO:
+            try:
+                trio.lowlevel.current_trio_token()
+                in_trio = True
+            except RuntimeError:
+                pass
+
         for oracle_cfg in oracles_config:
             try:
                 oracle = self._create_oracle(oracle_cfg)
@@ -210,6 +227,13 @@ class StreamManager:
 
             except Exception as e:
                 logger.error(f"Failed to create oracle: {e}")
+
+        # If in Trio mode, start a background polling task
+        if in_trio and self._oracles:
+            self._trio_polling_task = True
+            # We can't easily spawn a trio task from here, but we can
+            # provide a method that the caller can use to run polling
+            logger.info(f"Trio mode: {len(self._oracles)} oracles ready for polling")
 
     def _create_oracle(self, config: dict) -> Optional[BaseOracle]:
         """Create an oracle from configuration."""
@@ -240,6 +264,48 @@ class StreamManager:
     def _on_oracle_error(self, oracle: BaseOracle, error: Exception):
         """Handle oracle error events."""
         logger.warning(f"Oracle {oracle.name} error: {error}")
+
+    async def run_trio_polling(self):
+        """
+        Run the oracle polling loop in Trio context.
+
+        Call this from a Trio nursery to enable oracle polling.
+        This is needed because py-libp2p uses Trio, not asyncio.
+        """
+        if not HAS_TRIO:
+            logger.warning("Trio not available, polling disabled")
+            return
+
+        logger.info(f"Starting Trio polling loop for {len(self._oracles)} oracles")
+
+        while self._running:
+            for name, oracle in list(self._oracles.items()):
+                if not oracle._running:
+                    continue
+
+                try:
+                    # Check if it's time to poll this oracle
+                    now = time.time()
+                    time_since_last = now - oracle._last_publish_time
+
+                    if time_since_last >= oracle.config.poll_interval:
+                        # Fetch and publish
+                        try:
+                            value = await oracle.fetch_value()
+                            if value is not None and oracle.validate_value(value):
+                                await oracle._publish_observation(value)
+                        except Exception as e:
+                            oracle._consecutive_errors += 1
+                            oracle._total_errors += 1
+                            if oracle._on_error:
+                                oracle._on_error(oracle, e)
+                            logger.debug(f"Oracle {name} fetch error: {e}")
+
+                except Exception as e:
+                    logger.debug(f"Oracle {name} poll error: {e}")
+
+            # Sleep between poll cycles
+            await trio.sleep(10)  # Check every 10 seconds
 
     # =========================================================================
     # Public API

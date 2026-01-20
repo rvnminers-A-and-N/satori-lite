@@ -21,6 +21,13 @@ import requests
 
 from ..base import BaseOracle, OracleConfig
 
+# Try to import trio for compatibility
+try:
+    import trio
+    HAS_TRIO = True
+except ImportError:
+    HAS_TRIO = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,11 +81,28 @@ class CryptoOracle(BaseOracle):
         )
 
         try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.get(url, timeout=10)
-            )
+            # Use trio.to_thread if in Trio context, otherwise asyncio
+            if HAS_TRIO:
+                try:
+                    trio.lowlevel.current_trio_token()
+                    # In Trio context - use trio.to_thread
+                    response = await trio.to_thread.run_sync(
+                        lambda: requests.get(url, timeout=10)
+                    )
+                except RuntimeError:
+                    # Not in Trio, use asyncio
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: requests.get(url, timeout=10)
+                    )
+            else:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(url, timeout=10)
+                )
+
             response.raise_for_status()
 
             data = response.json()
@@ -102,11 +126,28 @@ class CryptoOracle(BaseOracle):
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
 
         try:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: requests.get(url, timeout=10)
-            )
+            # Use trio.to_thread if in Trio context, otherwise asyncio
+            if HAS_TRIO:
+                try:
+                    trio.lowlevel.current_trio_token()
+                    # In Trio context - use trio.to_thread
+                    response = await trio.to_thread.run_sync(
+                        lambda: requests.get(url, timeout=10)
+                    )
+                except RuntimeError:
+                    # Not in Trio, use asyncio
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        lambda: requests.get(url, timeout=10)
+                    )
+            else:
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: requests.get(url, timeout=10)
+                )
+
             response.raise_for_status()
 
             data = response.json()
