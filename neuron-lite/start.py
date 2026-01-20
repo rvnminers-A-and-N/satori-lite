@@ -321,18 +321,29 @@ def is_p2p_available() -> bool:
     return _p2p_modules_cache.get('available', False)
 
 
-def getStart():
-    """returns StartupDag singleton"""
-    return StartupDag()
+# Global singleton instance - accessible across imports
+_startup_instance = None
 
 
 class SingletonMeta(type):
     _instances = {}
 
     def __call__(cls, *args, **kwargs):
+        global _startup_instance
         if cls not in cls._instances:
             cls._instances[cls] = super(SingletonMeta, cls).__call__(*args, **kwargs)
+            _startup_instance = cls._instances[cls]
         return cls._instances[cls]
+
+
+def getStart():
+    """Returns StartupDag singleton if it exists, None otherwise.
+
+    Note: This returns the actual running instance with all protocols
+    initialized, not a new blank instance.
+    """
+    global _startup_instance
+    return _startup_instance
 
 
 class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
@@ -1417,6 +1428,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         peers=getattr(self, '_p2p_peers', None),
                         identity=getattr(self, 'identity', None),
                         send_to_ui=getattr(self, 'sendToUI', None),
+                        oracle_network=getattr(self, '_oracle_network', None),
                     )
                     await self._stream_manager.start()
                     logging.info(f"StreamManager initialized ({self._stream_manager.oracle_count} oracles)", color="cyan")
@@ -1428,6 +1440,41 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                                 self._stream_manager.run_trio_polling
                             )
                             logging.info("Oracle polling task spawned", color="cyan")
+
+                        # Auto-subscribe to streams we're publishing to (receive others' observations)
+                        if hasattr(self, '_oracle_network') and self._oracle_network:
+                            async def auto_subscribe_oracle_streams():
+                                """Subscribe to all streams we're running oracles for."""
+                                try:
+                                    # Get stream IDs from configured oracles
+                                    for oracle in self._stream_manager._oracles.values():
+                                        stream_id = getattr(oracle, 'stream_id', None)
+                                        if not stream_id:
+                                            stream_id = getattr(oracle.config, 'stream_id', None)
+                                        if stream_id:
+                                            # Define callback for received observations
+                                            def make_callback(sid):
+                                                def on_observation(observation):
+                                                    logging.debug(f"Received observation for {sid}: {observation}")
+                                                    # Emit to websocket bridge if available
+                                                    try:
+                                                        from web.p2p_bridge import get_bridge
+                                                        bridge = get_bridge()
+                                                        if bridge:
+                                                            bridge._on_observation(observation)
+                                                    except Exception:
+                                                        pass
+                                                return on_observation
+
+                                            await self._oracle_network.subscribe_to_stream(
+                                                stream_id, make_callback(stream_id)
+                                            )
+                                            logging.info(f"Auto-subscribed to stream: {stream_id}", color="cyan")
+                                except Exception as e:
+                                    logging.debug(f"Auto-subscribe failed: {e}")
+
+                            self._p2p_peers.spawn_background_task(auto_subscribe_oracle_streams)
+                            logging.info("Auto-subscribing to oracle streams...", color="cyan")
             except ImportError:
                 logging.debug("streams-lite not available, oracle streams disabled")
             except Exception as e:
@@ -3514,6 +3561,312 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        # =====================================================================
+        # Oracle Network IPC Endpoints
+        # =====================================================================
+
+        @ipc_app.route('/p2p/oracle/stats')
+        def p2p_oracle_stats():
+            """Get oracle network statistics."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            result = {
+                'started': False,
+                'subscribed_streams': 0,
+                'my_oracle_registrations': 0,
+                'known_oracles': 0,
+                'cached_observations': 0,
+            }
+
+            if oracle:
+                result['started'] = True
+                if hasattr(oracle, 'get_stats'):
+                    stats = oracle.get_stats()
+                    result.update(stats)
+                else:
+                    result['subscribed_streams'] = len(getattr(oracle, '_subscriptions', {}))
+                    result['my_oracle_registrations'] = len(getattr(oracle, '_my_registrations', {}))
+                    result['known_oracles'] = len(getattr(oracle, '_known_oracles', {}))
+                    result['cached_observations'] = len(getattr(oracle, '_observation_cache', {}))
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/oracle/observations')
+        def p2p_oracle_observations():
+            """Get recent observations."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            limit = request.args.get('limit', 20, type=int)
+
+            result = {'observations': [], 'count': 0}
+
+            if oracle and hasattr(oracle, 'get_recent_observations'):
+                observations = oracle.get_recent_observations(limit=limit)
+                result['observations'] = [
+                    {
+                        'stream_id': o.stream_id if hasattr(o, 'stream_id') else str(o.get('stream_id', '')),
+                        'value': o.value if hasattr(o, 'value') else o.get('value'),
+                        'timestamp': o.timestamp if hasattr(o, 'timestamp') else o.get('timestamp', 0),
+                        'oracle_address': getattr(o, 'oracle_address', '') or o.get('oracle_address', ''),
+                    }
+                    for o in observations
+                ]
+                result['count'] = len(result['observations'])
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/oracle/subscribe', methods=['POST'])
+        def p2p_oracle_subscribe():
+            """Subscribe to observations for a stream."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            # Define a callback that emits to websocket via bridge
+            def on_observation(observation):
+                try:
+                    from web.p2p_bridge import get_bridge
+                    bridge = get_bridge()
+                    if bridge:
+                        bridge._on_observation(observation)
+                except Exception as e:
+                    logging.debug(f"Failed to emit observation: {e}")
+
+            async def do_subscribe():
+                return await oracle.subscribe_to_stream(stream_id, on_observation)
+
+            try:
+                import trio
+                success = trio.from_thread.run_sync(
+                    lambda: trio.lowlevel.current_trio_token().run_sync_soon(
+                        trio.from_thread.run, do_subscribe
+                    )
+                )
+            except Exception:
+                # Fallback to running in trio context via nursery
+                try:
+                    success = trio.from_thread.run(do_subscribe)
+                except Exception as e:
+                    logging.warning(f"Failed to subscribe via trio: {e}")
+                    return jsonify({'success': False, 'error': str(e)}), 500
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Subscribed to observations for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to subscribe'})
+
+        @ipc_app.route('/p2p/oracle/unsubscribe', methods=['POST'])
+        def p2p_oracle_unsubscribe():
+            """Unsubscribe from observations for a stream."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            async def do_unsubscribe():
+                return await oracle.unsubscribe_from_stream(stream_id)
+
+            try:
+                import trio
+                success = trio.from_thread.run(do_unsubscribe)
+            except Exception as e:
+                logging.warning(f"Failed to unsubscribe via trio: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+            if success:
+                return jsonify({
+                    'success': True,
+                    'stream_id': stream_id,
+                    'message': f'Unsubscribed from observations for {stream_id}'
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to unsubscribe or not subscribed'})
+
+        @ipc_app.route('/p2p/oracle/known')
+        def p2p_oracle_known():
+            """Get list of known oracles (discovered via registry)."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            result = {'oracles': [], 'count': 0}
+
+            if oracle and hasattr(oracle, '_oracle_registrations'):
+                oracles_list = []
+                for stream_id, registrations in oracle._oracle_registrations.items():
+                    for oracle_addr, reg in registrations.items():
+                        oracles_list.append({
+                            'stream_id': stream_id,
+                            'oracle_address': oracle_addr,
+                            'timestamp': getattr(reg, 'timestamp', 0),
+                        })
+                result['oracles'] = oracles_list
+                result['count'] = len(oracles_list)
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/oracle/my_registrations')
+        def p2p_oracle_my_registrations():
+            """Get list of streams we're registered as oracle for."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            result = {'registrations': [], 'count': 0}
+
+            if oracle and hasattr(oracle, '_my_registrations'):
+                registrations = []
+                for stream_id, reg in oracle._my_registrations.items():
+                    registrations.append({
+                        'stream_id': stream_id,
+                        'oracle_address': getattr(reg, 'oracle', ''),
+                        'timestamp': getattr(reg, 'timestamp', 0),
+                    })
+                result['registrations'] = registrations
+                result['count'] = len(registrations)
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/oracle/subscriptions')
+        def p2p_oracle_subscriptions():
+            """Get list of streams we're subscribed to for observations."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            result = {'subscriptions': [], 'count': 0}
+
+            if oracle and hasattr(oracle, '_subscribed_streams'):
+                result['subscriptions'] = list(oracle._subscribed_streams.keys())
+                result['count'] = len(result['subscriptions'])
+
+            return jsonify(result)
+
+        # =====================================================================
+        # Stream Registry IPC Endpoints
+        # =====================================================================
+
+        @ipc_app.route('/p2p/streams/stats')
+        def p2p_streams_stats():
+            """Get stream registry statistics."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            result = {
+                'started': False,
+                'known_streams': 0,
+                'my_claims': 0,
+                'total_claims': 0,
+            }
+
+            if registry:
+                result['started'] = True
+                if hasattr(registry, 'get_stats'):
+                    stats = registry.get_stats()
+                    result.update(stats)
+                else:
+                    result['known_streams'] = len(getattr(registry, '_streams', {}))
+                    result['my_claims'] = len(getattr(registry, '_my_claims', {}))
+                    result['total_claims'] = sum(
+                        len(claims) for claims in getattr(registry, '_stream_claims', {}).values()
+                    )
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/streams/list')
+        def p2p_streams_list():
+            """Get list of known streams."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            result = {'streams': [], 'count': 0}
+
+            if registry and hasattr(registry, 'get_all_streams'):
+                streams = registry.get_all_streams()
+                result['streams'] = [
+                    {
+                        'stream_id': s.stream_id if hasattr(s, 'stream_id') else s.get('stream_id', ''),
+                        'source': s.source if hasattr(s, 'source') else s.get('source', ''),
+                        'author': s.author if hasattr(s, 'author') else s.get('author', ''),
+                        'claim_count': getattr(s, 'claim_count', 0) or s.get('claim_count', 0),
+                    }
+                    for s in streams
+                ]
+                result['count'] = len(result['streams'])
+
+            return jsonify(result)
+
+        # =====================================================================
+        # Prediction Protocol IPC Endpoints
+        # =====================================================================
+
+        @ipc_app.route('/p2p/predictions/stats')
+        def p2p_predictions_stats():
+            """Get prediction protocol statistics."""
+            prediction = getattr(startupDag, '_prediction_protocol', None)
+
+            result = {
+                'started': False,
+                'subscribed_streams': 0,
+                'my_predictions': 0,
+                'cached_predictions': 0,
+                'cached_scores': 0,
+                'my_average_score': 0.0,
+            }
+
+            if prediction:
+                result['started'] = True
+                if hasattr(prediction, 'get_stats'):
+                    stats = prediction.get_stats()
+                    result['subscribed_streams'] = stats.get('subscribed_streams', 0)
+                    result['my_predictions'] = stats.get('my_predictions', 0)
+                    result['cached_predictions'] = stats.get('cached_predictions', 0)
+                    result['cached_scores'] = stats.get('cached_scores', 0)
+                    result['my_average_score'] = stats.get('my_average_score', 0.0)
+                else:
+                    result['my_predictions'] = len(getattr(prediction, '_my_predictions', []))
+                    result['cached_scores'] = len(getattr(prediction, '_scores', []))
+                    result['subscribed_streams'] = len(getattr(prediction, '_subscriptions', {}))
+                    # Calculate average score if possible
+                    if hasattr(prediction, 'evrmore_address') and hasattr(prediction, 'get_predictor_average_score'):
+                        try:
+                            result['my_average_score'] = prediction.get_predictor_average_score(prediction.evrmore_address)
+                        except:
+                            pass
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/predictions/recent')
+        def p2p_predictions_recent():
+            """Get recent predictions."""
+            prediction = getattr(startupDag, '_prediction_protocol', None)
+            limit = request.args.get('limit', 20, type=int)
+
+            result = {'predictions': [], 'count': 0}
+
+            if prediction and hasattr(prediction, 'get_recent_predictions'):
+                predictions = prediction.get_recent_predictions(limit=limit)
+                result['predictions'] = [
+                    {
+                        'stream_id': p.stream_id if hasattr(p, 'stream_id') else p.get('stream_id', ''),
+                        'predicted_value': p.predicted_value if hasattr(p, 'predicted_value') else p.get('predicted_value'),
+                        'timestamp': p.timestamp if hasattr(p, 'timestamp') else p.get('timestamp', 0),
+                        'score': getattr(p, 'score', None) or p.get('score'),
+                    }
+                    for p in predictions
+                ]
+                result['count'] = len(result['predictions'])
+
+            return jsonify(result)
+
         def run_ipc_server():
             from waitress import serve
             logging.info(f"Starting P2P IPC API on 127.0.0.1:{port}", color="cyan")
@@ -3592,15 +3945,6 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
     except Exception as e:
         logging.error(f"Failed to start Web UI: {e}")
         return None
-
-
-def getStart() -> Union[StartupDag, None]:
-    """Get the singleton instance of StartupDag.
-
-    Returns:
-        The singleton StartupDag instance if it exists, None otherwise.
-    """
-    return StartupDag._instances.get(StartupDag, None)
 
 
 if __name__ == "__main__":

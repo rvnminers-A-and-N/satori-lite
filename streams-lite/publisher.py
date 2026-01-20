@@ -137,10 +137,14 @@ class P2PPublisher:
             await self._peers.start()
             self._owns_peers = True
 
-        # Initialize oracle network for publishing
-        from satorip2p.protocol.oracle_network import OracleNetwork
-        self._oracle_network = OracleNetwork(self._peers)
-        await self._oracle_network.start()
+        # Only create new OracleNetwork if not injected
+        if self._oracle_network is None:
+            from satorip2p.protocol.oracle_network import OracleNetwork
+            self._oracle_network = OracleNetwork(self._peers)
+            await self._oracle_network.start()
+            logger.debug("Created new OracleNetwork for publisher")
+        else:
+            logger.debug("Using injected OracleNetwork for publisher")
 
         logger.debug("P2P publisher components initialized")
 
@@ -172,6 +176,15 @@ class P2PPublisher:
         """
         self._peers = peers
         self._owns_peers = False
+
+    def set_oracle_network(self, oracle_network):
+        """
+        Inject a shared OracleNetwork instance.
+
+        Call this before start() to share the OracleNetwork instance
+        with the main neuron instead of creating a new one.
+        """
+        self._oracle_network = oracle_network
 
     async def publish_observation(
         self,

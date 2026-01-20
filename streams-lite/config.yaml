@@ -41,7 +41,7 @@ oracles:
     name: Bitcoin Price USD
     stream_id: crypto|satori|BTC|USD
     enabled: true  # Enabled for testing
-    poll_interval: 60  # 1 minute for testing
+    poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: bitcoin
       currency: usd
@@ -51,7 +51,7 @@ oracles:
     name: Ethereum Price USD
     stream_id: crypto|satori|ETH|USD
     enabled: true  # Enabled for testing
-    poll_interval: 60  # 1 minute for testing
+    poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: ethereum
       currency: usd
@@ -60,7 +60,7 @@ oracles:
     name: Evrmore Price USD
     stream_id: crypto|satori|EVR|USD
     enabled: true  # Enabled for testing
-    poll_interval: 120  # 2 minutes for testing
+    poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: evrmore
       currency: usd

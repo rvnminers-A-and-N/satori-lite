@@ -45,6 +45,7 @@ class StreamManager:
         peers=None,
         identity=None,
         send_to_ui=None,
+        oracle_network=None,
     ):
         """
         Initialize the stream manager.
@@ -54,11 +55,13 @@ class StreamManager:
             peers: Shared Peers instance from neuron (optional)
             identity: Shared identity from neuron (optional)
             send_to_ui: Callback to emit WebSocket events (optional)
+            oracle_network: Shared OracleNetwork instance for publishing (optional)
         """
         self.config_path = config_path or self._find_config()
         self._peers = peers
         self._identity = identity
         self._send_to_ui = send_to_ui
+        self._oracle_network = oracle_network
 
         # Components
         self._publisher: Optional[P2PPublisher] = None
@@ -126,6 +129,10 @@ class StreamManager:
         # Share peers instance if provided
         if self._peers:
             self._publisher.set_peers(self._peers)
+
+        # Share oracle network if provided (use main network's instance)
+        if self._oracle_network:
+            self._publisher.set_oracle_network(self._oracle_network)
 
         await self._publisher.start()
 
@@ -272,11 +279,18 @@ class StreamManager:
         Call this from a Trio nursery to enable oracle polling.
         This is needed because py-libp2p uses Trio, not asyncio.
         """
+        import random
+
         if not HAS_TRIO:
             logger.warning("Trio not available, polling disabled")
             return
 
         logger.info(f"Starting Trio polling loop for {len(self._oracles)} oracles")
+
+        # Add random initial delay (0-60s) to stagger containers hitting same APIs
+        initial_jitter = random.uniform(0, 60)
+        logger.info(f"Waiting {initial_jitter:.1f}s initial jitter before starting oracle polling")
+        await trio.sleep(initial_jitter)
 
         while self._running:
             for name, oracle in list(self._oracles.items()):
@@ -288,18 +302,22 @@ class StreamManager:
                     now = time.time()
                     time_since_last = now - oracle._last_publish_time
 
-                    if time_since_last >= oracle.config.poll_interval:
+                    # Add small random jitter (0-30s) to poll interval to prevent API stampede
+                    jitter = random.uniform(0, 30) if oracle._last_publish_time > 0 else 0
+                    effective_interval = oracle.config.poll_interval + jitter
+
+                    if time_since_last >= effective_interval:
                         # Fetch and publish
                         try:
                             value = await oracle.fetch_value()
                             if value is not None and oracle.validate_value(value):
-                                await oracle._publish_observation(value)
+                                await oracle._publish(value)
                         except Exception as e:
                             oracle._consecutive_errors += 1
                             oracle._total_errors += 1
                             if oracle._on_error:
                                 oracle._on_error(oracle, e)
-                            logger.debug(f"Oracle {name} fetch error: {e}")
+                            logger.warning(f"Oracle {name} error: {e}")
 
                 except Exception as e:
                     logger.debug(f"Oracle {name} poll error: {e}")

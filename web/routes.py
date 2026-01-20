@@ -6429,36 +6429,22 @@ def register_routes(app):
     @app.route('/api/p2p/predictions/stats')
     @login_required
     def api_p2p_predictions_stats():
-        """Get prediction protocol statistics."""
+        """Get prediction protocol statistics via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
-                return jsonify({
-                    'started': False,
-                    'subscribed_streams': 0,
-                    'my_predictions': 0,
-                    'cached_predictions': 0,
-                    'cached_scores': 0,
-                })
+            result = _ipc_get('/p2p/predictions/stats')
+            if result:
+                return jsonify(result)
 
-            protocol = startup._prediction_protocol
-            stats = protocol.get_stats()
-
-            # Get my average score
-            my_address = ''
-            if hasattr(protocol, 'evrmore_address'):
-                my_address = protocol.evrmore_address
-            my_avg_score = protocol.get_predictor_average_score(my_address) if my_address else 0.0
-
+            # Fallback if IPC not available
             return jsonify({
-                'started': stats.get('started', False),
-                'subscribed_streams': stats.get('subscribed_streams', 0),
-                'my_predictions': stats.get('my_predictions', 0),
-                'cached_predictions': stats.get('cached_predictions', 0),
-                'cached_scores': stats.get('cached_scores', 0),
-                'my_average_score': round(my_avg_score, 4),
+                'started': False,
+                'subscribed_streams': 0,
+                'my_predictions': 0,
+                'cached_predictions': 0,
+                'cached_scores': 0,
+                'my_average_score': 0.0,
             })
 
         except Exception as e:
@@ -6561,40 +6547,49 @@ def register_routes(app):
             logger.warning(f"Failed to get stream observations: {e}")
             return jsonify({'observations': [], 'error': str(e)})
 
+    @app.route('/api/p2p/oracle/observations')
+    @login_required
+    def api_p2p_oracle_observations():
+        """Get recent observations via IPC API."""
+        try:
+            from web.wsgi import _ipc_get
+
+            limit = request.args.get('limit', 20, type=int)
+            result = _ipc_get(f'/p2p/oracle/observations?limit={limit}')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'observations': [], 'count': 0})
+
+        except Exception as e:
+            logger.warning(f"Failed to get observations: {e}")
+            return jsonify({'observations': [], 'error': str(e)})
+
     @app.route('/api/p2p/oracle/observations/latest')
     @login_required
     def api_p2p_oracle_observations_latest():
-        """Get latest observations across all subscribed streams."""
+        """Get latest observations via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'observations': [], 'error': 'Oracle network not initialized'})
+            result = _ipc_get('/p2p/oracle/observations?limit=100')
+            if result and result.get('observations'):
+                # Get latest per stream
+                latest_by_stream = {}
+                for obs in result['observations']:
+                    stream_id = obs.get('stream_id', '')
+                    if stream_id not in latest_by_stream:
+                        latest_by_stream[stream_id] = obs
 
-            oracle = startup._oracle_network
+                latest = list(latest_by_stream.values())
+                latest.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
 
-            # Get latest from each cached stream
-            latest = []
-            if hasattr(oracle, '_observation_cache'):
-                for stream_id, obs_list in oracle._observation_cache.items():
-                    if obs_list:
-                        obs = obs_list[-1]
-                        latest.append({
-                            'stream_id': stream_id,
-                            'value': obs.value,
-                            'timestamp': obs.timestamp,
-                            'oracle': obs.oracle,
-                            'hash': obs.hash,
-                        })
+                return jsonify({
+                    'observations': latest,
+                    'total': len(latest),
+                })
 
-            # Sort by timestamp descending
-            latest.sort(key=lambda x: x['timestamp'], reverse=True)
-
-            return jsonify({
-                'observations': latest,
-                'total': len(latest),
-            })
+            return jsonify({'observations': [], 'total': 0})
 
         except Exception as e:
             logger.warning(f"Failed to get latest observations: {e}")
@@ -6603,36 +6598,25 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/oracles')
     @login_required
     def api_p2p_oracle_oracles():
-        """List all registered oracles."""
+        """List all registered oracles via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'oracles': [], 'error': 'Oracle network not initialized'})
+            result = _ipc_get('/p2p/oracle/known')
+            if result and result.get('oracles'):
+                stream_id = request.args.get('stream_id')
+                oracles = result['oracles']
 
-            oracle = startup._oracle_network
-            stream_id = request.args.get('stream_id')  # Optional filter
+                # Filter by stream_id if specified
+                if stream_id:
+                    oracles = [o for o in oracles if o.get('stream_id') == stream_id]
 
-            oracles = []
-            if hasattr(oracle, '_oracle_registrations'):
-                for sid, registrations in oracle._oracle_registrations.items():
-                    if stream_id and sid != stream_id:
-                        continue
-                    for oracle_addr, reg in registrations.items():
-                        oracles.append({
-                            'stream_id': sid,
-                            'oracle': oracle_addr,
-                            'peer_id': reg.peer_id,
-                            'timestamp': reg.timestamp,
-                            'reputation': reg.reputation,
-                            'is_primary': reg.is_primary,
-                        })
+                return jsonify({
+                    'oracles': oracles,
+                    'total': len(oracles),
+                })
 
-            return jsonify({
-                'oracles': oracles,
-                'total': len(oracles),
-            })
+            return jsonify({'oracles': [], 'total': 0})
 
         except Exception as e:
             logger.warning(f"Failed to list oracles: {e}")
@@ -6689,10 +6673,9 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/subscribe', methods=['POST'])
     @login_required
     def api_p2p_oracle_subscribe():
-        """Subscribe to observations for a stream."""
+        """Subscribe to observations for a stream via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
             stream_id = data.get('stream_id')
@@ -6700,39 +6683,12 @@ def register_routes(app):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+            result = _ipc_post('/p2p/oracle/subscribe', {'stream_id': stream_id})
+            if result:
+                return jsonify(result)
 
-            oracle = startup._oracle_network
-
-            # Define a callback that will emit to websocket
-            def on_observation(observation):
-                try:
-                    from web.p2p_bridge import get_bridge
-                    bridge = get_bridge()
-                    if bridge:
-                        bridge._on_observation(observation)
-                except Exception as e:
-                    logger.debug(f"Failed to emit observation: {e}")
-
-            async def do_subscribe():
-                return await oracle.subscribe_to_stream(stream_id, on_observation)
-
-            try:
-                loop = asyncio.new_event_loop()
-                success = loop.run_until_complete(do_subscribe())
-            finally:
-                loop.close()
-
-            if success:
-                return jsonify({
-                    'success': True,
-                    'stream_id': stream_id,
-                    'message': f'Subscribed to observations for {stream_id}'
-                })
-            else:
-                return jsonify({'success': False, 'error': 'Failed to subscribe'})
+            # Fallback if IPC not available
+            return jsonify({'success': False, 'error': 'IPC API not available'}), 503
 
         except Exception as e:
             logger.warning(f"Failed to subscribe to observations: {e}")
@@ -6741,10 +6697,9 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/unsubscribe', methods=['POST'])
     @login_required
     def api_p2p_oracle_unsubscribe():
-        """Unsubscribe from observations for a stream."""
+        """Unsubscribe from observations for a stream via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
             stream_id = data.get('stream_id')
@@ -6752,29 +6707,12 @@ def register_routes(app):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+            result = _ipc_post('/p2p/oracle/unsubscribe', {'stream_id': stream_id})
+            if result:
+                return jsonify(result)
 
-            oracle = startup._oracle_network
-
-            async def do_unsubscribe():
-                return await oracle.unsubscribe_from_stream(stream_id)
-
-            try:
-                loop = asyncio.new_event_loop()
-                success = loop.run_until_complete(do_unsubscribe())
-            finally:
-                loop.close()
-
-            if success:
-                return jsonify({
-                    'success': True,
-                    'stream_id': stream_id,
-                    'message': f'Unsubscribed from observations for {stream_id}'
-                })
-            else:
-                return jsonify({'success': False, 'error': 'Failed to unsubscribe or not subscribed'})
+            # Fallback if IPC not available
+            return jsonify({'success': False, 'error': 'IPC API not available'}), 503
 
         except Exception as e:
             logger.warning(f"Failed to unsubscribe from observations: {e}")
@@ -6783,33 +6721,76 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/stats')
     @login_required
     def api_p2p_oracle_stats():
-        """Get oracle network statistics."""
+        """Get oracle network statistics via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({
-                    'started': False,
-                    'subscribed_streams': 0,
-                    'my_oracle_registrations': 0,
-                    'known_oracles': 0,
-                    'cached_observations': 0,
-                })
+            result = _ipc_get('/p2p/oracle/stats')
+            if result:
+                return jsonify(result)
 
-            oracle = startup._oracle_network
-            stats = oracle.get_stats()
-
+            # Fallback if IPC not available
             return jsonify({
-                'started': stats.get('started', False),
-                'subscribed_streams': stats.get('subscribed_streams', 0),
-                'my_oracle_registrations': stats.get('my_oracle_registrations', 0),
-                'known_oracles': stats.get('known_oracles', 0),
-                'cached_observations': stats.get('cached_observations', 0),
+                'started': False,
+                'subscribed_streams': 0,
+                'my_oracle_registrations': 0,
+                'known_oracles': 0,
+                'cached_observations': 0,
             })
 
         except Exception as e:
             logger.warning(f"Failed to get oracle stats: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/known')
+    @login_required
+    def api_p2p_oracle_known():
+        """Get list of known oracles via IPC API."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/oracle/known')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'oracles': [], 'count': 0})
+
+        except Exception as e:
+            logger.warning(f"Failed to get known oracles: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/my_registrations')
+    @login_required
+    def api_p2p_oracle_my_registrations():
+        """Get list of our oracle registrations via IPC API."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/oracle/my_registrations')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'registrations': [], 'count': 0})
+
+        except Exception as e:
+            logger.warning(f"Failed to get my oracle registrations: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/subscriptions')
+    @login_required
+    def api_p2p_oracle_subscriptions():
+        """Get list of streams we're subscribed to via IPC API."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/oracle/subscriptions')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'subscriptions': [], 'count': 0})
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle subscriptions: {e}")
             return jsonify({'error': str(e)})
 
     # =========================================================================
@@ -7165,27 +7146,20 @@ def register_routes(app):
     @app.route('/api/p2p/streams/stats')
     @login_required
     def api_p2p_streams_stats():
-        """Get stream registry statistics."""
+        """Get stream registry statistics via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
-                return jsonify({
-                    'started': False,
-                    'known_streams': 0,
-                    'my_claims': 0,
-                    'total_claims': 0,
-                })
+            result = _ipc_get('/p2p/streams/stats')
+            if result:
+                return jsonify(result)
 
-            registry = startup._stream_registry
-            stats = registry.get_stats()
-
+            # Fallback if IPC not available
             return jsonify({
-                'started': stats.get('started', False),
-                'known_streams': stats.get('known_streams', 0),
-                'my_claims': stats.get('my_claims', 0),
-                'total_claims': stats.get('total_claims', 0),
+                'started': False,
+                'known_streams': 0,
+                'my_claims': 0,
+                'total_claims': 0,
             })
 
         except Exception as e:
