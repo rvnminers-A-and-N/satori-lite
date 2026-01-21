@@ -370,6 +370,26 @@ class P2PWebSocketBridge:
         except Exception as e:
             logger.debug(f"Failed to handle observation: {e}")
 
+    def emit_own_observation(self, stream_id: str, value, peer_id: str = '', oracle_address: str = '') -> None:
+        """
+        Emit event when WE publish an observation to the network.
+        Call this after successfully publishing an observation.
+        """
+        try:
+            self._emit('network.observation', {
+                'stream_id': stream_id,
+                'peer_id': peer_id,
+                'oracle_address': oracle_address,
+                'value': value,
+                'timestamp': int(time.time()),
+                'type': 'observation',
+                'is_own': True,  # Flag to indicate this is our own observation
+            })
+            self._counts['observations'] += 1
+            self._record_hourly_activity('observations')
+        except Exception as e:
+            logger.debug(f"Failed to emit own observation: {e}")
+
     def _on_consensus_vote(self, vote) -> None:
         """Handle consensus vote event."""
         try:

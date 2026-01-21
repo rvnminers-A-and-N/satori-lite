@@ -1204,6 +1204,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     from satorip2p.protocol.oracle_network import OracleNetwork
                     self._oracle_network = OracleNetwork(self._p2p_peers)
                     await self._oracle_network.start()
+                    # Wire up oracle network to peers for role detection
+                    if hasattr(self._p2p_peers, 'set_oracle_network'):
+                        self._p2p_peers.set_oracle_network(self._oracle_network)
                     logging.info("P2P oracle network initialized", color="cyan")
                 except Exception as e:
                     logging.debug(f"Oracle network: {e}")
@@ -1741,6 +1744,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
                         self._oracle_network = OracleNetwork(self._p2p_peers)
                         await self._oracle_network.start()
+                        # Wire up oracle network to peers for role detection
+                        if hasattr(self._p2p_peers, 'set_oracle_network'):
+                            self._p2p_peers.set_oracle_network(self._oracle_network)
 
                 if hasattr(self, '_oracle_network') and self._oracle_network is not None:
                     success = await self._oracle_network.subscribe_to_stream(
@@ -1809,6 +1815,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     if hasattr(self, '_p2p_peers') and self._p2p_peers is not None:
                         self._oracle_network = OracleNetwork(self._p2p_peers)
                         await self._oracle_network.start()
+                        # Wire up oracle network to peers for role detection
+                        if hasattr(self._p2p_peers, 'set_oracle_network'):
+                            self._p2p_peers.set_oracle_network(self._oracle_network)
 
                 if hasattr(self, '_oracle_network') and self._oracle_network is not None:
                     observation = await self._oracle_network.publish_observation(
@@ -1818,6 +1827,19 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     )
                     if observation:
                         logging.debug(f"Published observation to P2P: {stream_id[:16]}... = {value}")
+                        # Emit WebSocket event for our own observation
+                        try:
+                            from web.p2p_bridge import get_bridge
+                            bridge = get_bridge()
+                            if bridge:
+                                bridge.emit_own_observation(
+                                    stream_id=stream_id,
+                                    value=value,
+                                    peer_id=getattr(observation, 'peer_id', ''),
+                                    oracle_address=getattr(observation, 'oracle', '')
+                                )
+                        except Exception as e:
+                            logging.debug(f"Failed to emit own observation event: {e}")
                         return True
 
             except ImportError:

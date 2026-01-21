@@ -3443,23 +3443,24 @@
     }
 
     function handleObservation(data) {
-        const peerId = data.peer_id || data.node_id;
+        const peerId = data.peer_id || data.node_id || '';
         counters.observations++;
         document.getElementById('observationsCount').textContent = counters.observations;
 
         const myPeerId = document.getElementById('myPeerIdFull')?.textContent;
-        const isOwnObservation = myPeerId && peerId === myPeerId;
+        const isOwnObservation = data.is_own || (myPeerId && peerId === myPeerId);
 
         createStreamParticle('observation');
 
         if (isOwnObservation) {
             pulseOwnNode('observation');
+            // Show that WE published an observation
+            addEvent('observation', `Published observation: ${data.stream_id || 'stream'}`);
         } else {
-            // Received observation from another peer - packet flows TO us (no pulse on other nodes)
+            // Received observation from another peer - packet flows TO us
             sendNetworkPacketToUs(peerId, 'observation');
+            addEvent('observation', `Observation from ${peerId || 'peer'}`);
         }
-
-        addEvent('observation', `Observation from ${peerId}`);
     }
 
     function handleConsensusPhase(data) {
@@ -4478,15 +4479,25 @@
 
         const lane = laneMap[type] || 0;
 
+        // Add random offset to prevent stacking when multiple arrive at once
+        const startOffset = Math.random() * 40;  // 0-40px random offset
+        const delay = Math.random() * 200;  // 0-200ms random delay
+
         const particle = svg.append('circle')
             .attr('r', 4)
-            .attr('cx', 80)
+            .attr('cx', 80 + startOffset)
             .attr('cy', lane * laneHeight + laneHeight / 2)
             .attr('fill', colorMap[type])
-            .style('filter', `drop-shadow(0 0 4px ${colorMap[type]})`);
+            .style('filter', `drop-shadow(0 0 4px ${colorMap[type]})`)
+            .style('opacity', 0);
 
+        // Fade in with delay, then animate across
         particle.transition()
-            .duration(2500)
+            .delay(delay)
+            .duration(100)
+            .style('opacity', 1)
+            .transition()
+            .duration(2500 - delay)
             .ease(d3.easeLinear)
             .attr('cx', width)
             .remove();

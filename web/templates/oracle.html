@@ -383,12 +383,46 @@
                                         <tr>
                                             <th>Stream</th>
                                             <th>Value</th>
-                                            <th>Oracle</th>
+                                            <th>Oracle Address</th>
+                                            <th>Peer ID</th>
                                             <th>Timestamp</th>
                                         </tr>
                                     </thead>
                                     <tbody id="observationsTable">
-                                        <tr><td colspan="4" class="text-center text-muted py-3">Loading...</td></tr>
+                                        <tr><td colspan="5" class="text-center text-muted py-3">Loading...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- My Published Observations -->
+            <div class="row g-4 mb-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">cloud_upload</i>
+                                My Published Observations
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadMyPublishedObservations()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Stream</th>
+                                            <th>Value</th>
+                                            <th>Timestamp</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="myObservationsTable">
+                                        <tr><td colspan="3" class="text-center text-muted py-3">Loading...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -463,11 +497,13 @@ document.addEventListener('DOMContentLoaded', function() {
     loadMyClaimedStreams();
     loadRegisteredOracles();
     loadLatestObservations();
+    loadMyPublishedObservations();
 
     // Set up periodic refresh
     setInterval(loadStreamStats, 30000);
     setInterval(loadOracleStats, 30000);
     setInterval(loadLatestObservations, 15000);
+    setInterval(loadMyPublishedObservations, 30000);
 });
 
 // =========================================================================
@@ -729,6 +765,29 @@ async function registerAsOracle() {
 // OBSERVATIONS FUNCTIONS
 // =========================================================================
 
+async function loadMyPublishedObservations() {
+    const tbody = document.getElementById('myObservationsTable');
+    try {
+        const result = await apiCall('/p2p/oracle/observations/my');
+        if (result.observations && result.observations.length > 0) {
+            tbody.innerHTML = result.observations.map(obs => {
+                const date = new Date(obs.timestamp * 1000);
+                const streamId = obs.stream_id || '';
+                return `<tr>
+                    <td>${streamId}</td>
+                    <td><strong>${obs.value}</strong></td>
+                    <td>${date.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">No published observations yet. Register as an oracle and publish observations.</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load my observations:', e);
+        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Failed to load</td></tr>';
+    }
+}
+
 async function loadLatestObservations() {
     const tbody = document.getElementById('observationsTable');
     try {
@@ -738,19 +797,21 @@ async function loadLatestObservations() {
                 const date = new Date(obs.timestamp * 1000);
                 const streamId = obs.stream_id || '';
                 const oracleAddr = obs.oracle_address || '';
+                const peerId = obs.peer_id || '--';
                 return `<tr>
                     <td>${streamId}</td>
                     <td><strong>${obs.value}</strong></td>
                     <td><code>${oracleAddr}</code></td>
+                    <td>${peerId}</td>
                     <td>${date.toLocaleString()}</td>
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No observations yet. Subscribe to streams to see observations.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No observations yet. Subscribe to streams to see observations.</td></tr>';
         }
     } catch (e) {
         console.error('Failed to load observations:', e);
-        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger py-3">Failed to load</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Failed to load</td></tr>';
     }
 }
 
@@ -773,6 +834,7 @@ async function publishObservation(event) {
             resultSpan.innerHTML = '<span class="text-success">Published!</span>';
             document.getElementById('observationForm').reset();
             loadLatestObservations();
+            loadMyPublishedObservations();
             setTimeout(() => { resultSpan.innerHTML = ''; }, 3000);
         } else {
             resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';

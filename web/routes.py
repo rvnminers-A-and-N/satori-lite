@@ -3324,13 +3324,23 @@ def register_routes(app):
                     result['peer_id'] = str(peers.node_id)
                 if hasattr(peers, 'get_connected_peers'):
                     connected = peers.get_connected_peers()
+                    # Get identify handler for role info
+                    identify = getattr(peers, '_identify_handler', None)
                     for p in connected[:20]:  # Limit to 20
+                        peer_id = str(p)
+                        # Try to get role from identify protocol
+                        role = 'Node'  # Default base role
+                        if identify and hasattr(identify, '_known_peers'):
+                            peer_info = identify._known_peers.get(peer_id)
+                            if peer_info and hasattr(peer_info, 'roles'):
+                                # Join roles into display string (e.g., "Node, Oracle")
+                                role = ', '.join(r.capitalize() for r in peer_info.roles) if peer_info.roles else 'Node'
                         result['peers'].append({
-                            'id': str(getattr(p, 'peer_id', str(p))),
-                            'latency': getattr(p, 'latency', None),
-                            'location': getattr(p, 'location', None),
-                            'streams': getattr(p, 'stream_count', 0),
-                            'role': getattr(p, 'role', 'Predictor'),
+                            'id': peer_id,
+                            'latency': peers._peer_latencies.get(peer_id) if hasattr(peers, '_peer_latencies') else None,
+                            'location': None,
+                            'streams': 0,
+                            'role': role,
                         })
             # Also add evrmore_address from identity
             if identity and hasattr(identity, 'address'):
@@ -3761,13 +3771,22 @@ def register_routes(app):
                 p2p = startup._p2p_peers
                 if hasattr(p2p, 'get_connected_peers'):
                     connected = p2p.get_connected_peers()
+                    # Get identify handler for role info
+                    identify = getattr(p2p, '_identify_handler', None)
                     for p in connected:
+                        peer_id = str(p)
+                        # Try to get role from identify protocol
+                        role = 'Node'  # Default base role
+                        if identify and hasattr(identify, '_known_peers'):
+                            peer_info = identify._known_peers.get(peer_id)
+                            if peer_info and hasattr(peer_info, 'roles'):
+                                role = ', '.join(r.capitalize() for r in peer_info.roles) if peer_info.roles else 'Node'
                         peers.append({
-                            'id': getattr(p, 'peer_id', str(p)),
-                            'latency': getattr(p, 'latency', None),
-                            'location': getattr(p, 'location', None),
-                            'streams': getattr(p, 'stream_count', 0),
-                            'role': getattr(p, 'role', 'Predictor'),
+                            'id': peer_id,
+                            'latency': p2p._peer_latencies.get(peer_id) if hasattr(p2p, '_peer_latencies') else None,
+                            'location': None,
+                            'streams': 0,
+                            'role': role,
                         })
 
             return jsonify({'peers': peers})
@@ -6593,6 +6612,42 @@ def register_routes(app):
 
         except Exception as e:
             logger.warning(f"Failed to get latest observations: {e}")
+            return jsonify({'observations': [], 'error': str(e)})
+
+    @app.route('/api/p2p/oracle/observations/my')
+    @login_required
+    def api_p2p_oracle_observations_my():
+        """Get our own published observations."""
+        try:
+            from satorineuron.init import start
+
+            limit = request.args.get('limit', 50, type=int)
+
+            startup = start.getStart() if hasattr(start, 'getStart') else None
+            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
+                return jsonify({'observations': [], 'total': 0, 'error': 'Oracle network not initialized'})
+
+            oracle = startup._oracle_network
+            observations = oracle.get_my_published_observations(limit=limit)
+
+            result = []
+            for obs in observations:
+                result.append({
+                    'stream_id': obs.stream_id,
+                    'value': obs.value,
+                    'timestamp': obs.timestamp,
+                    'oracle_address': obs.oracle,
+                    'peer_id': getattr(obs, 'peer_id', ''),
+                    'signature': obs.signature or '',
+                })
+
+            return jsonify({
+                'observations': result,
+                'total': len(result),
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get my published observations: {e}")
             return jsonify({'observations': [], 'error': str(e)})
 
     @app.route('/api/p2p/oracle/oracles')
