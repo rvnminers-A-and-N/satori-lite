@@ -238,8 +238,10 @@ neuron/
 │   └── add_client_streams_table.sql          (NEW)
 ├── engine-lite/storage/
 │   └── sqlite_manager.py                      (MODIFIED - added 6 methods)
-├── CLIENT_STREAMS_ANALYSIS.md                 (NEW - documentation)
-└── CLIENT_STREAMS_IMPLEMENTATION_SUMMARY.md   (NEW - this file)
+├── docs/analysis/
+│   └── CLIENT_STREAMS_ANALYSIS.md             (NEW - documentation)
+└── docs/implementation/
+    └── CLIENT_STREAMS_IMPLEMENTATION_SUMMARY.md   (NEW - this file)
 ```
 
 ## Next Steps

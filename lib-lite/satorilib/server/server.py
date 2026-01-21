@@ -860,13 +860,22 @@ class SatoriServerClient(object):
         return False, ''
 
     def mineToAddressStatus(self) -> Union[str, None]:
-        ''' get reward address from central server using v1 API '''
+        ''' get reward address from central server using v1 API (no auth required) '''
         try:
-            response = self._makeAuthenticatedCall(
-                function=requests.get,
-                endpoint='/api/v1/peer/reward-address')
+            # No authentication needed - query by wallet_pubkey
+            response = requests.get(
+                self.url + f'/api/v1/peer/reward-address?wallet_pubkey={self.wallet.pubkey}')
+
+            # 404 is expected for new peers that haven't registered yet
+            if response.status_code == 404:
+                return ''
+
             if response.status_code > 399:
+                logging.warning(
+                    f'Failed to get reward address: {response.status_code} {response.text}',
+                    color='yellow')
                 return None
+
             # Parse JSON response
             data = response.json()
             reward_address = data.get('reward_address', '')
