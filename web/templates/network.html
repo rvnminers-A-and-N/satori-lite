@@ -327,7 +327,23 @@
         color: white;
         z-index: 100;
         max-width: 240px;
+        max-height: calc(100% - 20px);
+        overflow-y: auto;
         backdrop-filter: blur(5px);
+    }
+    .network-legend::-webkit-scrollbar {
+        width: 6px;
+    }
+    .network-legend::-webkit-scrollbar-track {
+        background: rgba(255,255,255,0.1);
+        border-radius: 3px;
+    }
+    .network-legend::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.3);
+        border-radius: 3px;
+    }
+    .network-legend::-webkit-scrollbar-thumb:hover {
+        background: rgba(255,255,255,0.5);
     }
     .legend-title {
         font-weight: bold;
@@ -723,6 +739,7 @@
         text-transform: uppercase;
         font-weight: 600;
     }
+    .peer-role-node { background: rgba(128, 128, 128, 0.2); color: #888; }
     .peer-role-oracle { background: rgba(0, 170, 255, 0.2); color: #00aaff; }
     .peer-role-signer { background: rgba(255, 215, 0, 0.2); color: #ffd700; }
     .peer-role-pool-operator { background: rgba(170, 68, 255, 0.2); color: #aa44ff; }
@@ -1608,11 +1625,11 @@
                     <div class="row text-center">
                         <div class="col-4">
                             <h4 id="protocolOracleReg" class="mb-0 text-success">--</h4>
-                            <small class="text-muted">My Oracles</small>
+                            <small class="text-muted">My Oracle Streams</small>
                         </div>
                         <div class="col-4">
                             <h4 id="protocolOracleKnown" class="mb-0 text-info">--</h4>
-                            <small class="text-muted">Known</small>
+                            <small class="text-muted">Known Oracles</small>
                         </div>
                         <div class="col-4">
                             <h4 id="protocolOracleObs" class="mb-0 text-warning">--</h4>
@@ -2337,6 +2354,11 @@
                         <div class="legend-dot" style="background: linear-gradient(135deg, #5a5aff 0%, #3a3acc 100%);"></div>
                         <span>Your Node</span>
                     </div>
+                    <div class="legend-item" data-type="node" onclick="toggleNodeType('node')">
+                        <div class="legend-dot" style="background: #888;"></div>
+                        <span>Node</span>
+                        <small class="legend-hint">base participant</small>
+                    </div>
                     <div class="legend-item" data-type="predictor" onclick="toggleNodeType('predictor')">
                         <div class="legend-dot" style="background: #00ff88;"></div>
                         <span>Predictor</span>
@@ -2863,6 +2885,7 @@
                                 <label class="text-muted small">Filter by Role</label>
                                 <select id="peerRoleFilter" class="form-select form-select-sm" onchange="filterPeersByRole();">
                                     <option value="all">All Roles</option>
+                                    <option value="node">Nodes (base only)</option>
                                     <option value="predictor">Predictors</option>
                                     <option value="oracle">Oracles</option>
                                     <option value="signer">Signers</option>
@@ -2917,6 +2940,10 @@
                             <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
                                 <small class="text-muted d-block">Total</small>
                                 <span id="statsTotalPeers" class="text-primary fw-bold">0</span>
+                            </div>
+                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                                <small class="text-muted d-block">Nodes</small>
+                                <span id="statsNodeCount" style="color: #888;">0</span>
                             </div>
                             <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
                                 <small class="text-muted d-block">Predictors</small>
@@ -3096,6 +3123,7 @@
     // Helper function to get primary role from peer (handles both 'role' string and 'roles' array)
     // Returns the highest-priority role based on hierarchy: signer > oracle > relay > predictor
     const ROLE_HIERARCHY = ['signer', 'oracle', 'relay', 'predictor'];
+    const SPECIALIZED_ROLES = ['signer', 'oracle', 'relay', 'predictor', 'pool-operator', 'delegate'];
 
     function getPeerRole(peer) {
         let roles = [];
@@ -3118,6 +3146,30 @@
         return roles[0];
     }
 
+    // Check if peer has ONLY the base "node" role (no specialized roles)
+    function isNodeOnly(peer) {
+        let roles = [];
+        if (peer.roles && Array.isArray(peer.roles) && peer.roles.length > 0) {
+            roles = peer.roles.map(r => r.toLowerCase());
+        } else if (peer.role) {
+            roles = peer.role.toLowerCase().split(',').map(r => r.trim());
+        }
+
+        // Node-only if no specialized roles are present
+        return !roles.some(r => SPECIALIZED_ROLES.includes(r));
+    }
+
+    // Check if peer has a specific role (handles multi-role peers)
+    function hasRole(peer, targetRole) {
+        let roles = [];
+        if (peer.roles && Array.isArray(peer.roles) && peer.roles.length > 0) {
+            roles = peer.roles.map(r => r.toLowerCase());
+        } else if (peer.role) {
+            roles = peer.role.toLowerCase().split(',').map(r => r.trim());
+        }
+        return roles.includes(targetRole.toLowerCase());
+    }
+
     // ============================================
     // GLOBAL STATE
     // ============================================
@@ -3126,7 +3178,7 @@
     let activityChart = null;
     let graphData = { nodes: [], links: [] };
     let graphSimulation = null;  // Persistent simulation to avoid jostling on updates
-    let visibleNodeTypes = new Set(['you', 'oracle', 'signer', 'relay', 'predictor', 'unknown']);
+    let visibleNodeTypes = new Set(['you', 'node', 'oracle', 'signer', 'relay', 'predictor', 'unknown']);
     let visibleEdgeTypes = new Set(['p2p', 'lending', 'delegation']);
 
     // Counters
@@ -7012,7 +7064,13 @@
         const role = document.getElementById('peerRoleFilter').value;
         let filtered = knownPeersData;
         if (role !== 'all') {
-            filtered = knownPeersData.filter(p => getPeerRole(p) === role);
+            if (role === 'node') {
+                // Filter to peers whose primary role is node (base only)
+                filtered = knownPeersData.filter(p => getPeerRole(p) === 'node' || isNodeOnly(p));
+            } else {
+                // Filter by primary role
+                filtered = knownPeersData.filter(p => getPeerRole(p) === role);
+            }
         }
         renderKnownPeers(filtered);
     }
@@ -7167,7 +7225,9 @@
 
         document.getElementById('statsTotalPeers').textContent = peers.length;
 
-        // Count by role
+        // Count by primary role (mutually exclusive - each peer counted once)
+        // Uses role hierarchy: signer > oracle > relay > predictor > node
+        const nodes = peers.filter(p => getPeerRole(p) === 'node' || isNodeOnly(p)).length;
         const predictors = peers.filter(p => getPeerRole(p) === 'predictor').length;
         const oracles = peers.filter(p => getPeerRole(p) === 'oracle').length;
         const signers = peers.filter(p => getPeerRole(p) === 'signer').length;
@@ -7176,6 +7236,7 @@
         const delegates = peers.filter(p => getPeerRole(p) === 'delegate').length;
         const connected = peers.filter(p => p.connected).length;
 
+        document.getElementById('statsNodeCount').textContent = nodes;
         document.getElementById('statsPredictorCount').textContent = predictors;
         document.getElementById('statsOracleCount').textContent = oracles;
         document.getElementById('statsSignerCount').textContent = signers;
@@ -7209,13 +7270,15 @@
 
     function getRoleBadgeClass(role) {
         const roleMap = {
+            'node': 'bg-secondary',
             'oracle': 'bg-gradient-info',
             'signer': 'bg-gradient-warning',
             'pool-operator': 'bg-secondary',
             'predictor': 'bg-gradient-success',
+            'relay': 'bg-danger',
             'delegate': 'bg-gradient-primary'
         };
-        return roleMap[role.toLowerCase()] || 'bg-gradient-secondary';
+        return roleMap[role.toLowerCase()] || 'bg-secondary';
     }
 
     // CSS for spin animation

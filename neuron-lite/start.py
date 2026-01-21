@@ -3637,6 +3637,41 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        @ipc_app.route('/p2p/oracle/observations/my')
+        def p2p_oracle_observations_my():
+            """Get our own published observations with pagination."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 50, type=int)
+
+            result = {'observations': [], 'total': 0, 'page': page, 'per_page': per_page}
+
+            if oracle and hasattr(oracle, 'get_my_published_observations'):
+                # Get all observations (no limit in the method)
+                all_observations = oracle.get_my_published_observations()
+                total = len(all_observations)
+
+                # Paginate
+                start_idx = (page - 1) * per_page
+                end_idx = start_idx + per_page
+                paginated = all_observations[start_idx:end_idx]
+
+                result['observations'] = [
+                    {
+                        'stream_id': o.stream_id if hasattr(o, 'stream_id') else str(o.get('stream_id', '')),
+                        'value': o.value if hasattr(o, 'value') else o.get('value'),
+                        'timestamp': o.timestamp if hasattr(o, 'timestamp') else o.get('timestamp', 0),
+                        'oracle_address': getattr(o, 'oracle', '') or o.get('oracle', ''),
+                        'peer_id': getattr(o, 'peer_id', '') or o.get('peer_id', ''),
+                        'signature': getattr(o, 'signature', '') or o.get('signature', ''),
+                    }
+                    for o in paginated
+                ]
+                result['total'] = total
+                result['total_pages'] = (total + per_page - 1) // per_page
+
+            return jsonify(result)
+
         @ipc_app.route('/p2p/oracle/subscribe', methods=['POST'])
         def p2p_oracle_subscribe():
             """Subscribe to observations for a stream."""

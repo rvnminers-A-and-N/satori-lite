@@ -3326,15 +3326,28 @@ def register_routes(app):
                     connected = peers.get_connected_peers()
                     # Get identify handler for role info
                     identify = getattr(peers, '_identify_handler', None)
+                    # Get oracle network for supplementing role info
+                    oracle_network = getattr(startup, '_oracle_network', None) if startup else None
+                    # Build set of peer_ids that are registered oracles
+                    oracle_peer_ids = set()
+                    if oracle_network and hasattr(oracle_network, '_oracle_registrations'):
+                        for stream_regs in oracle_network._oracle_registrations.values():
+                            for reg in stream_regs.values():
+                                if hasattr(reg, 'peer_id') and reg.peer_id:
+                                    oracle_peer_ids.add(reg.peer_id)
                     for p in connected[:20]:  # Limit to 20
                         peer_id = str(p)
                         # Try to get role from identify protocol
-                        role = 'Node'  # Default base role
+                        roles = ['node']  # Default base role
                         if identify and hasattr(identify, '_known_peers'):
                             peer_info = identify._known_peers.get(peer_id)
-                            if peer_info and hasattr(peer_info, 'roles'):
-                                # Join roles into display string (e.g., "Node, Oracle")
-                                role = ', '.join(r.capitalize() for r in peer_info.roles) if peer_info.roles else 'Node'
+                            if peer_info and hasattr(peer_info, 'roles') and peer_info.roles:
+                                roles = list(peer_info.roles)
+                        # Supplement with oracle info if peer is a registered oracle
+                        if peer_id in oracle_peer_ids and 'oracle' not in roles:
+                            roles.append('oracle')
+                        # Format roles for display
+                        role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
                         result['peers'].append({
                             'id': peer_id,
                             'latency': peers._peer_latencies.get(peer_id) if hasattr(peers, '_peer_latencies') else None,
@@ -3773,14 +3786,28 @@ def register_routes(app):
                     connected = p2p.get_connected_peers()
                     # Get identify handler for role info
                     identify = getattr(p2p, '_identify_handler', None)
+                    # Get oracle network for supplementing role info
+                    oracle_network = getattr(startup, '_oracle_network', None)
+                    # Build set of peer_ids that are registered oracles
+                    oracle_peer_ids = set()
+                    if oracle_network and hasattr(oracle_network, '_oracle_registrations'):
+                        for stream_regs in oracle_network._oracle_registrations.values():
+                            for reg in stream_regs.values():
+                                if hasattr(reg, 'peer_id') and reg.peer_id:
+                                    oracle_peer_ids.add(reg.peer_id)
                     for p in connected:
                         peer_id = str(p)
                         # Try to get role from identify protocol
-                        role = 'Node'  # Default base role
+                        roles = ['node']  # Default base role
                         if identify and hasattr(identify, '_known_peers'):
                             peer_info = identify._known_peers.get(peer_id)
-                            if peer_info and hasattr(peer_info, 'roles'):
-                                role = ', '.join(r.capitalize() for r in peer_info.roles) if peer_info.roles else 'Node'
+                            if peer_info and hasattr(peer_info, 'roles') and peer_info.roles:
+                                roles = list(peer_info.roles)
+                        # Supplement with oracle info if peer is a registered oracle
+                        if peer_id in oracle_peer_ids and 'oracle' not in roles:
+                            roles.append('oracle')
+                        # Format roles for display
+                        role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
                         peers.append({
                             'id': peer_id,
                             'latency': p2p._peer_latencies.get(peer_id) if hasattr(p2p, '_peer_latencies') else None,
@@ -6617,34 +6644,17 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/observations/my')
     @login_required
     def api_p2p_oracle_observations_my():
-        """Get our own published observations."""
+        """Get our own published observations via IPC API with pagination."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
 
-            limit = request.args.get('limit', 50, type=int)
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 50, type=int)
+            result = _ipc_get(f'/p2p/oracle/observations/my?page={page}&per_page={per_page}')
+            if result:
+                return jsonify(result)
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'observations': [], 'total': 0, 'error': 'Oracle network not initialized'})
-
-            oracle = startup._oracle_network
-            observations = oracle.get_my_published_observations(limit=limit)
-
-            result = []
-            for obs in observations:
-                result.append({
-                    'stream_id': obs.stream_id,
-                    'value': obs.value,
-                    'timestamp': obs.timestamp,
-                    'oracle_address': obs.oracle,
-                    'peer_id': getattr(obs, 'peer_id', ''),
-                    'signature': obs.signature or '',
-                })
-
-            return jsonify({
-                'observations': result,
-                'total': len(result),
-            })
+            return jsonify({'observations': [], 'total': 0, 'page': page, 'per_page': per_page})
 
         except Exception as e:
             logger.warning(f"Failed to get my published observations: {e}")
