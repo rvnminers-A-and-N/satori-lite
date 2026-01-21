@@ -358,7 +358,8 @@ class P2PWebSocketBridge:
 
             self._emit('network.observation', {
                 'stream_id': stream_id,
-                'node_id': getattr(observation, 'oracle_address', getattr(observation, 'oracle', 'unknown')),
+                'peer_id': getattr(observation, 'peer_id', ''),
+                'oracle_address': getattr(observation, 'oracle', ''),
                 'value': getattr(observation, 'value', None),
                 'timestamp': getattr(observation, 'timestamp', int(time.time())),
                 'type': 'observation',

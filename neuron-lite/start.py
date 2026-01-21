@@ -3606,7 +3606,8 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         'stream_id': o.stream_id if hasattr(o, 'stream_id') else str(o.get('stream_id', '')),
                         'value': o.value if hasattr(o, 'value') else o.get('value'),
                         'timestamp': o.timestamp if hasattr(o, 'timestamp') else o.get('timestamp', 0),
-                        'oracle_address': getattr(o, 'oracle_address', '') or o.get('oracle_address', ''),
+                        'oracle_address': getattr(o, 'oracle', '') or o.get('oracle', ''),
+                        'peer_id': getattr(o, 'peer_id', '') or o.get('peer_id', ''),
                     }
                     for o in observations
                 ]
@@ -3712,6 +3713,9 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         oracles_list.append({
                             'stream_id': stream_id,
                             'oracle_address': oracle_addr,
+                            'peer_id': getattr(reg, 'peer_id', ''),
+                            'reputation': getattr(reg, 'reputation', 1.0),
+                            'is_primary': getattr(reg, 'is_primary', False),
                             'timestamp': getattr(reg, 'timestamp', 0),
                         })
                 result['oracles'] = oracles_list

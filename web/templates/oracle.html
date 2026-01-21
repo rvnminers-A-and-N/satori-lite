@@ -656,13 +656,13 @@ async function loadRegisteredOracles() {
         const result = await apiCall('/p2p/oracle/oracles');
         if (result.oracles && result.oracles.length > 0) {
             tbody.innerHTML = result.oracles.map(o => {
-                const addrShort = o.oracle.length > 12 ? o.oracle.substring(0, 6) + '...' + o.oracle.substring(o.oracle.length - 4) : o.oracle;
-                const peerShort = o.peer_id ? (o.peer_id.substring(0, 12) + '...') : '--';
+                const addr = o.oracle_address || '';
+                const peerId = o.peer_id || '--';
                 return `<tr>
-                    <td>${o.stream_id.substring(0, 20)}...</td>
-                    <td><code title="${o.oracle}">${addrShort}</code></td>
-                    <td title="${o.peer_id}">${peerShort}</td>
-                    <td>${o.reputation || 0}</td>
+                    <td>${o.stream_id || ''}</td>
+                    <td><code>${addr}</code></td>
+                    <td>${peerId}</td>
+                    <td>${o.reputation || 1.0}</td>
                     <td>${o.is_primary ? '<span class="badge bg-primary">Primary</span>' : '<span class="badge bg-secondary">Secondary</span>'}</td>
                 </tr>`;
             }).join('');
@@ -736,12 +736,12 @@ async function loadLatestObservations() {
         if (result.observations && result.observations.length > 0) {
             tbody.innerHTML = result.observations.map(obs => {
                 const date = new Date(obs.timestamp * 1000);
-                const streamShort = obs.stream_id.length > 25 ? obs.stream_id.substring(0, 25) + '...' : obs.stream_id;
-                const oracleShort = obs.oracle.length > 12 ? obs.oracle.substring(0, 6) + '...' + obs.oracle.substring(obs.oracle.length - 4) : obs.oracle;
+                const streamId = obs.stream_id || '';
+                const oracleAddr = obs.oracle_address || '';
                 return `<tr>
-                    <td title="${obs.stream_id}">${streamShort}</td>
+                    <td>${streamId}</td>
                     <td><strong>${obs.value}</strong></td>
-                    <td><code title="${obs.oracle}">${oracleShort}</code></td>
+                    <td><code>${oracleAddr}</code></td>
                     <td>${date.toLocaleString()}</td>
                 </tr>`;
             }).join('');
