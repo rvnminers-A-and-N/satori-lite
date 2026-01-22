@@ -406,6 +406,7 @@
                             <h5 class="mb-0">
                                 <i class="material-icons align-middle me-2">cloud_upload</i>
                                 My Published Observations
+                                <small class="text-muted ms-2" id="myObsCount"></small>
                             </h5>
                             <button class="btn btn-sm btn-outline-secondary" onclick="loadMyPublishedObservations()">
                                 <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
@@ -425,6 +426,20 @@
                                         <tr><td colspan="3" class="text-center text-muted py-3">Loading...</td></tr>
                                     </tbody>
                                 </table>
+                            </div>
+                            <!-- Pagination controls -->
+                            <div class="card-footer d-flex justify-content-between align-items-center" id="myObsPagination" style="display: none !important;">
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary" id="myObsPrevBtn" onclick="changeMyObsPage(-1)" disabled>
+                                        <i class="material-icons align-middle" style="font-size: 16px;">chevron_left</i> Previous
+                                    </button>
+                                </div>
+                                <span class="text-muted" id="myObsPageInfo">Page 1 of 1</span>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary" id="myObsNextBtn" onclick="changeMyObsPage(1)" disabled>
+                                        Next <i class="material-icons align-middle" style="font-size: 16px;">chevron_right</i>
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -698,7 +713,7 @@ async function loadRegisteredOracles() {
                     <td>${o.stream_id || ''}</td>
                     <td><code>${addr}</code></td>
                     <td>${peerId}</td>
-                    <td>${o.reputation || 1.0}</td>
+                    <td>${Math.round((o.reputation || 1.0) * 100)}%</td>
                     <td>${o.is_primary ? '<span class="badge bg-primary">Primary</span>' : '<span class="badge bg-secondary">Secondary</span>'}</td>
                 </tr>`;
             }).join('');
@@ -765,10 +780,32 @@ async function registerAsOracle() {
 // OBSERVATIONS FUNCTIONS
 // =========================================================================
 
-async function loadMyPublishedObservations() {
+// Pagination state for My Published Observations
+let myObsCurrentPage = 1;
+let myObsTotalPages = 1;
+const myObsPerPage = 50;
+
+async function loadMyPublishedObservations(page = 1) {
     const tbody = document.getElementById('myObservationsTable');
+    const countEl = document.getElementById('myObsCount');
+    const paginationEl = document.getElementById('myObsPagination');
+    const pageInfoEl = document.getElementById('myObsPageInfo');
+    const prevBtn = document.getElementById('myObsPrevBtn');
+    const nextBtn = document.getElementById('myObsNextBtn');
+
     try {
-        const result = await apiCall('/p2p/oracle/observations/my');
+        const result = await apiCall(`/p2p/oracle/observations/my?page=${page}&per_page=${myObsPerPage}`);
+
+        // Update pagination state
+        myObsCurrentPage = result.page || 1;
+        myObsTotalPages = result.total_pages || 1;
+        const total = result.total || 0;
+
+        // Update count display
+        if (countEl) {
+            countEl.textContent = total > 0 ? `(${total} total)` : '';
+        }
+
         if (result.observations && result.observations.length > 0) {
             tbody.innerHTML = result.observations.map(obs => {
                 const date = new Date(obs.timestamp * 1000);
@@ -779,12 +816,35 @@ async function loadMyPublishedObservations() {
                     <td>${date.toLocaleString()}</td>
                 </tr>`;
             }).join('');
+
+            // Show pagination if more than one page
+            if (myObsTotalPages > 1) {
+                paginationEl.style.display = 'flex';
+                paginationEl.style.setProperty('display', 'flex', 'important');
+                pageInfoEl.textContent = `Page ${myObsCurrentPage} of ${myObsTotalPages}`;
+                prevBtn.disabled = myObsCurrentPage <= 1;
+                nextBtn.disabled = myObsCurrentPage >= myObsTotalPages;
+            } else {
+                paginationEl.style.display = 'none';
+                paginationEl.style.setProperty('display', 'none', 'important');
+            }
         } else {
             tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">No published observations yet. Register as an oracle and publish observations.</td></tr>';
+            paginationEl.style.display = 'none';
+            paginationEl.style.setProperty('display', 'none', 'important');
         }
     } catch (e) {
         console.error('Failed to load my observations:', e);
         tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Failed to load</td></tr>';
+        paginationEl.style.display = 'none';
+        paginationEl.style.setProperty('display', 'none', 'important');
+    }
+}
+
+function changeMyObsPage(delta) {
+    const newPage = myObsCurrentPage + delta;
+    if (newPage >= 1 && newPage <= myObsTotalPages) {
+        loadMyPublishedObservations(newPage);
     }
 }
 

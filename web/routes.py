@@ -876,12 +876,12 @@ def register_routes(app):
     @login_required
     def api_reward_address():
         """
-        Get or set reward address using local config (synced with server by start.py).
+        Get or set reward address via IPC (synced with server by neuron process).
 
-        GET: Reads from local config (fast, no server call)
-        POST: Updates both local config and server (via setRewardAddress)
+        GET: Reads from neuron process via IPC
+        POST: Updates via neuron process which syncs with server
         """
-        startup = get_startup()
+        from web.wsgi import _ipc_get, _ipc_post
 
         if request.method == 'POST':
             # Get the new reward address from request
@@ -889,29 +889,28 @@ def register_routes(app):
             if not data or 'reward_address' not in data:
                 return jsonify({'error': 'Missing reward_address'}), 400
 
-            new_address = data['reward_address']
+            # Update via IPC
+            try:
+                result = _ipc_post('/reward-address', data)
+                if result and result.get('success'):
+                    return jsonify({'success': True, 'reward_address': result.get('reward_address', '')})
+                else:
+                    error = result.get('error', 'Failed to set reward address') if result else 'IPC failed'
+                    return jsonify({'error': error}), 500
+            except Exception as e:
+                logger.error(f"Error setting reward address via IPC: {e}")
+                return jsonify({'error': str(e)}), 500
 
-            # Update both local config and server using setRewardAddress
-            if startup:
-                try:
-                    success = startup.setRewardAddress(address=new_address, globally=True)
-                    if success:
-                        return jsonify({'success': True, 'reward_address': new_address})
-                    else:
-                        return jsonify({'error': 'Failed to set reward address'}), 500
-                except Exception as e:
-                    logger.error(f"Error setting reward address: {e}")
-                    return jsonify({'error': str(e)}), 500
+        # GET request - read via IPC
+        try:
+            result = _ipc_get('/reward-address')
+            if result:
+                return jsonify({'reward_address': result.get('reward_address', '')})
             else:
-                # Fallback to proxy if startup not available
-                return proxy_api('/peer/reward-address', 'POST', request.json)
-
-        # GET request - read from local config
-        if startup and hasattr(startup, 'configRewardAddress'):
-            return jsonify({'reward_address': startup.configRewardAddress or ''})
-        else:
-            # Fallback to proxy if startup not available
-            return proxy_api('/peer/reward-address')
+                return jsonify({'reward_address': ''})
+        except Exception as e:
+            logger.warning(f"Error getting reward address via IPC: {e}")
+            return jsonify({'reward_address': ''})
 
     # =========================================================================
     # STAKE MANAGEMENT - P2P ENABLED ROUTES
@@ -2624,11 +2623,13 @@ def register_routes(app):
     @app.route('/api/p2p/governance/status')
     @login_required
     def api_p2p_governance_status():
-        """Get governance protocol status and statistics."""
+        """Get governance protocol status and statistics via IPC."""
         try:
-            from satorineuron.init import start
-
-            result = {
+            from web.wsgi import _ipc_get
+            result = _ipc_get('/p2p/governance/status')
+            if result:
+                return jsonify(result)
+            return jsonify({
                 'started': False,
                 'total_proposals': 0,
                 'active_proposals': 0,
@@ -2638,15 +2639,7 @@ def register_routes(app):
                 'my_voting_power': 0,
                 'can_propose': False,
                 'can_vote': False,
-            }
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-                if hasattr(governance, 'get_stats'):
-                    result.update(governance.get_stats())
-
-            return jsonify(result)
+            })
         except Exception as e:
             logger.warning(f"Failed to get governance status: {e}")
             return jsonify({'error': str(e)})
@@ -2654,24 +2647,13 @@ def register_routes(app):
     @app.route('/api/p2p/governance/proposals')
     @login_required
     def api_p2p_governance_proposals():
-        """Get all governance proposals."""
+        """Get all governance proposals via IPC."""
         try:
-            from satorineuron.init import start
-
-            result = {'proposals': [], 'active': []}
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-                if hasattr(governance, 'get_all_proposals'):
-                    proposals = governance.get_all_proposals()
-                    result['proposals'] = [p.to_dict() for p in proposals.values()]
-
-                if hasattr(governance, 'get_active_proposals'):
-                    active = governance.get_active_proposals()
-                    result['active'] = [p.to_dict() for p in active]
-
-            return jsonify(result)
+            from web.wsgi import _ipc_get
+            result = _ipc_get('/p2p/governance/proposals')
+            if result:
+                return jsonify(result)
+            return jsonify({'proposals': [], 'active': []})
         except Exception as e:
             logger.warning(f"Failed to get proposals: {e}")
             return jsonify({'proposals': [], 'error': str(e)})
@@ -2679,32 +2661,13 @@ def register_routes(app):
     @app.route('/api/p2p/governance/proposal/<proposal_id>')
     @login_required
     def api_p2p_governance_proposal(proposal_id):
-        """Get a specific proposal with tally."""
+        """Get a specific proposal with tally via IPC."""
         try:
-            from satorineuron.init import start
-
-            result = {'proposal': None, 'tally': None, 'my_vote': None}
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-
-                if hasattr(governance, 'get_proposal'):
-                    proposal = governance.get_proposal(proposal_id)
-                    if proposal:
-                        result['proposal'] = proposal.to_dict()
-
-                if hasattr(governance, 'get_proposal_tally'):
-                    tally = governance.get_proposal_tally(proposal_id)
-                    if tally:
-                        result['tally'] = tally.to_dict()
-
-                if hasattr(governance, 'get_my_vote'):
-                    vote = governance.get_my_vote(proposal_id)
-                    if vote:
-                        result['my_vote'] = vote.to_dict()
-
-            return jsonify(result)
+            from web.wsgi import _ipc_get
+            result = _ipc_get(f'/p2p/governance/proposal/{proposal_id}')
+            if result:
+                return jsonify(result)
+            return jsonify({'proposal': None, 'tally': None, 'my_vote': None})
         except Exception as e:
             logger.warning(f"Failed to get proposal: {e}")
             return jsonify({'proposal': None, 'error': str(e)})
@@ -2712,42 +2675,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/propose', methods=['POST'])
     @login_required
     def api_p2p_governance_propose():
-        """Create a new governance proposal."""
+        """Create a new governance proposal via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            title = data.get('title', '')
-            description = data.get('description', '')
-            proposal_type = data.get('proposal_type', 'community')
-            changes = data.get('changes', {})
-            voting_period_days = data.get('voting_period_days', 7)
-
-            if not title or not description:
-                return jsonify({'success': False, 'error': 'title and description required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            from satorip2p.protocol.governance import ProposalType
-            ptype = ProposalType(proposal_type)
-
-            loop = asyncio.new_event_loop()
-            try:
-                proposal = loop.run_until_complete(
-                    governance.create_proposal(title, description, ptype, changes, voting_period_days)
-                )
-            finally:
-                loop.close()
-
-            if proposal:
-                return jsonify({'success': True, 'proposal_id': proposal.proposal_id})
-            else:
-                return jsonify({'success': False, 'error': 'Failed to create proposal'})
+            result = _ipc_post('/p2p/governance/propose', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to create proposal: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2755,36 +2691,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/vote', methods=['POST'])
     @login_required
     def api_p2p_governance_vote():
-        """Vote on a proposal."""
+        """Vote on a proposal via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            proposal_id = data.get('proposal_id', '')
-            choice = data.get('choice', 'abstain')
-
-            if not proposal_id:
-                return jsonify({'success': False, 'error': 'proposal_id required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            from satorip2p.protocol.governance import VoteChoice
-            vote_choice = VoteChoice(choice)
-
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(
-                    governance.vote(proposal_id, vote_choice)
-                )
-            finally:
-                loop.close()
-
-            return jsonify({'success': success})
+            result = _ipc_post('/p2p/governance/vote', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to vote: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2792,37 +2707,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/comment', methods=['POST'])
     @login_required
     def api_p2p_governance_comment():
-        """Add a comment to a proposal."""
+        """Add a comment to a proposal via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            proposal_id = data.get('proposal_id', '')
-            content = data.get('content', '')
-            is_status_update = data.get('is_status_update', False)
-
-            if not proposal_id or not content:
-                return jsonify({'success': False, 'error': 'proposal_id and content required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            loop = asyncio.new_event_loop()
-            try:
-                comment = loop.run_until_complete(
-                    governance.add_comment(proposal_id, content, is_status_update)
-                )
-            finally:
-                loop.close()
-
-            if comment:
-                return jsonify({'success': True, 'comment_id': comment.comment_id})
-            else:
-                return jsonify({'success': False, 'error': 'Failed to add comment'})
+            result = _ipc_post('/p2p/governance/comment', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to add comment: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2830,20 +2723,13 @@ def register_routes(app):
     @app.route('/api/p2p/governance/comments/<proposal_id>')
     @login_required
     def api_p2p_governance_comments(proposal_id):
-        """Get comments for a proposal."""
+        """Get comments for a proposal via IPC."""
         try:
-            from satorineuron.init import start
-
-            result = {'comments': []}
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-                if hasattr(governance, 'get_comments'):
-                    comments = governance.get_comments(proposal_id)
-                    result['comments'] = [c.to_dict() for c in comments]
-
-            return jsonify(result)
+            from web.wsgi import _ipc_get
+            result = _ipc_get(f'/p2p/governance/comments/{proposal_id}')
+            if result:
+                return jsonify(result)
+            return jsonify({'comments': []})
         except Exception as e:
             logger.warning(f"Failed to get comments: {e}")
             return jsonify({'comments': [], 'error': str(e)})
@@ -2851,33 +2737,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/pin', methods=['POST'])
     @login_required
     def api_p2p_governance_pin():
-        """Pin or unpin a proposal (signers only)."""
+        """Pin or unpin a proposal (signers only) via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            proposal_id = data.get('proposal_id', '')
-            pinned = data.get('pinned', True)
-
-            if not proposal_id:
-                return jsonify({'success': False, 'error': 'proposal_id required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(
-                    governance.pin_proposal(proposal_id, pinned)
-                )
-            finally:
-                loop.close()
-
-            return jsonify({'success': success})
+            result = _ipc_post('/p2p/governance/pin', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to pin proposal: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2885,32 +2753,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/execute', methods=['POST'])
     @login_required
     def api_p2p_governance_execute():
-        """Mark a proposal as executed (signers only)."""
+        """Mark a proposal as executed (signers only) via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            proposal_id = data.get('proposal_id', '')
-
-            if not proposal_id:
-                return jsonify({'success': False, 'error': 'proposal_id required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(
-                    governance.mark_executed(proposal_id)
-                )
-            finally:
-                loop.close()
-
-            return jsonify({'success': success})
+            result = _ipc_post('/p2p/governance/execute', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to execute proposal: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2918,32 +2769,15 @@ def register_routes(app):
     @app.route('/api/p2p/governance/emergency-cancel', methods=['POST'])
     @login_required
     def api_p2p_governance_emergency_cancel():
-        """Vote to emergency cancel a proposal (signers only, 3-of-5)."""
+        """Vote to emergency cancel a proposal (signers only, 3-of-5) via IPC."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
-            proposal_id = data.get('proposal_id', '')
-
-            if not proposal_id:
-                return jsonify({'success': False, 'error': 'proposal_id required'})
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_governance') or not startup._governance:
-                return jsonify({'success': False, 'error': 'Governance protocol not available'})
-
-            governance = startup._governance
-
-            loop = asyncio.new_event_loop()
-            try:
-                success = loop.run_until_complete(
-                    governance.emergency_cancel_vote(proposal_id)
-                )
-            finally:
-                loop.close()
-
-            return jsonify({'success': success})
+            result = _ipc_post('/p2p/governance/emergency-cancel', data)
+            if result:
+                return jsonify(result)
+            return jsonify({'success': False, 'error': 'IPC request failed'})
         except Exception as e:
             logger.warning(f"Failed to emergency cancel: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -2951,20 +2785,14 @@ def register_routes(app):
     @app.route('/api/p2p/governance/pinned')
     @login_required
     def api_p2p_governance_pinned():
-        """Get all pinned proposals."""
+        """Get all pinned proposals via IPC."""
         try:
-            from satorineuron.init import start
-
-            result = {'proposals': []}
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if startup and hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-                if hasattr(governance, 'get_pinned_proposals'):
-                    pinned = governance.get_pinned_proposals()
-                    result['proposals'] = [p.to_dict() for p in pinned]
-
-            return jsonify(result)
+            from web.wsgi import _ipc_get
+            result = _ipc_get('/p2p/governance/pinned')
+            if result:
+                # The IPC returns 'pinned' key, adapt to 'proposals' for consistency
+                return jsonify({'proposals': result.get('pinned', [])})
+            return jsonify({'proposals': []})
         except Exception as e:
             logger.warning(f"Failed to get pinned: {e}")
             return jsonify({'proposals': [], 'error': str(e)})
@@ -2972,19 +2800,16 @@ def register_routes(app):
     @app.route('/api/p2p/governance/voting-power')
     @login_required
     def api_p2p_governance_voting_power():
-        """Get detailed voting power breakdown for the current user."""
+        """Get detailed voting power breakdown for the current user via IPC."""
         try:
-            from satorineuron.init import start
-            from satorip2p.protocol.governance import (
-                STAKE_WEIGHT, UPTIME_BONUS_90_DAYS, SIGNER_BONUS,
-                MIN_STAKE_TO_VOTE
-            )
-            from satorip2p.protocol.signer import is_authorized_signer
-
-            result = {
+            from web.wsgi import _ipc_get
+            result = _ipc_get('/p2p/governance/voting-power')
+            if result:
+                return jsonify(result)
+            return jsonify({
                 'success': True,
                 'base_stake': 0.0,
-                'stake_weight': STAKE_WEIGHT,
+                'stake_weight': 1.0,
                 'uptime_days': 0,
                 'uptime_bonus_pct': 0,
                 'is_signer': False,
@@ -2992,60 +2817,7 @@ def register_routes(app):
                 'total_voting_power': 0.0,
                 'network_total_power': 0.0,
                 'active_voters': 0,
-            }
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup:
-                return jsonify(result)
-
-            evrmore_address = ""
-            if hasattr(startup, '_identity_bridge') and startup._identity_bridge:
-                evrmore_address = startup._identity_bridge.evrmore_address or ""
-
-            # Get base stake
-            base_stake = 50.0  # Default
-            if hasattr(startup, 'identity') and startup.identity:
-                try:
-                    balances = startup.identity.getBalances()
-                    if balances and 'SATORI' in balances:
-                        base_stake = float(balances['SATORI'])
-                except Exception:
-                    pass
-            result['base_stake'] = base_stake
-
-            # Get uptime days
-            uptime_days = 0
-            if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                uptime_tracker = startup._uptime_tracker
-                if hasattr(uptime_tracker, 'get_uptime_streak_days'):
-                    uptime_days = uptime_tracker.get_uptime_streak_days(evrmore_address)
-            result['uptime_days'] = uptime_days
-            result['uptime_bonus_pct'] = int(UPTIME_BONUS_90_DAYS * 100) if uptime_days >= 90 else 0
-
-            # Check if signer
-            is_signer = is_authorized_signer(evrmore_address)
-            result['is_signer'] = is_signer
-            result['signer_bonus_pct'] = int(SIGNER_BONUS * 100) if is_signer else 0
-
-            # Calculate total voting power
-            power = base_stake * STAKE_WEIGHT
-            if uptime_days >= 90:
-                power *= (1 + UPTIME_BONUS_90_DAYS)
-            if is_signer:
-                power *= (1 + SIGNER_BONUS)
-            result['total_voting_power'] = power
-
-            # Get network total from governance
-            if hasattr(startup, '_governance') and startup._governance:
-                governance = startup._governance
-                if hasattr(governance, '_get_total_voting_power'):
-                    result['network_total_power'] = governance._get_total_voting_power()
-                # Count active voters from uptime tracker
-                if hasattr(startup, '_uptime_tracker') and startup._uptime_tracker:
-                    if hasattr(startup._uptime_tracker, 'get_active_node_count'):
-                        result['active_voters'] = startup._uptime_tracker.get_active_node_count()
-
-            return jsonify(result)
+            })
         except Exception as e:
             logger.warning(f"Failed to get voting power: {e}")
             return jsonify({'success': False, 'error': str(e)})
@@ -3294,8 +3066,9 @@ def register_routes(app):
     @app.route('/api/p2p-status')
     @login_required
     def api_p2p_status():
-        """Get comprehensive P2P status for network dashboard."""
+        """Get comprehensive P2P status for network dashboard via IPC."""
         try:
+            from web.wsgi import _ipc_get
             from satorineuron.init import start
 
             result = {
@@ -3312,84 +3085,93 @@ def register_routes(app):
             if hasattr(start, '_get_networking_mode'):
                 result['networking_mode'] = start._get_networking_mode()
 
-            # Get P2P peers info using helper
-            identity, peers = get_p2p_state()
-            if peers:
-                if hasattr(peers, 'get_peer_count'):
-                    result['peer_count'] = peers.get_peer_count()
-                # Try peer_id first (satorip2p), then node_id for compatibility
-                if hasattr(peers, 'peer_id') and peers.peer_id:
-                    result['peer_id'] = str(peers.peer_id)
-                elif hasattr(peers, 'node_id') and peers.node_id:
-                    result['peer_id'] = str(peers.node_id)
-                if hasattr(peers, 'get_connected_peers'):
-                    connected = peers.get_connected_peers()
-                    # Get identify handler for role info
-                    identify = getattr(peers, '_identify_handler', None)
-                    # Get oracle network for supplementing role info
-                    oracle_network = getattr(startup, '_oracle_network', None) if startup else None
-                    # Build set of peer_ids that are registered oracles
-                    oracle_peer_ids = set()
-                    if oracle_network and hasattr(oracle_network, '_oracle_registrations'):
-                        for stream_regs in oracle_network._oracle_registrations.values():
-                            for reg in stream_regs.values():
-                                if hasattr(reg, 'peer_id') and reg.peer_id:
-                                    oracle_peer_ids.add(reg.peer_id)
-                    for p in connected[:20]:  # Limit to 20
-                        peer_id = str(p)
-                        # Try to get role from identify protocol
-                        roles = ['node']  # Default base role
-                        if identify and hasattr(identify, '_known_peers'):
-                            peer_info = identify._known_peers.get(peer_id)
-                            if peer_info and hasattr(peer_info, 'roles') and peer_info.roles:
-                                roles = list(peer_info.roles)
-                        # Supplement with oracle info if peer is a registered oracle
-                        if peer_id in oracle_peer_ids and 'oracle' not in roles:
-                            roles.append('oracle')
-                        # Format roles for display
-                        role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
-                        result['peers'].append({
-                            'id': peer_id,
-                            'latency': peers._peer_latencies.get(peer_id) if hasattr(peers, '_peer_latencies') else None,
-                            'location': None,
-                            'streams': 0,
-                            'role': role,
-                        })
-            # Also add evrmore_address from identity
-            if identity and hasattr(identity, 'address'):
-                result['evrmore_address'] = identity.address
+            # Get all data via IPC (web worker can't access main process memory)
+            full_status = _ipc_get('/p2p/full-status') or {}
+            peers_result = _ipc_get('/p2p/peers') or {}
+            latencies_result = _ipc_get('/p2p/latencies') or {}
+            identify_result = _ipc_get('/p2p/identify/known') or {}
+            oracle_result = _ipc_get('/p2p/oracle/known') or {}
+            identity_result = _ipc_get('/p2p/identity') or {}
+            multiaddrs_result = _ipc_get('/p2p/multiaddrs') or {}
+
+            # Set peer_id from full status
+            if full_status.get('peer_id'):
+                result['peer_id'] = full_status['peer_id']
+
+            # Set peer count
+            result['peer_count'] = full_status.get('connected_count', 0)
+
+            # Set evrmore address from identity
+            if identity_result.get('address'):
+                result['evrmore_address'] = identity_result['address']
+
+            # Build oracle peer IDs set for role supplementation
+            oracle_peer_ids = set()
+            if oracle_result.get('oracles'):
+                for oracle in oracle_result['oracles']:
+                    if oracle.get('peer_id'):
+                        oracle_peer_ids.add(oracle['peer_id'])
+
+            # Build known peers map from identify protocol
+            known_peers = {}
+            if identify_result.get('peers'):
+                for peer in identify_result['peers']:
+                    if peer.get('peer_id'):
+                        known_peers[peer['peer_id']] = peer
+
+            # Get latencies map
+            latencies = latencies_result.get('latencies', {})
+
+            # Build peers list
+            if peers_result.get('peers'):
+                for peer_info in peers_result['peers'][:20]:  # Limit to 20
+                    peer_id = peer_info.get('peer_id')
+                    if not peer_id:
+                        continue
+
+                    # Get roles from identify protocol
+                    roles = ['node']  # Default base role
+                    if peer_id in known_peers:
+                        known = known_peers[peer_id]
+                        if known.get('roles'):
+                            roles = list(known['roles'])
+
+                    # Supplement with oracle role if peer is a registered oracle
+                    if peer_id in oracle_peer_ids and 'oracle' not in roles:
+                        roles.append('oracle')
+
+                    # Format role for display
+                    role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
+
+                    result['peers'].append({
+                        'id': peer_id,
+                        'latency': latencies.get(peer_id),
+                        'location': None,
+                        'streams': 0,
+                        'role': role,
+                    })
 
             # Add multiaddress for sharing with friends
-            if peers and hasattr(peers, 'public_addresses'):
-                addrs = peers.public_addresses
-                if addrs and result.get('peer_id'):
-                    # Build full multiaddress with peer ID
-                    # Format: /ip4/x.x.x.x/tcp/24600/p2p/<peer_id>
-                    full_addrs = []
-                    for addr in addrs:
-                        if '/p2p/' not in addr:
-                            full_addrs.append(f"{addr}/p2p/{result['peer_id']}")
-                        else:
-                            full_addrs.append(addr)
-                    result['multiaddrs'] = full_addrs
-                    # Primary multiaddress (first one) for display
-                    if full_addrs:
-                        result['multiaddr'] = full_addrs[0]
+            addrs = multiaddrs_result.get('multiaddrs', [])
+            if addrs and result.get('peer_id'):
+                full_addrs = []
+                for addr in addrs:
+                    if '/p2p/' not in addr:
+                        full_addrs.append(f"{addr}/p2p/{result['peer_id']}")
+                    else:
+                        full_addrs.append(addr)
+                result['multiaddrs'] = full_addrs
+                if full_addrs:
+                    result['multiaddr'] = full_addrs[0]
 
-            # Get NAT type from peers object (satorip2p has nat_type property)
-            nat_determined = False
-            if peers and hasattr(peers, 'nat_type'):
-                nat = peers.nat_type
-                # Convert satorip2p format (PUBLIC/PRIVATE/UNKNOWN) to display format
-                if nat == "PUBLIC":
-                    result['nat_type'] = "Public"
-                    nat_determined = True
-                elif nat == "PRIVATE":
-                    result['nat_type'] = "Private (NAT)"
-                    nat_determined = True
-
-            # Fallback: detect Docker environment directly
-            if not nat_determined:
+            # Get NAT type from full status
+            nat = full_status.get('nat_type')
+            if nat == "PUBLIC":
+                result['nat_type'] = "Public"
+            elif nat == "PRIVATE":
+                result['nat_type'] = "Private (NAT)"
+            else:
+                # NAT is UNKNOWN or not set - check if we're in Docker
                 try:
                     from satorip2p.nat.docker import detect_docker_environment
                     docker_info = detect_docker_environment()
@@ -3773,48 +3555,53 @@ def register_routes(app):
     @app.route('/api/peers/list')
     @login_required
     def api_peers_list():
-        """Get list of connected peers."""
+        """Get list of connected peers via IPC API."""
         try:
-            from satorineuron.init import start
+            from web.wsgi import _ipc_get
+
+            # Get connected peers from IPC
+            peers_result = _ipc_get('/p2p/peers')
+            if not peers_result or 'peers' not in peers_result:
+                return jsonify({'peers': []})
+
+            # Get identify info for roles
+            identify_result = _ipc_get('/p2p/identify/known')
+            identities = identify_result.get('identities', {}) if identify_result else {}
+
+            # Get latencies
+            latencies_result = _ipc_get('/p2p/latencies')
+            latencies = latencies_result.get('latencies', {}) if latencies_result else {}
+
+            # Get oracle registrations to supplement roles
+            oracle_result = _ipc_get('/p2p/oracle/known')
+            oracle_peer_ids = set()
+            if oracle_result and 'oracles' in oracle_result:
+                for oracle in oracle_result['oracles']:
+                    if oracle.get('peer_id'):
+                        oracle_peer_ids.add(oracle['peer_id'])
 
             peers = []
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-
-            if startup and hasattr(startup, '_p2p_peers') and startup._p2p_peers:
-                p2p = startup._p2p_peers
-                if hasattr(p2p, 'get_connected_peers'):
-                    connected = p2p.get_connected_peers()
-                    # Get identify handler for role info
-                    identify = getattr(p2p, '_identify_handler', None)
-                    # Get oracle network for supplementing role info
-                    oracle_network = getattr(startup, '_oracle_network', None)
-                    # Build set of peer_ids that are registered oracles
-                    oracle_peer_ids = set()
-                    if oracle_network and hasattr(oracle_network, '_oracle_registrations'):
-                        for stream_regs in oracle_network._oracle_registrations.values():
-                            for reg in stream_regs.values():
-                                if hasattr(reg, 'peer_id') and reg.peer_id:
-                                    oracle_peer_ids.add(reg.peer_id)
-                    for p in connected:
-                        peer_id = str(p)
-                        # Try to get role from identify protocol
-                        roles = ['node']  # Default base role
-                        if identify and hasattr(identify, '_known_peers'):
-                            peer_info = identify._known_peers.get(peer_id)
-                            if peer_info and hasattr(peer_info, 'roles') and peer_info.roles:
-                                roles = list(peer_info.roles)
-                        # Supplement with oracle info if peer is a registered oracle
-                        if peer_id in oracle_peer_ids and 'oracle' not in roles:
-                            roles.append('oracle')
-                        # Format roles for display
-                        role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
-                        peers.append({
-                            'id': peer_id,
-                            'latency': p2p._peer_latencies.get(peer_id) if hasattr(p2p, '_peer_latencies') else None,
-                            'location': None,
-                            'streams': 0,
-                            'role': role,
-                        })
+            for p in peers_result['peers']:
+                peer_id = p.get('peer_id', '')
+                # Get roles from identify protocol
+                roles = ['node']  # Default base role
+                if peer_id in identities:
+                    peer_info = identities[peer_id]
+                    if peer_info.get('roles'):
+                        roles = list(peer_info['roles'])
+                # Supplement with oracle info if peer is a registered oracle
+                if peer_id in oracle_peer_ids and 'oracle' not in roles:
+                    roles.append('oracle')
+                # Format roles for display
+                role = ', '.join(r.capitalize() for r in roles) if roles else 'Node'
+                peers.append({
+                    'id': peer_id,
+                    'latency': latencies.get(peer_id),
+                    'location': None,
+                    'streams': 0,
+                    'role': role,
+                    'roles': roles,  # Also include raw roles array for frontend
+                })
 
             return jsonify({'peers': peers})
         except Exception as e:
@@ -4636,6 +4423,19 @@ def register_routes(app):
                     if hasattr(consensus, 'participation_count'):
                         result['consensus_participation'] = consensus.participation_count
 
+            # Determine role based on registrations
+            roles = ['node']  # Base role
+            try:
+                from web.wsgi import _ipc_get
+                # Check if we're a registered oracle
+                oracle_result = _ipc_get('/p2p/oracle/my_registrations')
+                if oracle_result and oracle_result.get('registrations') and len(oracle_result['registrations']) > 0:
+                    roles.append('oracle')
+                # Could also check for other roles (signer, relay, etc.) here
+            except Exception:
+                pass  # Role detection is supplementary
+            result['roles'] = roles
+
             return jsonify(result)
         except Exception as e:
             logger.warning(f"Get identify stats failed: {e}")
@@ -4656,6 +4456,18 @@ def register_routes(app):
             if hasattr(peers, 'get_connected_peers'):
                 connected_peers = set(str(p) for p in peers.get_connected_peers())
 
+            # Get oracle registrations to supplement role info
+            from web.wsgi import _ipc_get
+            oracle_peer_ids = set()
+            try:
+                oracle_result = _ipc_get('/p2p/oracle/known')
+                if oracle_result and 'oracles' in oracle_result:
+                    for oracle in oracle_result['oracles']:
+                        if oracle.get('peer_id'):
+                            oracle_peer_ids.add(oracle['peer_id'])
+            except Exception:
+                pass  # Oracle info is supplementary, don't fail if unavailable
+
             # Track which peer IDs we've added
             known_peer_ids = set()
 
@@ -4663,10 +4475,14 @@ def register_routes(app):
             for peer_id, identity in identities.items():
                 peer_id_str = str(peer_id)
                 known_peer_ids.add(peer_id_str)
+                roles = list(getattr(identity, 'roles', []))
+                # Supplement with oracle role if peer is a registered oracle
+                if peer_id_str in oracle_peer_ids and 'oracle' not in roles:
+                    roles.append('oracle')
                 peer_info = {
                     'peer_id': peer_id_str,
                     'evrmore_address': getattr(identity, 'evrmore_address', ''),
-                    'roles': getattr(identity, 'roles', []),
+                    'roles': roles if roles else ['node'],
                     'protocols': getattr(identity, 'protocols', []),
                     'agent_version': getattr(identity, 'agent_version', ''),
                     'timestamp': getattr(identity, 'timestamp', 0),
@@ -4675,13 +4491,17 @@ def register_routes(app):
                 }
                 peer_list.append(peer_info)
 
-            # Add connected peers that don't have identities yet (with default predictor role)
+            # Add connected peers that don't have identities yet (with default node role)
             for peer_id_str in connected_peers:
                 if peer_id_str not in known_peer_ids:
+                    roles = ['node']
+                    # Check if this peer is a registered oracle
+                    if peer_id_str in oracle_peer_ids:
+                        roles.append('oracle')
                     peer_list.append({
                         'peer_id': peer_id_str,
                         'evrmore_address': '',
-                        'roles': ['predictor'],
+                        'roles': roles,
                         'protocols': [],
                         'agent_version': '',
                         'timestamp': 0,
@@ -6865,54 +6685,27 @@ def register_routes(app):
     @app.route('/api/p2p/streams/discover')
     @login_required
     def api_p2p_streams_discover():
-        """Discover available streams."""
+        """Discover available streams via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_get
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
-                return jsonify({'streams': [], 'error': 'Stream registry not initialized'})
-
-            registry = startup._stream_registry
-            source = request.args.get('source')
-            datatype = request.args.get('datatype')
-            tags = request.args.getlist('tag')
+            # Build query string from request args
+            params = []
+            if request.args.get('source'):
+                params.append(f"source={request.args.get('source')}")
+            if request.args.get('datatype'):
+                params.append(f"datatype={request.args.get('datatype')}")
+            for tag in request.args.getlist('tag'):
+                params.append(f"tag={tag}")
             limit = request.args.get('limit', 100, type=int)
+            params.append(f"limit={limit}")
 
-            async def do_discover():
-                return await registry.discover_streams(
-                    source=source,
-                    datatype=datatype,
-                    tags=tags if tags else None,
-                    limit=limit
-                )
+            query_string = '&'.join(params)
+            result = _ipc_get(f'/p2p/streams/discover?{query_string}')
 
-            try:
-                loop = asyncio.new_event_loop()
-                streams = loop.run_until_complete(do_discover())
-            finally:
-                loop.close()
-
-            result = []
-            for s in streams:
-                result.append({
-                    'stream_id': s.stream_id,
-                    'source': s.source,
-                    'stream': s.stream,
-                    'target': s.target,
-                    'datatype': s.datatype,
-                    'cadence': s.cadence,
-                    'predictor_slots': s.predictor_slots,
-                    'creator': s.creator,
-                    'description': s.description,
-                    'tags': s.tags,
-                })
-
-            return jsonify({
-                'streams': result,
-                'total': len(result),
-            })
+            if result:
+                return jsonify(result)
+            return jsonify({'streams': [], 'total': 0})
 
         except Exception as e:
             logger.warning(f"Failed to discover streams: {e}")
@@ -7953,7 +7746,7 @@ def register_routes(app):
     @app.route('/api/engine/performance', methods=['GET'])
     @login_required
     def get_engine_performance():
-        """Get engine performance metrics (predictions vs observations).
+        """Get engine performance metrics via IPC.
 
         Returns last 100 observations and predictions with accuracy calculations.
 
@@ -7963,139 +7756,31 @@ def register_routes(app):
             - predictions: [{ts, value}, ...]
             - accuracy: [{ts, error, abs_error}, ...]
             - stats: {avg_error, avg_abs_error, accuracy_pct}
+            - available: bool indicating if engine is available
         """
+        from web.wsgi import _ipc_get
+
+        # Return empty data structure when engine isn't available
+        empty_response = {
+            'observations': [],
+            'predictions': [],
+            'accuracy': [],
+            'stats': {},
+            'available': False
+        }
+
         try:
-            # Use the stored startup instance instead of importing
-            startup = get_startup()
-            if startup is None or not hasattr(startup, 'aiengine') or startup.aiengine is None:
-                logger.warning("AI engine not initialized")
-                return jsonify({'error': 'AI engine not initialized'}), 503
-
-            # Get first stream (for now, could extend to support multiple streams)
-            if not startup.aiengine.streamModels:
-                return jsonify({'error': 'No streams configured'}), 404
-
-            streamUuid = list(startup.aiengine.streamModels.keys())[0]
-            streamModel = startup.aiengine.streamModels[streamUuid]
-
-            if not hasattr(streamModel, 'storage') or streamModel.storage is None:
-                return jsonify({'error': 'Storage not initialized'}), 503
-
-            # Get last 100 observations
-            obs_df = streamModel.storage.getStreamData(streamModel.streamUuid)
-            if obs_df.empty:
-                return jsonify({
-                    'observations': [],
-                    'predictions': [],
-                    'accuracy': [],
-                    'stats': {}
-                })
-
-            obs_df = obs_df.tail(100).reset_index()
-            observations = [
-                {'ts': str(row['ts']), 'value': float(row['value'])}
-                for _, row in obs_df.iterrows()
-            ]
-
-            # Get last 100 predictions
-            pred_df = streamModel.storage.getPredictions(streamModel.predictionStreamUuid)
-            if pred_df.empty:
-                return jsonify({
-                    'observations': observations,
-                    'predictions': [],
-                    'accuracy': [],
-                    'stats': {}
-                })
-
-            pred_df = pred_df.tail(100).reset_index()
-            predictions = [
-                {'ts': str(row['ts']), 'value': float(row['value'])}
-                for _, row in pred_df.iterrows()
-            ]
-
-            # Calculate accuracy: match each prediction to the next observation
-            import pandas as pd
-            accuracy_data = []
-
-            for idx, pred_row in pred_df.iterrows():
-                pred_ts = pred_row['ts']
-                pred_value = float(pred_row['value'])
-
-                # Find next observation after this prediction
-                # Ensure timestamp comparison works by converting pred_ts to same type
-                try:
-                    # Convert pred_ts to match obs_df['ts'] dtype
-                    if pd.api.types.is_datetime64_any_dtype(obs_df['ts']):
-                        # Observations are datetime - convert pred_ts to datetime
-                        pred_ts_compare = pd.to_datetime(pred_ts)
-                    elif pd.api.types.is_numeric_dtype(obs_df['ts']):
-                        # Observations are numeric (Unix timestamps)
-                        # Try to convert pred_ts to numeric
-                        try:
-                            # First try direct conversion (if pred_ts is already numeric)
-                            pred_ts_compare = float(pred_ts)
-                        except (ValueError, TypeError):
-                            # If that fails, pred_ts might be a datetime string
-                            # Convert to datetime then to Unix timestamp
-                            pred_ts_dt = pd.to_datetime(pred_ts)
-                            pred_ts_compare = pred_ts_dt.timestamp()
-                    else:
-                        # Observations are object/string - keep as-is
-                        pred_ts_compare = pred_ts
-                    next_obs = obs_df[obs_df['ts'] > pred_ts_compare]
-                except (ValueError, TypeError) as e:
-                    # If conversion fails, skip this prediction
-                    logger.warning(f"Timestamp comparison failed for prediction {idx}: {e}")
-                    continue
-                except Exception as e:
-                    logger.error(f"Unexpected error in accuracy calculation at {idx}: {e}")
-                    continue
-                if not next_obs.empty:
-                    obs_value = float(next_obs.iloc[0]['value'])
-                    error = pred_value - obs_value
-                    abs_error = abs(error)
-
-                    accuracy_data.append({
-                        'ts': str(pred_ts),
-                        'error': error,
-                        'abs_error': abs_error,
-                        'predicted': pred_value,
-                        'actual': obs_value
-                    })
-
-            # Calculate statistics
-            stats = {}
-            if accuracy_data:
-                errors = [d['error'] for d in accuracy_data]
-                abs_errors = [d['abs_error'] for d in accuracy_data]
-                actuals = [d['actual'] for d in accuracy_data]
-
-                avg_error = sum(errors) / len(errors)
-                avg_abs_error = sum(abs_errors) / len(abs_errors)
-                avg_actual = sum(actuals) / len(actuals) if actuals else 1
-
-                # Accuracy percentage (100% - average % error)
-                avg_pct_error = (avg_abs_error / avg_actual * 100) if avg_actual != 0 else 0
-                accuracy_pct = max(0, 100 - avg_pct_error)
-
-                stats = {
-                    'avg_error': round(avg_error, 4),
-                    'avg_abs_error': round(avg_abs_error, 4),
-                    'accuracy_pct': round(accuracy_pct, 2)
-                }
-
-            return jsonify({
-                'observations': observations,
-                'predictions': predictions,
-                'accuracy': accuracy_data,
-                'stats': stats
-            })
+            # Get engine performance via IPC (neuron process has access to AI engine)
+            result = _ipc_get('/engine/performance')
+            if result:
+                return jsonify(result)
+            else:
+                logger.debug("Engine performance IPC returned no data")
+                return jsonify(empty_response)
 
         except Exception as e:
-            logger.error(f"Error getting engine performance: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return jsonify({'error': str(e)}), 500
+            logger.error(f"Error getting engine performance via IPC: {e}")
+            return jsonify(empty_response)
 
     @app.route('/api/wallet/import', methods=['POST'])
     @login_required

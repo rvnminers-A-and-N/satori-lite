@@ -1420,6 +1420,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
             logging.info("P2P components initialization complete", color="cyan")
 
+            # 20.5. Sync oracle registrations to stream registry
+            # This auto-populates the stream registry with streams that oracles are publishing
+            await self._sync_oracle_streams_to_registry()
+
             # 21. Initialize StreamManager (oracle data streams)
             try:
                 try:
@@ -1518,6 +1522,101 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             logging.debug(f"satorip2p not available: {e}")
         except Exception as e:
             logging.debug(f"P2P component initialization: {e}")
+
+    async def _sync_oracle_streams_to_registry(self):
+        """
+        Sync oracle registrations to the stream registry.
+
+        This auto-populates the stream registry with streams that oracles
+        are publishing, so users can discover and claim prediction slots.
+
+        Oracle stream_id format: "source|stream|target" (e.g., "crypto|satori|BTC|USD")
+        """
+        try:
+            oracle_network = getattr(self, '_oracle_network', None)
+            stream_registry = getattr(self, '_stream_registry', None)
+
+            if not oracle_network or not stream_registry:
+                logging.debug("Cannot sync: oracle_network or stream_registry not available")
+                return
+
+            # Get all oracle registrations (our own + received from network)
+            all_stream_ids = set()
+
+            # Add our own registrations
+            my_registrations = getattr(oracle_network, '_my_registrations', {})
+            all_stream_ids.update(my_registrations.keys())
+
+            # Add received registrations from other oracles
+            oracle_registrations = getattr(oracle_network, '_oracle_registrations', {})
+            all_stream_ids.update(oracle_registrations.keys())
+
+            # Also check observation cache for streams we've seen data for
+            observation_cache = getattr(oracle_network, '_observation_cache', {})
+            all_stream_ids.update(observation_cache.keys())
+
+            if not all_stream_ids:
+                logging.debug("No oracle streams to sync to registry")
+                return
+
+            synced_count = 0
+            for stream_id in all_stream_ids:
+                try:
+                    # Check if already in registry
+                    existing = stream_registry._streams.get(stream_id)
+                    if existing:
+                        continue
+
+                    # Parse stream_id: "source|stream|target" format
+                    # e.g., "crypto|satori|BTC|USD" -> source="crypto|satori", stream="BTC", target="USD"
+                    parts = stream_id.split('|')
+                    if len(parts) >= 4:
+                        # Format: source|provider|symbol|currency
+                        source = f"{parts[0]}|{parts[1]}"  # e.g., "crypto|satori"
+                        stream = parts[2]  # e.g., "BTC"
+                        target = parts[3]  # e.g., "USD"
+                    elif len(parts) == 3:
+                        source = parts[0]
+                        stream = parts[1]
+                        target = parts[2]
+                    else:
+                        # Can't parse, use as-is
+                        source = stream_id
+                        stream = "data"
+                        target = "value"
+
+                    # Create stream definition directly with the oracle's stream_id
+                    # (rather than generating a new hash-based ID)
+                    from satorip2p.protocol.stream_registry import StreamDefinition
+                    import time as time_module
+
+                    definition = StreamDefinition(
+                        stream_id=stream_id,  # Use oracle's stream_id directly
+                        source=source,
+                        stream=stream,
+                        target=target,
+                        datatype="price" if "USD" in target or "price" in stream_id.lower() else "numeric",
+                        cadence=60,
+                        predictor_slots=10,
+                        creator=getattr(stream_registry, 'evrmore_address', '') or '',
+                        timestamp=int(time_module.time()),
+                        description=f"Auto-discovered from oracle network",
+                        tags=["oracle", "auto-discovered"],
+                    )
+
+                    # Store directly in registry's stream cache
+                    stream_registry._streams[stream_id] = definition
+                    synced_count += 1
+                    logging.debug(f"Synced oracle stream to registry: {stream_id}")
+
+                except Exception as e:
+                    logging.debug(f"Failed to sync stream {stream_id}: {e}")
+
+            if synced_count > 0:
+                logging.info(f"Synced {synced_count} oracle streams to registry", color="cyan")
+
+        except Exception as e:
+            logging.debug(f"Oracle stream sync failed: {e}")
 
     def discoverStreams(
         self,
@@ -2809,6 +2908,155 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 'peer_id': str(peers.peer_id) if peers and hasattr(peers, 'peer_id') else None,
             })
 
+        @ipc_app.route('/reward-address', methods=['GET', 'POST'])
+        def ipc_reward_address():
+            """Get or set reward address via IPC."""
+            if request.method == 'POST':
+                data = request.get_json() or {}
+                new_address = data.get('reward_address')
+                if not new_address:
+                    return jsonify({'error': 'Missing reward_address'}), 400
+                try:
+                    success = startupDag.setRewardAddress(address=new_address, globally=True)
+                    if success:
+                        return jsonify({'success': True, 'reward_address': new_address})
+                    else:
+                        return jsonify({'error': 'Failed to set reward address'}), 500
+                except Exception as e:
+                    return jsonify({'error': str(e)}), 500
+
+            # GET - return current reward address
+            reward_address = getattr(startupDag, 'configRewardAddress', None) or ''
+            return jsonify({'reward_address': reward_address})
+
+        @ipc_app.route('/engine/performance')
+        def ipc_engine_performance():
+            """Get engine performance metrics via IPC."""
+            import pandas as pd
+
+            empty_response = {
+                'observations': [],
+                'predictions': [],
+                'accuracy': [],
+                'stats': {},
+                'available': False
+            }
+
+            try:
+                if not hasattr(startupDag, 'aiengine') or startupDag.aiengine is None:
+                    return jsonify(empty_response)
+
+                if not startupDag.aiengine.streamModels:
+                    empty_response['error'] = 'No streams configured'
+                    return jsonify(empty_response)
+
+                streamUuid = list(startupDag.aiengine.streamModels.keys())[0]
+                streamModel = startupDag.aiengine.streamModels[streamUuid]
+
+                if not hasattr(streamModel, 'storage') or streamModel.storage is None:
+                    empty_response['error'] = 'Storage not initialized'
+                    return jsonify(empty_response)
+
+                # Get last 100 observations
+                obs_df = streamModel.storage.getStreamData(streamModel.streamUuid)
+                if obs_df.empty:
+                    return jsonify({
+                        'observations': [],
+                        'predictions': [],
+                        'accuracy': [],
+                        'stats': {},
+                        'available': True
+                    })
+
+                obs_df = obs_df.tail(100).reset_index()
+                observations = [
+                    {'ts': str(row['ts']), 'value': float(row['value'])}
+                    for _, row in obs_df.iterrows()
+                ]
+
+                # Get last 100 predictions
+                pred_df = streamModel.storage.getPredictions(streamModel.predictionStreamUuid)
+                if pred_df.empty:
+                    return jsonify({
+                        'observations': observations,
+                        'predictions': [],
+                        'accuracy': [],
+                        'stats': {},
+                        'available': True
+                    })
+
+                pred_df = pred_df.tail(100).reset_index()
+                predictions = [
+                    {'ts': str(row['ts']), 'value': float(row['value'])}
+                    for _, row in pred_df.iterrows()
+                ]
+
+                # Calculate accuracy
+                accuracy_data = []
+                for idx, pred_row in pred_df.iterrows():
+                    pred_ts = pred_row['ts']
+                    pred_value = float(pred_row['value'])
+
+                    try:
+                        if pd.api.types.is_datetime64_any_dtype(obs_df['ts']):
+                            pred_ts_compare = pd.to_datetime(pred_ts)
+                        elif pd.api.types.is_numeric_dtype(obs_df['ts']):
+                            try:
+                                pred_ts_compare = float(pred_ts)
+                            except (ValueError, TypeError):
+                                pred_ts_dt = pd.to_datetime(pred_ts)
+                                pred_ts_compare = pred_ts_dt.timestamp()
+                        else:
+                            pred_ts_compare = pred_ts
+
+                        next_obs = obs_df[obs_df['ts'] > pred_ts_compare]
+                    except Exception:
+                        continue
+
+                    if not next_obs.empty:
+                        obs_value = float(next_obs.iloc[0]['value'])
+                        error = pred_value - obs_value
+                        abs_error = abs(error)
+                        accuracy_data.append({
+                            'ts': str(pred_ts),
+                            'error': error,
+                            'abs_error': abs_error,
+                            'predicted': pred_value,
+                            'actual': obs_value
+                        })
+
+                # Calculate statistics
+                stats = {}
+                if accuracy_data:
+                    errors = [d['error'] for d in accuracy_data]
+                    abs_errors = [d['abs_error'] for d in accuracy_data]
+                    actuals = [d['actual'] for d in accuracy_data]
+
+                    avg_error = sum(errors) / len(errors)
+                    avg_abs_error = sum(abs_errors) / len(abs_errors)
+                    avg_actual = sum(actuals) / len(actuals) if actuals else 1
+
+                    avg_pct_error = (avg_abs_error / avg_actual * 100) if avg_actual != 0 else 0
+                    accuracy_pct = max(0, 100 - avg_pct_error)
+
+                    stats = {
+                        'avg_error': round(avg_error, 4),
+                        'avg_abs_error': round(avg_abs_error, 4),
+                        'accuracy_pct': round(accuracy_pct, 2)
+                    }
+
+                return jsonify({
+                    'observations': observations,
+                    'predictions': predictions,
+                    'accuracy': accuracy_data,
+                    'stats': stats,
+                    'available': True
+                })
+
+            except Exception as e:
+                empty_response['error'] = str(e)
+                return jsonify(empty_response)
+
         @ipc_app.route('/p2p/multiaddrs')
         def p2p_multiaddrs():
             """Get listen multiaddresses."""
@@ -3843,6 +4091,55 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        @ipc_app.route('/p2p/streams/discover')
+        def p2p_streams_discover():
+            """Discover available streams."""
+            registry = getattr(startupDag, '_stream_registry', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            result = {'streams': [], 'total': 0}
+
+            if registry and hasattr(registry, 'discover_streams'):
+                source = request.args.get('source')
+                datatype = request.args.get('datatype')
+                tags = request.args.getlist('tag')
+                limit = request.args.get('limit', 100, type=int)
+
+                try:
+                    async def do_discover():
+                        return await registry.discover_streams(
+                            source=source,
+                            datatype=datatype,
+                            tags=tags if tags else None,
+                            limit=limit
+                        )
+
+                    if trio_token:
+                        streams = trio.from_thread.run(do_discover, trio_token=trio_token)
+                    else:
+                        streams = trio.run(do_discover)
+
+                    result['streams'] = [
+                        {
+                            'stream_id': getattr(s, 'stream_id', ''),
+                            'source': getattr(s, 'source', ''),
+                            'stream': getattr(s, 'stream', ''),
+                            'target': getattr(s, 'target', ''),
+                            'datatype': getattr(s, 'datatype', ''),
+                            'cadence': getattr(s, 'cadence', 0),
+                            'predictor_slots': getattr(s, 'predictor_slots', 0),
+                            'creator': getattr(s, 'creator', ''),
+                            'description': getattr(s, 'description', ''),
+                            'tags': getattr(s, 'tags', []),
+                        }
+                        for s in streams
+                    ]
+                    result['total'] = len(result['streams'])
+                except Exception as e:
+                    result['error'] = str(e)
+
+            return jsonify(result)
+
         @ipc_app.route('/p2p/streams/list')
         def p2p_streams_list():
             """Get list of known streams."""
@@ -3925,6 +4222,361 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     for p in predictions
                 ]
                 result['count'] = len(result['predictions'])
+
+            return jsonify(result)
+
+        # ========== GOVERNANCE PROTOCOL IPC ENDPOINTS ==========
+
+        @ipc_app.route('/p2p/governance/status')
+        def ipc_governance_status():
+            """Get governance protocol status and statistics."""
+            governance = getattr(startupDag, '_governance', None)
+
+            result = {
+                'started': governance is not None,
+                'total_proposals': 0,
+                'active_proposals': 0,
+                'passed_proposals': 0,
+                'rejected_proposals': 0,
+                'my_stake': 0,
+                'my_voting_power': 0,
+                'can_propose': False,
+                'can_vote': False,
+            }
+
+            if governance and hasattr(governance, 'get_stats'):
+                result.update(governance.get_stats())
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/governance/proposals')
+        def ipc_governance_proposals():
+            """Get all governance proposals."""
+            governance = getattr(startupDag, '_governance', None)
+
+            result = {'proposals': [], 'active': []}
+
+            if governance:
+                if hasattr(governance, 'get_all_proposals'):
+                    proposals = governance.get_all_proposals()
+                    result['proposals'] = [p.to_dict() for p in proposals.values()]
+
+                if hasattr(governance, 'get_active_proposals'):
+                    active = governance.get_active_proposals()
+                    result['active'] = [p.to_dict() for p in active]
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/governance/proposal/<proposal_id>')
+        def ipc_governance_proposal(proposal_id):
+            """Get a specific proposal with tally and user's vote."""
+            governance = getattr(startupDag, '_governance', None)
+
+            result = {'proposal': None, 'tally': None, 'my_vote': None}
+
+            if governance:
+                if hasattr(governance, 'get_proposal'):
+                    proposal = governance.get_proposal(proposal_id)
+                    if proposal:
+                        result['proposal'] = proposal.to_dict()
+
+                if hasattr(governance, 'get_proposal_tally'):
+                    tally = governance.get_proposal_tally(proposal_id)
+                    if tally:
+                        result['tally'] = tally.to_dict() if hasattr(tally, 'to_dict') else tally
+
+                if hasattr(governance, 'get_my_vote'):
+                    my_vote = governance.get_my_vote(proposal_id)
+                    if my_vote:
+                        result['my_vote'] = my_vote.to_dict() if hasattr(my_vote, 'to_dict') else my_vote
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/governance/propose', methods=['POST'])
+        def ipc_governance_propose():
+            """Create a new governance proposal."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            title = data.get('title', '')
+            description = data.get('description', '')
+            proposal_type = data.get('proposal_type', 'community')
+            voting_period_days = data.get('voting_period_days', 7)
+
+            if not title or not description:
+                return jsonify({'success': False, 'error': 'Title and description required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    proposal = loop.run_until_complete(
+                        governance.create_proposal(
+                            title=title,
+                            description=description,
+                            proposal_type=proposal_type,
+                            voting_period_days=voting_period_days
+                        )
+                    )
+                    return jsonify({
+                        'success': True,
+                        'proposal_id': proposal.proposal_id if hasattr(proposal, 'proposal_id') else str(proposal)
+                    })
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/vote', methods=['POST'])
+        def ipc_governance_vote():
+            """Submit a vote on a proposal."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            choice = data.get('choice', '')
+
+            if not proposal_id or not choice:
+                return jsonify({'success': False, 'error': 'proposal_id and choice required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    success = loop.run_until_complete(
+                        governance.vote(proposal_id=proposal_id, choice=choice)
+                    )
+                    return jsonify({'success': success})
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/comment', methods=['POST'])
+        def ipc_governance_comment():
+            """Add a comment to a proposal."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            content = data.get('content', '')
+
+            if not proposal_id or not content:
+                return jsonify({'success': False, 'error': 'proposal_id and content required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    comment = loop.run_until_complete(
+                        governance.add_comment(proposal_id=proposal_id, content=content)
+                    )
+                    return jsonify({
+                        'success': True,
+                        'comment_id': comment.comment_id if hasattr(comment, 'comment_id') else str(comment)
+                    })
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/comments/<proposal_id>')
+        def ipc_governance_comments(proposal_id):
+            """Get comments for a proposal."""
+            governance = getattr(startupDag, '_governance', None)
+
+            result = {'comments': []}
+
+            if governance and hasattr(governance, 'get_comments'):
+                comments = governance.get_comments(proposal_id)
+                result['comments'] = [c.to_dict() if hasattr(c, 'to_dict') else c for c in comments]
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/governance/pin', methods=['POST'])
+        def ipc_governance_pin():
+            """Pin or unpin a proposal (signer only)."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+            pinned = data.get('pinned', True)
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    success = loop.run_until_complete(
+                        governance.pin_proposal(proposal_id=proposal_id, pinned=pinned)
+                    )
+                    return jsonify({'success': success})
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/emergency-cancel', methods=['POST'])
+        def ipc_governance_emergency_cancel():
+            """Emergency cancel a proposal (signer only)."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    success = loop.run_until_complete(
+                        governance.emergency_cancel_vote(proposal_id=proposal_id)
+                    )
+                    return jsonify({'success': success})
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/execute', methods=['POST'])
+        def ipc_governance_execute():
+            """Mark a proposal as executed (signer only)."""
+            governance = getattr(startupDag, '_governance', None)
+
+            if not governance:
+                return jsonify({'success': False, 'error': 'Governance protocol not started'}), 503
+
+            data = request.get_json() or {}
+            proposal_id = data.get('proposal_id', '')
+
+            if not proposal_id:
+                return jsonify({'success': False, 'error': 'proposal_id required'}), 400
+
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    if hasattr(governance, 'mark_executed'):
+                        success = loop.run_until_complete(
+                            governance.mark_executed(proposal_id=proposal_id)
+                        )
+                        return jsonify({'success': success})
+                    else:
+                        return jsonify({'success': False, 'error': 'mark_executed not available'}), 501
+                finally:
+                    loop.close()
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/governance/pinned')
+        def ipc_governance_pinned():
+            """Get pinned proposals."""
+            governance = getattr(startupDag, '_governance', None)
+
+            result = {'pinned': []}
+
+            if governance and hasattr(governance, 'get_pinned_proposals'):
+                pinned = governance.get_pinned_proposals()
+                result['pinned'] = [p.to_dict() for p in pinned]
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/governance/voting-power')
+        def ipc_governance_voting_power():
+            """Get detailed voting power breakdown for the current user."""
+            try:
+                from satorip2p.protocol.governance import (
+                    STAKE_WEIGHT, UPTIME_BONUS_90_DAYS, SIGNER_BONUS
+                )
+                from satorip2p.protocol.signer import is_authorized_signer
+            except ImportError:
+                STAKE_WEIGHT = 1.0
+                UPTIME_BONUS_90_DAYS = 0.10
+                SIGNER_BONUS = 0.25
+                def is_authorized_signer(addr): return False
+
+            result = {
+                'success': True,
+                'base_stake': 0.0,
+                'stake_weight': STAKE_WEIGHT,
+                'uptime_days': 0,
+                'uptime_bonus_pct': 0,
+                'is_signer': False,
+                'signer_bonus_pct': 0,
+                'total_voting_power': 0.0,
+                'network_total_power': 0.0,
+                'active_voters': 0,
+            }
+
+            evrmore_address = ""
+            identity_bridge = getattr(startupDag, '_identity_bridge', None)
+            if identity_bridge:
+                evrmore_address = getattr(identity_bridge, 'evrmore_address', '') or ""
+
+            # Get base stake (default 0 if no balance found)
+            base_stake = 0.0
+            identity = getattr(startupDag, 'identity', None)
+            if identity:
+                try:
+                    balances = identity.getBalances()
+                    if balances and 'SATORI' in balances:
+                        base_stake = float(balances['SATORI'])
+                except Exception:
+                    pass
+            result['base_stake'] = base_stake
+
+            # Get uptime days
+            uptime_days = 0
+            uptime_tracker = getattr(startupDag, '_uptime_tracker', None)
+            if uptime_tracker and hasattr(uptime_tracker, 'get_uptime_streak_days'):
+                uptime_days = uptime_tracker.get_uptime_streak_days(evrmore_address)
+            result['uptime_days'] = uptime_days
+            result['uptime_bonus_pct'] = int(UPTIME_BONUS_90_DAYS * 100) if uptime_days >= 90 else 0
+
+            # Check if signer
+            is_signer_flag = is_authorized_signer(evrmore_address)
+            result['is_signer'] = is_signer_flag
+            result['signer_bonus_pct'] = int(SIGNER_BONUS * 100) if is_signer_flag else 0
+
+            # Calculate total voting power
+            power = base_stake * STAKE_WEIGHT
+            if uptime_days >= 90:
+                power *= (1 + UPTIME_BONUS_90_DAYS)
+            if is_signer_flag:
+                power *= (1 + SIGNER_BONUS)
+            result['total_voting_power'] = power
+
+            # Get network total from governance
+            governance = getattr(startupDag, '_governance', None)
+            if governance and hasattr(governance, '_get_total_voting_power'):
+                result['network_total_power'] = governance._get_total_voting_power()
+            if uptime_tracker and hasattr(uptime_tracker, 'get_active_node_count'):
+                result['active_voters'] = uptime_tracker.get_active_node_count()
 
             return jsonify(result)
 

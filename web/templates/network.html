@@ -2199,7 +2199,7 @@
                     <div class="d-flex flex-wrap align-items-center gap-4 pt-2" style="border-top: 1px solid var(--border-color);">
                         <div class="identity-item-horizontal">
                             <span class="identity-label-sm">Role</span>
-                            <span id="myRole" class="badge bg-gradient-success badge-sm">Predictor</span>
+                            <span id="myRole" class="peer-role-badge peer-role-node">node</span>
                         </div>
                         <div class="identity-item-horizontal">
                             <span class="identity-label-sm">NAT</span>
@@ -2937,45 +2937,43 @@
 
                         <!-- Peer Stats Summary -->
                         <div class="row mt-3 pt-3" style="border-top: 1px solid var(--border-color);">
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Total</small>
                                 <span id="statsTotalPeers" class="text-primary fw-bold">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Nodes</small>
                                 <span id="statsNodeCount" style="color: #888;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Predictors</small>
                                 <span id="statsPredictorCount" style="color: #00ff88;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Oracles</small>
                                 <span id="statsOracleCount" style="color: #00aaff;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Signers</small>
                                 <span id="statsSignerCount" style="color: #ffd700;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Relays</small>
                                 <span id="statsRelayCount" style="color: #ff6b6b;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Pool Ops</small>
                                 <span id="statsPoolOperatorCount" style="color: #aa44ff;">0</span>
                             </div>
-                        </div>
-                        <div class="row">
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Delegates</small>
                                 <span id="statsDelegateCount" style="color: #00d4aa;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Connected</small>
                                 <span id="statsConnectedCount" style="color: #00ff88;">0</span>
                             </div>
-                            <div class="col-6 col-md-3 col-lg-2 text-center mb-2">
+                            <div class="col-6 col-md-3 col-lg text-center mb-2">
                                 <small class="text-muted d-block">Avg RTT</small>
                                 <span id="statsAvgRtt" class="text-success">--</span>
                             </div>
@@ -3130,7 +3128,8 @@
         if (peer.roles && Array.isArray(peer.roles) && peer.roles.length > 0) {
             roles = peer.roles.map(r => r.toLowerCase());
         } else if (peer.role) {
-            return peer.role.toLowerCase();
+            // Handle comma-separated role strings like "Node, Oracle"
+            roles = peer.role.toLowerCase().split(',').map(r => r.trim());
         }
 
         if (roles.length === 0) return 'unknown';
@@ -6427,6 +6426,13 @@
                 if (data.protocols && data.protocols.length > 0) {
                     updateMyProtocols(data.protocols);
                 }
+                // Handle roles at top level
+                if (data.roles) {
+                    const myRole = getPeerRole(data) || 'node';
+                    const roleEl = document.getElementById('myRole');
+                    roleEl.textContent = myRole;
+                    roleEl.className = 'peer-role-badge peer-role-' + myRole.toLowerCase().replace(/[^a-z]/g, '-');
+                }
                 // Handle prediction stats
                 if (data.active_predictions !== undefined) {
                     document.getElementById('activePredictionsCount').textContent = data.active_predictions;
@@ -6458,12 +6464,10 @@
                         document.getElementById('myEvrmoreAddress').title = 'Click copy button';
                     }
                     // Handle both 'role' (string) and 'roles' (array) formats for own identity
-                    const myRole = getPeerRole(id);
-                    if (myRole && myRole !== 'unknown') {
-                        const roleEl = document.getElementById('myRole');
-                        roleEl.textContent = myRole;
-                        roleEl.className = 'badge badge-sm ' + getRoleBadgeClass(myRole);
-                    }
+                    const myRole = getPeerRole(id) || 'node';
+                    const roleEl = document.getElementById('myRole');
+                    roleEl.textContent = myRole;
+                    roleEl.className = 'peer-role-badge peer-role-' + myRole.toLowerCase().replace(/[^a-z]/g, '-');
                     if (id.protocols && id.protocols.length > 0) {
                         updateMyProtocols(id.protocols);
                     }
@@ -6691,12 +6695,12 @@
         let html = '';
         peers.slice(0, 10).forEach(peer => {
             const peerId = peer.id || peer.peer_id || peer;
-            const role = getPeerRole(peer) || 'predictor';
-            const latency = peer.latency ? `${peer.latency}ms` : '--';
+            const role = getPeerRole(peer) || 'node';
+            const latency = peer.latency ? `${peer.latency.toFixed(1)}ms` : '--';
             html += `
                 <div class="py-1 border-bottom peer-item" data-peer-id="${peerId}">
                     <div class="d-flex justify-content-between align-items-center mb-1">
-                        <span class="badge bg-gradient-success badge-xs">${role}</span>
+                        <span class="peer-role-badge peer-role-${role.toLowerCase().replace(/[^a-z]/g, '-')}">${role}</span>
                         <div>
                             <span class="text-muted small me-2">${latency}</span>
                             <button class="btn btn-link btn-sm p-0 me-1" onclick="quickPing('${peerId}')" title="Ping">
@@ -7135,9 +7139,8 @@
             // Use listen_addresses array from API, prefer non-localhost address
             const listenAddrs = peer.listen_addresses || [];
             const multiaddr = listenAddrs.find(a => !a.includes('127.0.0.1')) || listenAddrs[0] || peer.multiaddr || peer.multiaddress || (peerId !== '--' ? `/p2p/${peerId}` : '--');
-            // Handle both 'role' (string) and 'roles' (array) formats
-            const roles = peer.roles || (peer.role ? [peer.role] : []);
-            const role = roles.length > 0 ? roles[0] : 'unknown';
+            // Use getPeerRole to get primary role based on hierarchy (oracle > node, etc.)
+            const role = getPeerRole(peer) || 'node';
             // Check both 'latency' (from unified endpoint) and 'rtt' (from ping)
             const rtt = peer.latency || peer.rtt;
             const protocols = peer.protocols || [];
@@ -7172,7 +7175,7 @@
                         </div>
                     </td>
                     <td>
-                        <span class="peer-role-badge peer-role-${role.toLowerCase().replace(/[^a-z]/g, '-')}">${role}</span>
+                        <span class="peer-role-badge peer-role-${role.toLowerCase().replace(/[^a-z]/g, '-')}">${role.toLowerCase()}</span>
                     </td>
                     <td>
                         ${isConnected
