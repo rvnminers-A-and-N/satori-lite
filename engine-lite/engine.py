@@ -36,7 +36,15 @@ def _get_networking_mode() -> str:
     mode = os.environ.get('SATORI_NETWORKING_MODE')
     if mode is None:
         try:
-            mode = config.get().get('networking mode', 'central')
+            # Try neuron config first (has the actual config.yaml access)
+            from satorineuron import config as neuron_config
+            mode = neuron_config.get().get('networking mode', 'central')
+        except ImportError:
+            # Fallback to engine config (which may not have get())
+            try:
+                mode = config.get().get('networking mode', 'central')
+            except Exception:
+                mode = 'central'
         except Exception:
             mode = 'central'
     return mode.lower().strip()
@@ -301,9 +309,27 @@ class Engine:
             peers: The Peers instance initialized by start.py
         """
         self._p2p_peers = peers
+        # Propagate to all existing streamModels
+        for streamUuid, streamModel in self.streamModels.items():
+            streamModel._p2p_peers = peers
         info("P2P peers wired to Engine", color="cyan")
         # Now initialize P2P protocols that depend on peers
         self.initializeP2P()
+
+    def setPredictionProtocol(self, protocol) -> None:
+        """Set the shared PredictionProtocol instance from start.py.
+
+        Args:
+            protocol: The PredictionProtocol instance initialized by start.py
+        """
+        self._prediction_protocol = protocol
+        # Propagate to all existing streamModels (both protocol and peers for spawn_background_task)
+        for streamUuid, streamModel in self.streamModels.items():
+            streamModel._prediction_protocol = protocol
+            if self._p2p_peers is not None:
+                streamModel._p2p_peers = self._p2p_peers
+            info(f"P2P prediction protocol wired to stream {streamUuid[:16]}...", color="cyan")
+        info("P2P prediction protocol wired to Engine", color="cyan")
 
     def subscribeToP2PObservations(self, streamUuid: str) -> bool:
         """Subscribe to P2P observations for a stream."""
@@ -396,6 +422,11 @@ class Engine:
             predictionStreamId=pubStream.streamId,
             predictionProduced=self.predictionProduced)
         self.streamModels[stream.streamId].chooseAdapter(inplace=True)
+        # Propagate P2P protocol if already set
+        if self._prediction_protocol is not None:
+            self.streamModels[stream.streamId]._prediction_protocol = self._prediction_protocol
+        if self._p2p_peers is not None:
+            self.streamModels[stream.streamId]._p2p_peers = self._p2p_peers
         self.streamModels[stream.streamId].run_forever()
 
     def pause(self, force: bool = False):
@@ -495,6 +526,11 @@ class Engine:
             # if self.centrifugo is not None:
             #     self.streamModels[subUuid].usePubSub = True
             self.streamModels[subUuid].chooseAdapter(inplace=True)
+            # Propagate P2P protocol if already set
+            if self._prediction_protocol is not None:
+                self.streamModels[subUuid]._prediction_protocol = self._prediction_protocol
+            if self._p2p_peers is not None:
+                self.streamModels[subUuid]._p2p_peers = self._p2p_peers
             self.streamModels[subUuid].run_forever()
 
     def initializeModelsFromNeuron(self):
@@ -529,6 +565,11 @@ class Engine:
                     resumeAll=self.resume,
                     storage=self.storage)
                 self.streamModels[subUuid].chooseAdapter(inplace=True)
+                # Propagate P2P protocol if already set
+                if self._prediction_protocol is not None:
+                    self.streamModels[subUuid]._prediction_protocol = self._prediction_protocol
+                if self._p2p_peers is not None:
+                    self.streamModels[subUuid]._p2p_peers = self._p2p_peers
                 self.streamModels[subUuid].run_forever()
                 info(f"Model initialized for stream {subUuid}", color='green')
             except Exception as e:
@@ -1314,17 +1355,34 @@ class StreamModel:
             # Store for potential reveal later
             self._pending_commits[self._current_round_id] = predicted_value
 
-            debug(f"P2P prediction committed for {self.streamUuid[:16]}... round={self._current_round_id} value={predicted_value}")
+            info(f"P2P prediction committed for {self.streamUuid[:16]}... round={self._current_round_id} value={predicted_value}", color="cyan")
 
             # If we have a prediction protocol instance, publish the prediction
             if self._prediction_protocol is not None:
                 try:
-                    asyncio.run(self._prediction_protocol.publish_prediction(
-                        stream_id=self.streamUuid,
-                        value=predicted_value,
-                        target_time=target_time,
-                        confidence=0.5
-                    ))
+                    # Use the Peers' spawn_background_task to run async in Trio context
+                    # This avoids conflicts with asyncio.run() and Trio event loops
+                    if self._p2p_peers is not None and hasattr(self._p2p_peers, 'spawn_background_task'):
+                        async def _publish():
+                            try:
+                                await self._prediction_protocol.publish_prediction(
+                                    stream_id=self.streamUuid,
+                                    value=predicted_value,
+                                    target_time=target_time,
+                                    confidence=0.5
+                                )
+                                info(f"Published P2P prediction: stream={self.streamUuid[:16]}... value={predicted_value}", color="green")
+                            except Exception as e:
+                                warning(f"Failed to publish P2P prediction: {e}")
+                        self._p2p_peers.spawn_background_task(_publish)
+                    else:
+                        # Fallback to asyncio.run (may fail in Trio context)
+                        asyncio.run(self._prediction_protocol.publish_prediction(
+                            stream_id=self.streamUuid,
+                            value=predicted_value,
+                            target_time=target_time,
+                            confidence=0.5
+                        ))
                 except Exception as e:
                     debug(f"Failed to publish P2P prediction: {e}")
 

@@ -661,17 +661,18 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             return None
 
         def subscribeToP2PObservations():
-            """Subscribe to real-time P2P observations if available."""
+            """Check P2P observation subscription status.
+
+            Note: P2P observations are now wired directly via the
+            oracle_network.on_observation_received callback set during
+            P2P initialization in _initializeP2PComponentsAsync().
+            This function just logs the status.
+            """
             if hasattr(self, '_oracle_network') and self._oracle_network:
-                try:
-                    # Subscribe to observation events
-                    if hasattr(self._oracle_network, 'subscribe'):
-                        self._oracle_network.subscribe(
-                            callback=lambda obs: processObservation(obs)
-                        )
-                        logging.info("Subscribed to P2P observations", color='green')
-                except Exception as e:
-                    logging.warning(f"Failed to subscribe to P2P observations: {e}", color='yellow')
+                if self._oracle_network.on_observation_received is not None:
+                    logging.info("P2P observations wired to Engine (callback active)", color='green')
+                else:
+                    logging.warning("P2P observation callback not set", color='yellow')
 
         def pollForever():
             # Subscribe to real-time P2P observations first
@@ -1207,7 +1208,47 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     # Wire up oracle network to peers for role detection
                     if hasattr(self._p2p_peers, 'set_oracle_network'):
                         self._p2p_peers.set_oracle_network(self._oracle_network)
-                    logging.info("P2P oracle network initialized", color="cyan")
+
+                    # Wire observations to Engine for P2P-first predictions
+                    def _feed_observation_to_engine(observation):
+                        """Feed P2P observations to the AI Engine for predictions."""
+                        try:
+                            if not hasattr(self, 'aiengine') or self.aiengine is None:
+                                return  # Engine not ready yet
+
+                            import pandas as pd
+
+                            # Extract observation data
+                            value = observation.value if hasattr(observation, 'value') else observation.get('value')
+                            timestamp = observation.timestamp if hasattr(observation, 'timestamp') else observation.get('timestamp')
+                            hash_val = observation.hash if hasattr(observation, 'hash') else observation.get('hash')
+                            stream_id = observation.stream_id if hasattr(observation, 'stream_id') else observation.get('stream_id')
+
+                            if value is None:
+                                return
+
+                            # Convert to DataFrame for engine
+                            df = pd.DataFrame([{
+                                'ts': timestamp,
+                                'value': float(value),
+                                'hash': str(hash_val) if hash_val else None,
+                            }])
+
+                            # Pass to all stream models in the engine
+                            for streamUuid, streamModel in self.aiengine.streamModels.items():
+                                try:
+                                    streamModel.onDataReceived(df)
+                                except Exception as e:
+                                    logging.debug(f"Error feeding observation to stream {streamUuid}: {e}")
+
+                            logging.debug(f"Fed P2P observation to Engine: stream={stream_id}, value={value}")
+                        except Exception as e:
+                            logging.debug(f"Error feeding observation to engine: {e}")
+
+                    # Set the callback on the oracle network
+                    self._oracle_network.on_observation_received = _feed_observation_to_engine
+
+                    logging.info("P2P oracle network initialized (wired to Engine)", color="cyan")
                 except Exception as e:
                     logging.debug(f"Oracle network: {e}")
 
@@ -1253,6 +1294,12 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     from satorip2p.protocol.prediction_protocol import PredictionProtocol
                     self._prediction_protocol = PredictionProtocol(self._p2p_peers)
                     await self._prediction_protocol.start()
+
+                    # Wire prediction protocol to Engine so it can publish predictions
+                    if hasattr(self, 'aiengine') and self.aiengine is not None:
+                        if hasattr(self.aiengine, 'setPredictionProtocol'):
+                            self.aiengine.setPredictionProtocol(self._prediction_protocol)
+
                     logging.info("P2P prediction protocol initialized", color="cyan")
                 except Exception as e:
                     logging.debug(f"Prediction protocol: {e}")
@@ -1608,6 +1655,23 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     stream_registry._streams[stream_id] = definition
                     synced_count += 1
                     logging.debug(f"Synced oracle stream to registry: {stream_id}")
+
+                    # Auto-claim our own oracle streams for prediction
+                    try:
+                        async def _auto_claim():
+                            claim = await stream_registry.claim_stream(stream_id)
+                            if claim:
+                                logging.info(f"Auto-claimed own oracle stream: {stream_id[:30]}... slot={claim.slot_index}")
+                            return claim
+
+                        import asyncio
+                        loop = asyncio.new_event_loop()
+                        try:
+                            loop.run_until_complete(_auto_claim())
+                        finally:
+                            loop.close()
+                    except Exception as claim_error:
+                        logging.debug(f"Auto-claim failed for {stream_id}: {claim_error}")
 
                 except Exception as e:
                     logging.debug(f"Failed to sync stream {stream_id}: {e}")
@@ -4065,9 +4129,33 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
         # Stream Registry IPC Endpoints
         # =====================================================================
 
+        @ipc_app.route('/p2p/streams/sync', methods=['POST'])
+        def p2p_streams_sync():
+            """Sync oracle streams to the stream registry."""
+            import asyncio
+
+            try:
+                # Run the sync function
+                if hasattr(startupDag, '_sync_oracle_streams_to_registry'):
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(startupDag._sync_oracle_streams_to_registry())
+                    finally:
+                        loop.close()
+
+                # Return updated stats
+                registry = getattr(startupDag, '_stream_registry', None)
+                known_streams = len(getattr(registry, '_streams', {})) if registry else 0
+                return jsonify({'success': True, 'synced_streams': known_streams})
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
         @ipc_app.route('/p2p/streams/stats')
         def p2p_streams_stats():
-            """Get stream registry statistics."""
+            """Get stream registry statistics, auto-syncing from oracle if empty."""
+            import asyncio
+
             registry = getattr(startupDag, '_stream_registry', None)
 
             result = {
@@ -4079,6 +4167,21 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             if registry:
                 result['started'] = True
+
+                # Auto-sync from oracle if registry is empty
+                known_streams = len(getattr(registry, '_streams', {}))
+                if known_streams == 0:
+                    try:
+                        if hasattr(startupDag, '_sync_oracle_streams_to_registry'):
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                loop.run_until_complete(startupDag._sync_oracle_streams_to_registry())
+                            finally:
+                                loop.close()
+                    except Exception:
+                        pass
+
                 if hasattr(registry, 'get_stats'):
                     stats = registry.get_stats()
                     result.update(stats)
@@ -4093,11 +4196,26 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
         @ipc_app.route('/p2p/streams/discover')
         def p2p_streams_discover():
-            """Discover available streams."""
+            """Discover available streams, auto-syncing from oracle if empty."""
+            import asyncio
+
             registry = getattr(startupDag, '_stream_registry', None)
             trio_token = getattr(startupDag, '_trio_token', None)
 
             result = {'streams': [], 'total': 0}
+
+            # Auto-sync from oracle if registry is empty
+            if registry and len(getattr(registry, '_streams', {})) == 0:
+                try:
+                    if hasattr(startupDag, '_sync_oracle_streams_to_registry'):
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            loop.run_until_complete(startupDag._sync_oracle_streams_to_registry())
+                        finally:
+                            loop.close()
+                except Exception:
+                    pass
 
             if registry and hasattr(registry, 'discover_streams'):
                 source = request.args.get('source')
@@ -4162,6 +4280,122 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        @ipc_app.route('/p2p/streams/claim', methods=['POST'])
+        def p2p_streams_claim():
+            """Claim a predictor slot on a stream."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            if not registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            slot_index = data.get('slot_index')
+            ttl = data.get('ttl')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            async def do_claim():
+                return await registry.claim_stream(
+                    stream_id=stream_id,
+                    slot_index=int(slot_index) if slot_index is not None else None,
+                    ttl=int(ttl) if ttl else None
+                )
+
+            import asyncio
+            try:
+                loop = asyncio.new_event_loop()
+                claim = loop.run_until_complete(do_claim())
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+            finally:
+                loop.close()
+
+            if claim:
+                # After claiming, wire to Engine to start predicting
+                if hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                    try:
+                        # TODO: Tell Engine to create StreamModel for this stream
+                        logging.info(f"Stream {stream_id} claimed - Engine wiring TODO")
+                    except Exception as e:
+                        logging.warning(f"Failed to wire claim to Engine: {e}")
+
+                return jsonify({
+                    'success': True,
+                    'claim': {
+                        'stream_id': claim.stream_id,
+                        'slot_index': claim.slot_index,
+                        'predictor': claim.predictor,
+                        'timestamp': claim.timestamp,
+                        'expires': claim.expires,
+                    }
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Failed to claim stream'})
+
+        @ipc_app.route('/p2p/streams/release', methods=['POST'])
+        def p2p_streams_release():
+            """Release claim on a stream."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            if not registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            async def do_release():
+                return await registry.release_stream(stream_id)
+
+            import asyncio
+            try:
+                loop = asyncio.new_event_loop()
+                success = loop.run_until_complete(do_release())
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+            finally:
+                loop.close()
+
+            return jsonify({'success': success})
+
+        @ipc_app.route('/p2p/streams/my-claims')
+        def p2p_streams_my_claims():
+            """Get my claimed streams."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            result = {'claims': [], 'count': 0}
+
+            if registry and hasattr(registry, 'get_my_streams'):
+                async def get_claims():
+                    return await registry.get_my_streams()
+
+                import asyncio
+                try:
+                    loop = asyncio.new_event_loop()
+                    claims = loop.run_until_complete(get_claims())
+                except Exception:
+                    claims = []
+                finally:
+                    loop.close()
+
+                result['claims'] = [
+                    {
+                        'stream_id': c.stream_id if hasattr(c, 'stream_id') else c.get('stream_id', ''),
+                        'slot_index': c.slot_index if hasattr(c, 'slot_index') else c.get('slot_index', 0),
+                        'predictor': c.predictor if hasattr(c, 'predictor') else c.get('predictor', ''),
+                        'timestamp': c.timestamp if hasattr(c, 'timestamp') else c.get('timestamp', 0),
+                        'expires': c.expires if hasattr(c, 'expires') else c.get('expires', 0),
+                    }
+                    for c in claims
+                ]
+                result['count'] = len(result['claims'])
+
+            return jsonify(result)
+
         # =====================================================================
         # Prediction Protocol IPC Endpoints
         # =====================================================================
@@ -4222,6 +4456,41 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     for p in predictions
                 ]
                 result['count'] = len(result['predictions'])
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/predictions/my')
+        def p2p_predictions_my():
+            """Get my predictions (predictions I've made)."""
+            prediction = getattr(startupDag, '_prediction_protocol', None)
+            stream_id = request.args.get('stream_id')  # Optional filter
+            limit = request.args.get('limit', 50, type=int)
+
+            result = {'predictions': [], 'total': 0}
+
+            if prediction and hasattr(prediction, 'get_my_predictions'):
+                try:
+                    predictions = prediction.get_my_predictions(stream_id)
+                    # Limit results
+                    if limit and len(predictions) > limit:
+                        predictions = predictions[-limit:]
+                    result['predictions'] = [
+                        {
+                            'hash': getattr(p, 'hash', ''),
+                            'stream_id': getattr(p, 'stream_id', ''),
+                            'value': getattr(p, 'value', None),
+                            'target_time': getattr(p, 'target_time', 0),
+                            'predictor': getattr(p, 'predictor', ''),
+                            'created_at': getattr(p, 'created_at', 0),
+                            'confidence': getattr(p, 'confidence', 0.5),
+                        }
+                        for p in predictions
+                    ]
+                    # Sort by created_at descending
+                    result['predictions'].sort(key=lambda x: x.get('created_at', 0), reverse=True)
+                    result['total'] = len(result['predictions'])
+                except Exception as e:
+                    logging.warning(f"Failed to get my predictions: {e}")
 
             return jsonify(result)
 

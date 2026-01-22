@@ -6102,37 +6102,25 @@ def register_routes(app):
     @app.route('/api/p2p/predictions/my')
     @login_required
     def api_p2p_predictions_my():
-        """Get my predictions."""
+        """Get my predictions via IPC API."""
         try:
-            from satorineuron.init import start
-
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_prediction_protocol') or not startup._prediction_protocol:
-                return jsonify({'predictions': [], 'error': 'Prediction protocol not initialized'})
-
-            protocol = startup._prediction_protocol
+            import requests as req
             stream_id = request.args.get('stream_id')  # Optional filter
+            limit = request.args.get('limit', 50, type=int)
 
-            predictions = protocol.get_my_predictions(stream_id)
-            result = []
-            for pred in predictions:
-                result.append({
-                    'hash': pred.hash,
-                    'stream_id': pred.stream_id,
-                    'value': pred.value,
-                    'target_time': pred.target_time,
-                    'predictor': pred.predictor,
-                    'created_at': pred.created_at,
-                    'confidence': pred.confidence,
-                })
+            # Build IPC URL with query params
+            ipc_url = 'http://127.0.0.1:24602/p2p/predictions/my'
+            params = {}
+            if stream_id:
+                params['stream_id'] = stream_id
+            if limit:
+                params['limit'] = limit
 
-            # Sort by created_at descending
-            result.sort(key=lambda x: x['created_at'], reverse=True)
-
-            return jsonify({
-                'predictions': result,
-                'total': len(result),
-            })
+            resp = req.get(ipc_url, params=params, timeout=5)
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+            else:
+                return jsonify({'predictions': [], 'error': f'IPC error: {resp.status_code}'})
 
         except Exception as e:
             logger.warning(f"Failed to get my predictions: {e}")
@@ -6714,51 +6702,28 @@ def register_routes(app):
     @app.route('/api/p2p/streams/claim', methods=['POST'])
     @login_required
     def api_p2p_streams_claim():
-        """Claim a predictor slot on a stream."""
+        """Claim a predictor slot on a stream via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            import requests as req
 
             data = request.get_json() or {}
             stream_id = data.get('stream_id')
-            slot_index = data.get('slot_index')  # Optional
-            ttl = data.get('ttl')  # Optional
 
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
-                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+            # Call IPC API
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/streams/claim',
+                json=data,
+                timeout=10
+            )
 
-            registry = startup._stream_registry
-
-            async def do_claim():
-                return await registry.claim_stream(
-                    stream_id=stream_id,
-                    slot_index=int(slot_index) if slot_index is not None else None,
-                    ttl=int(ttl) if ttl else None
-                )
-
-            try:
-                loop = asyncio.new_event_loop()
-                claim = loop.run_until_complete(do_claim())
-            finally:
-                loop.close()
-
-            if claim:
-                return jsonify({
-                    'success': True,
-                    'claim': {
-                        'stream_id': claim.stream_id,
-                        'slot_index': claim.slot_index,
-                        'predictor': claim.predictor,
-                        'timestamp': claim.timestamp,
-                        'expires': claim.expires,
-                    }
-                })
+            if resp.status_code == 200:
+                return jsonify(resp.json())
             else:
-                return jsonify({'success': False, 'error': 'Failed to claim stream'})
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
 
         except Exception as e:
             logger.warning(f"Failed to claim stream: {e}")
@@ -6767,10 +6732,9 @@ def register_routes(app):
     @app.route('/api/p2p/streams/release', methods=['POST'])
     @login_required
     def api_p2p_streams_release():
-        """Release claim on a stream."""
+        """Release claim on a stream via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            import requests as req
 
             data = request.get_json() or {}
             stream_id = data.get('stream_id')
@@ -6778,29 +6742,18 @@ def register_routes(app):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
-                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+            # Call IPC API
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/streams/release',
+                json=data,
+                timeout=10
+            )
 
-            registry = startup._stream_registry
-
-            async def do_release():
-                return await registry.release_claim(stream_id)
-
-            try:
-                loop = asyncio.new_event_loop()
-                success = loop.run_until_complete(do_release())
-            finally:
-                loop.close()
-
-            if success:
-                return jsonify({
-                    'success': True,
-                    'stream_id': stream_id,
-                    'message': f'Released claim on {stream_id}'
-                })
+            if resp.status_code == 200:
+                return jsonify(resp.json())
             else:
-                return jsonify({'success': False, 'error': 'Failed to release claim or no claim exists'})
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
 
         except Exception as e:
             logger.warning(f"Failed to release claim: {e}")
@@ -6809,40 +6762,20 @@ def register_routes(app):
     @app.route('/api/p2p/streams/my')
     @login_required
     def api_p2p_streams_my():
-        """Get my claimed streams."""
+        """Get my claimed streams via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            import requests as req
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_stream_registry') or not startup._stream_registry:
-                return jsonify({'claims': [], 'error': 'Stream registry not initialized'})
-
-            registry = startup._stream_registry
-
-            async def do_get_my():
-                return await registry.get_my_streams()
-
-            try:
-                loop = asyncio.new_event_loop()
-                claims = loop.run_until_complete(do_get_my())
-            finally:
-                loop.close()
-
-            result = []
-            for c in claims:
-                result.append({
-                    'stream_id': c.stream_id,
-                    'slot_index': c.slot_index,
-                    'timestamp': c.timestamp,
-                    'expires': c.expires,
-                    'is_expired': c.is_expired(),
+            resp = req.get('http://127.0.0.1:24602/p2p/streams/my-claims', timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                # Transform to expected format
+                return jsonify({
+                    'claims': data.get('claims', []),
+                    'total': data.get('count', 0),
                 })
-
-            return jsonify({
-                'claims': result,
-                'total': len(result),
-            })
+            else:
+                return jsonify({'claims': [], 'error': f'IPC error: {resp.status_code}'})
 
         except Exception as e:
             logger.warning(f"Failed to get my streams: {e}")
