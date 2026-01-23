@@ -662,7 +662,7 @@
 
         <!-- Treasury Alerts Section -->
         <div class="col-12 col-lg-6">
-            <div class="card h-100" id="treasuryAlertsCard" style="display: none;">
+            <div class="card h-100" id="treasuryAlertsCard">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2" id="treasuryAlertIcon">notifications</i>
@@ -740,7 +740,7 @@
                      style="cursor: pointer;"
                      data-bs-toggle="collapse"
                      data-bs-target="#rewardsHistoryCollapse"
-                     aria-expanded="false"
+                     aria-expanded="true"
                      aria-controls="rewardsHistoryCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">payments</i>
@@ -750,7 +750,7 @@
                         <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
                     </button>
                 </div>
-                <div class="collapse" id="rewardsHistoryCollapse">
+                <div class="collapse show" id="rewardsHistoryCollapse">
                 <div class="card-body">
                     <!-- Rewards Summary -->
                     <div class="row text-center mb-3">
@@ -2800,15 +2800,10 @@
         try {
             // Load treasury status
             const status = await apiCall('/p2p/treasury/status');
-            const card = document.getElementById('treasuryAlertsCard');
 
             if (!status) {
-                card.style.display = 'none';
                 return;
             }
-
-            // Show the card if we have status
-            card.style.display = 'block';
 
             // Update treasury levels
             const satoriLevel = document.getElementById('treasurySatoriLevel');

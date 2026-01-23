@@ -349,7 +349,7 @@
             <div class="row g-4 mb-4">
                 <!-- My Stats -->
                 <div class="col-md-2 col-6">
-                    <div class="card text-center h-100 border-success">
+                    <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="myOracleRegistrations" class="mb-1 text-success">--</h3>
                             <small class="text-muted">My Registrations</small>
@@ -850,24 +850,22 @@ async function loadOracleStats() {
 async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
     try {
-        // Get both oracles list and our summary to identify our registrations
-        const [result, summary] = await Promise.all([
+        // Get oracles list and our identity to check if oracle is ours
+        const [result, identity] = await Promise.all([
             apiCall('/p2p/oracle/oracles'),
-            apiCall('/p2p/oracle/summary')
+            apiCall('/p2p/identity')
         ]);
 
-        // Build set of our streams for quick lookup
-        const myStreams = new Set([
-            ...(summary.primary_streams || []),
-            ...(summary.secondary_streams || [])
-        ]);
+        // Our evrmore address for checking "ours" badge
+        const myAddress = identity.evrmore_address || '';
 
         if (result.oracles && result.oracles.length > 0) {
             tbody.innerHTML = result.oracles.map(o => {
                 const addr = o.oracle_address || '';
                 const peerId = o.peer_id || '--';
                 const streamId = o.stream_id || '';
-                const isOurs = myStreams.has(streamId);
+                // Only mark as "ours" if the oracle address matches OUR address
+                const isOurs = myAddress && addr === myAddress;
                 const typeBadge = o.is_primary
                     ? '<span class="badge bg-danger">Primary</span>'
                     : '<span class="badge bg-info">Secondary</span>';
@@ -881,8 +879,8 @@ async function loadRegisteredOracles() {
 
                 return `<tr${isOurs ? ' class="table-active"' : ''}>
                     <td><code title="${streamId}">${streamLabel}</code></td>
-                    <td><code class="small" title="${addr}">${addr.slice(0, 12)}...</code></td>
-                    <td class="small" title="${peerId}">${peerId.slice(0, 16)}...</td>
+                    <td><code class="small">${addr}</code></td>
+                    <td class="small">${peerId}</td>
                     <td>${Math.round((o.reputation || 1.0) * 100)}%</td>
                     <td>${typeBadge}${oursBadge}</td>
                 </tr>`;
@@ -1570,7 +1568,7 @@ async function loadLatestObservations() {
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No observations yet. Register as an oracle or subscribe to streams.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No recent observations received from other oracles. If you are a Primary oracle, your published observations will appear in "My Published Observations" below.</td></tr>';
         }
     } catch (e) {
         console.error('Failed to load observations:', e);

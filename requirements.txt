@@ -64,6 +64,7 @@ requests==2.32.3
 websockets>=10.0.0
 trio==0.27.0
 trio-websocket==0.11.1
+httpx[http2]>=0.25.0  # HTTP client for primary oracle data fetching
 
 # Web UI
 flask==3.1.0

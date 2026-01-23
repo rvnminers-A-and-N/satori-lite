@@ -4039,23 +4039,21 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 except Exception as e:
                     logging.debug(f"Failed to emit observation: {e}")
 
+            trio_token = getattr(startupDag, '_trio_token', None)
+
             async def do_subscribe():
                 return await oracle.subscribe_to_stream(stream_id, on_observation)
 
             try:
                 import trio
-                success = trio.from_thread.run_sync(
-                    lambda: trio.lowlevel.current_trio_token().run_sync_soon(
-                        trio.from_thread.run, do_subscribe
-                    )
-                )
-            except Exception:
-                # Fallback to running in trio context via nursery
-                try:
-                    success = trio.from_thread.run(do_subscribe)
-                except Exception as e:
-                    logging.warning(f"Failed to subscribe via trio: {e}")
-                    return jsonify({'success': False, 'error': str(e)}), 500
+                if trio_token:
+                    success = trio.from_thread.run(do_subscribe, trio_token=trio_token)
+                else:
+                    logging.warning("No trio token available for subscription")
+                    return jsonify({'success': False, 'error': 'Trio not initialized'}), 503
+            except Exception as e:
+                logging.warning(f"Failed to subscribe via trio: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
 
             if success:
                 return jsonify({
@@ -4080,12 +4078,18 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
+            trio_token = getattr(startupDag, '_trio_token', None)
+
             async def do_unsubscribe():
                 return await oracle.unsubscribe_from_stream(stream_id)
 
             try:
                 import trio
-                success = trio.from_thread.run(do_unsubscribe)
+                if trio_token:
+                    success = trio.from_thread.run(do_unsubscribe, trio_token=trio_token)
+                else:
+                    logging.warning("No trio token available for unsubscription")
+                    return jsonify({'success': False, 'error': 'Trio not initialized'}), 503
             except Exception as e:
                 logging.warning(f"Failed to unsubscribe via trio: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
