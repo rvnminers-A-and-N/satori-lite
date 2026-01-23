@@ -429,6 +429,143 @@ class Engine:
             self.streamModels[stream.streamId]._p2p_peers = self._p2p_peers
         self.streamModels[stream.streamId].run_forever()
 
+    def addStreamFromClaim(self, stream_id: str) -> bool:
+        """
+        Create a StreamModel for a claimed stream (P2P mode).
+
+        Args:
+            stream_id: Stream identifier like 'crypto|satori|BTC|USD'
+                      Format: source|author|stream|target
+
+        Returns:
+            True if created successfully, False otherwise
+        """
+        try:
+            # Parse stream_id to get components
+            parts = stream_id.split('|')
+            if len(parts) < 3:
+                warning(f"Invalid stream_id format: {stream_id} (expected source|author|stream|target)")
+                return False
+
+            source = parts[0]
+            author = parts[1]
+            stream = parts[2]
+            target = parts[3] if len(parts) > 3 else ''
+
+            # Create StreamId to get UUID
+            from satorilib.concepts.structs import StreamId as SatoriStreamId
+            streamId = SatoriStreamId(source=source, author=author, stream=stream, target=target)
+            streamUuid = streamId.uuid
+
+            # Don't duplicate
+            if streamUuid in self.streamModels:
+                info(f"StreamModel already exists for {stream_id} (UUID: {streamUuid[:16]}...)")
+                return True
+
+            # Create a minimal StreamModel for P2P predictions
+            # In P2P mode, we receive observations via callback and make predictions
+            # We use createFromServer-like initialization but without actual server
+            streamModel = StreamModel.__new__(StreamModel)
+            streamModel.cpu = getProcessorCount()
+            streamModel.pauseAll = self.pause
+            streamModel.resumeAll = self.resume
+            streamModel.preferredAdapters = [XgbAdapter, StarterAdapter]
+            streamModel.defaultAdapters = [XgbAdapter, XgbAdapter, StarterAdapter]
+            streamModel.failedAdapters = []
+            streamModel.thread = None
+            streamModel.streamUuid = streamUuid
+            streamModel.predictionStreamUuid = streamUuid  # Same for P2P
+            streamModel.subscriptionStream = None  # No server subscription
+            streamModel.publicationStream = None
+            streamModel.server = self.server
+            streamModel.wallet = self.wallet
+            streamModel.rng = np.random.default_rng(37)
+            streamModel.publisherHost = None
+            streamModel.transferProtocol = 'p2p'
+            streamModel.usePubSub = True
+            streamModel.internal = False
+            streamModel.useServer = False  # P2P mode
+            streamModel.peerInfo = PeerInfo([], [])
+            streamModel.dataClientOfIntServer = None
+            streamModel.dataClientOfExtServer = None
+            streamModel.identity = self.identity
+            streamModel.storage = self.storage
+            # P2P commit-reveal support
+            streamModel._prediction_protocol = self._prediction_protocol
+            streamModel._p2p_peers = self._p2p_peers
+            streamModel._current_round_id = 0
+            streamModel._pending_commits = {}
+            streamModel.trainingDelay = streamModel._loadTrainingDelay()
+
+            # Initialize the model
+            streamModel.initializeForP2P()
+
+            self.streamModels[streamUuid] = streamModel
+            streamModel.chooseAdapter(inplace=True)
+            streamModel.run_forever()
+
+            info(f"Created StreamModel for claimed stream: {stream_id} (UUID: {streamUuid[:16]}...)", color='green')
+            return True
+
+        except Exception as e:
+            error(f"Failed to create StreamModel for {stream_id}: {e}")
+            return False
+
+    def removeStreamFromClaim(self, stream_id: str) -> bool:
+        """
+        Remove a StreamModel when releasing a claim.
+
+        Args:
+            stream_id: Stream identifier like 'crypto|satori|BTC|USD'
+
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        try:
+            # Parse stream_id to get UUID
+            parts = stream_id.split('|')
+            if len(parts) < 3:
+                warning(f"Invalid stream_id format: {stream_id}")
+                return False
+
+            source = parts[0]
+            author = parts[1]
+            stream = parts[2]
+            target = parts[3] if len(parts) > 3 else ''
+
+            from satorilib.concepts.structs import StreamId as SatoriStreamId
+            streamId = SatoriStreamId(source=source, author=author, stream=stream, target=target)
+            streamUuid = streamId.uuid
+
+            if streamUuid not in self.streamModels:
+                info(f"No StreamModel found for {stream_id} (UUID: {streamUuid[:16]}...)")
+                return True  # Already removed
+
+            # Stop the model
+            streamModel = self.streamModels[streamUuid]
+            try:
+                streamModel.pause()
+            except Exception:
+                pass
+
+            # Remove from dict
+            del self.streamModels[streamUuid]
+
+            info(f"Removed StreamModel for released stream: {stream_id} (UUID: {streamUuid[:16]}...)", color='yellow')
+            return True
+
+        except Exception as e:
+            error(f"Failed to remove StreamModel for {stream_id}: {e}")
+            return False
+
+    def getStreamModelCount(self) -> int:
+        """Get the number of active StreamModels."""
+        return len(self.streamModels)
+
+    def getClaimedStreamIds(self) -> list:
+        """Get list of stream UUIDs that have active StreamModels."""
+        return list(self.streamModels.keys())
+
     def pause(self, force: bool = False):
         if force:
             self.paused = True
@@ -798,6 +935,25 @@ class StreamModel:
         self.stable: ModelAdapter = copy.deepcopy(self.pilot)
         self.paused: bool = False
         debug(f'AI Engine: stream id {self.streamUuid} using {self.adapter.__name__} (Central Server mode)', color='teal')
+
+    def initializeForP2P(self):
+        """Initialize model for P2P mode (receiving observations via callback)."""
+        self.data: pd.DataFrame = self.loadDataFromStorage()
+        self.adapter: ModelAdapter = self.chooseAdapter()
+        self.pilot: ModelAdapter = self.adapter(uid=self.streamUuid)
+        self.pilot.load(self.modelPath())
+        self.stable: ModelAdapter = copy.deepcopy(self.pilot)
+        self.paused: bool = False
+        debug(f'AI Engine: stream id {self.streamUuid} using {self.adapter.__name__} (P2P mode)', color='teal')
+
+    def loadDataFromStorage(self) -> pd.DataFrame:
+        """Load historical data from local SQLite storage (P2P mode)."""
+        localData = self.storage.getStreamDataForEngine(self.streamUuid)
+        if not localData.empty:
+            info(f"Loaded {len(localData)} rows from SQLite for stream {self.streamUuid[:16]}...", color='green')
+            return localData
+        info(f"No local data for stream {self.streamUuid[:16]}..., starting fresh", color='yellow')
+        return pd.DataFrame(columns=["date_time", "value", "id"])
 
     def _loadTrainingDelay(self) -> int:
         """Load training delay from config file.

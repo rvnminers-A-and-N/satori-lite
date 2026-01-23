@@ -6666,6 +6666,145 @@ def register_routes(app):
             logger.warning(f"Failed to get oracle subscriptions: {e}")
             return jsonify({'error': str(e)})
 
+    @app.route('/api/p2p/oracle/summary')
+    @login_required
+    def api_p2p_oracle_summary():
+        """Get summary of our oracle registrations (primary/secondary)."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/oracle/summary')
+            if result:
+                return jsonify(result)
+
+            return jsonify({
+                'primary_count': 0,
+                'secondary_count': 0,
+                'total_count': 0,
+                'primary_streams': [],
+                'secondary_streams': [],
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle summary: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/role/<stream_id>')
+    @login_required
+    def api_p2p_oracle_role(stream_id: str):
+        """Get our oracle role for a specific stream."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get(f'/p2p/oracle/role/{stream_id}')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'stream_id': stream_id, 'role': 'none'})
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle role: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/register-secondary', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_register_secondary():
+        """Register as a secondary oracle for a stream."""
+        try:
+            import requests as req
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/oracle/register-secondary',
+                json={'stream_id': stream_id},
+                timeout=10
+            )
+
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+            else:
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
+
+        except Exception as e:
+            logger.warning(f"Failed to register as secondary oracle: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @app.route('/api/p2p/oracle/stream-info/<stream_id>')
+    @login_required
+    def api_p2p_oracle_stream_info(stream_id: str):
+        """Get oracle info for a specific stream (primary, secondaries)."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get(f'/p2p/oracle/stream-info/{stream_id}')
+            if result:
+                return jsonify(result)
+
+            return jsonify({
+                'stream_id': stream_id,
+                'primary': None,
+                'secondaries': [],
+                'my_role': 'none',
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle stream info: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/oracle/templates')
+    @login_required
+    def api_p2p_oracle_templates():
+        """Get available oracle data source templates."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/oracle/templates')
+            if result:
+                return jsonify(result)
+
+            return jsonify({'success': False, 'templates': []})
+
+        except Exception as e:
+            logger.warning(f"Failed to get oracle templates: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
+    @app.route('/api/p2p/oracle/register-primary', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_register_primary():
+        """Register as a primary oracle with data source configuration."""
+        try:
+            import requests as req
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            data_source = data.get('data_source')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            # Call IPC API
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/oracle/register-primary',
+                json={'stream_id': stream_id, 'data_source': data_source},
+                timeout=30
+            )
+
+            if resp.ok:
+                return jsonify(resp.json())
+            else:
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
+
+        except Exception as e:
+            logger.warning(f"Failed to register as primary oracle: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     # =========================================================================
     # STREAM REGISTRY API ENDPOINTS
     # =========================================================================
@@ -6771,15 +6910,32 @@ def register_routes(app):
                 data = resp.json()
                 # Transform to expected format
                 return jsonify({
-                    'claims': data.get('claims', []),
+                    'streams': data.get('claims', []),
                     'total': data.get('count', 0),
                 })
             else:
-                return jsonify({'claims': [], 'error': f'IPC error: {resp.status_code}'})
+                return jsonify({'streams': [], 'error': f'IPC error: {resp.status_code}'})
 
         except Exception as e:
             logger.warning(f"Failed to get my streams: {e}")
-            return jsonify({'claims': [], 'error': str(e)})
+            return jsonify({'streams': [], 'error': str(e)})
+
+    @app.route('/api/p2p/streams/my-claims')
+    @login_required
+    def api_p2p_streams_my_claims():
+        """Get my claimed streams with full claim details via IPC API."""
+        try:
+            import requests as req
+
+            resp = req.get('http://127.0.0.1:24602/p2p/streams/my-claims', timeout=5)
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+            else:
+                return jsonify({'claims': [], 'count': 0, 'error': f'IPC error: {resp.status_code}'})
+
+        except Exception as e:
+            logger.warning(f"Failed to get my claims: {e}")
+            return jsonify({'claims': [], 'count': 0, 'error': str(e)})
 
     @app.route('/api/p2p/streams/definition/<stream_id>')
     @login_required
@@ -6956,6 +7112,47 @@ def register_routes(app):
         except Exception as e:
             logger.warning(f"Failed to get stream stats: {e}")
             return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/streams/engine-status')
+    @login_required
+    def api_p2p_streams_engine_status():
+        """Get Engine stream model status via IPC API."""
+        try:
+            from web.wsgi import _ipc_get
+
+            result = _ipc_get('/p2p/streams/engine-status')
+            if result:
+                return jsonify(result)
+
+            # Fallback if IPC not available
+            return jsonify({
+                'active_models': 0,
+                'stream_uuids': [],
+                'engine_ready': False,
+            })
+
+        except Exception as e:
+            logger.warning(f"Failed to get engine status: {e}")
+            return jsonify({'error': str(e)})
+
+    @app.route('/api/p2p/streams/renew-claims', methods=['POST'])
+    @login_required
+    def api_p2p_streams_renew_claims():
+        """Manually trigger renewal of stream claims."""
+        try:
+            import requests as req
+
+            resp = req.post('http://127.0.0.1:24602/p2p/streams/renew-claims', timeout=30)
+
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+            else:
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
+
+        except Exception as e:
+            logger.warning(f"Failed to renew claims: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
 
     # =========================================================================
     # CONSENSUS ROUND ENDPOINTS

@@ -128,6 +128,185 @@
     </div>
 </div>
 
+<!-- Stream Onboarding Modal -->
+<div class="modal fade" id="streamOnboardingModal" tabindex="-1" aria-labelledby="streamOnboardingModalLabel" aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" style="background: var(--bg-card); border: 1px solid var(--border-color);">
+            <div class="modal-header" style="border-bottom: 1px solid var(--border-color);">
+                <h5 class="modal-title" id="streamOnboardingModalLabel">
+                    <i class="material-icons align-middle me-2">play_circle</i>
+                    Welcome to Satori - Get Started
+                </h5>
+            </div>
+            <div class="modal-body">
+                <p class="mb-3">
+                    To start earning rewards, you need to claim streams to predict on.
+                    Choose how you'd like to get started:
+                </p>
+
+                <!-- Option Tabs -->
+                <ul class="nav nav-pills mb-3" id="onboardingTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="auto-pick-tab" data-bs-toggle="pill" data-bs-target="#auto-pick-panel" type="button" role="tab">
+                            <i class="material-icons align-middle me-1" style="font-size: 16px;">auto_awesome</i>
+                            Auto-Pick
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="manual-pick-tab" data-bs-toggle="pill" data-bs-target="#manual-pick-panel" type="button" role="tab">
+                            <i class="material-icons align-middle me-1" style="font-size: 16px;">checklist</i>
+                            Manual Select
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="skip-tab" data-bs-toggle="pill" data-bs-target="#skip-panel" type="button" role="tab">
+                            <i class="material-icons align-middle me-1" style="font-size: 16px;">skip_next</i>
+                            Skip for Now
+                        </button>
+                    </li>
+                </ul>
+
+                <div class="tab-content" id="onboardingTabContent">
+                    <!-- Auto-Pick Panel -->
+                    <div class="tab-pane fade show active" id="auto-pick-panel" role="tabpanel">
+                        <div class="alert alert-info">
+                            <i class="material-icons align-middle me-1">info</i>
+                            Automatically claim streams with active oracles. The system will select the best streams based on activity and available slots.
+                        </div>
+
+                        <h6 class="mb-3">Select Your Load Level:</h6>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <div class="card h-100 load-level-card" data-level="light" onclick="selectLoadLevel('light')" style="cursor: pointer; transition: all 0.2s;">
+                                    <div class="card-body text-center">
+                                        <i class="material-icons" style="font-size: 48px; color: #28a745;">battery_3_bar</i>
+                                        <h5 class="mt-2">Light</h5>
+                                        <p class="text-muted mb-0">5 streams</p>
+                                        <small class="text-muted">Low CPU usage, good for testing</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card h-100 load-level-card selected" data-level="medium" onclick="selectLoadLevel('medium')" style="cursor: pointer; transition: all 0.2s; border: 2px solid var(--accent-color);">
+                                    <div class="card-body text-center">
+                                        <i class="material-icons" style="font-size: 48px; color: #ffc107;">battery_5_bar</i>
+                                        <h5 class="mt-2">Medium</h5>
+                                        <span class="badge bg-primary">Recommended</span>
+                                        <p class="text-muted mb-0">15 streams</p>
+                                        <small class="text-muted">Balanced performance</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card h-100 load-level-card" data-level="heavy" onclick="selectLoadLevel('heavy')" style="cursor: pointer; transition: all 0.2s;">
+                                    <div class="card-body text-center">
+                                        <i class="material-icons" style="font-size: 48px; color: #dc3545;">battery_full</i>
+                                        <h5 class="mt-2">Heavy</h5>
+                                        <p class="text-muted mb-0">30 streams</p>
+                                        <small class="text-muted">Higher rewards, more resources</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="text-center">
+                            <button class="btn btn-primary btn-lg" onclick="autoPickStreams()">
+                                <i class="material-icons align-middle me-1">auto_awesome</i>
+                                Auto-Pick Streams
+                            </button>
+                        </div>
+
+                        <!-- Auto-pick progress -->
+                        <div id="autoPickProgress" class="mt-3" style="display: none;">
+                            <div class="progress" style="height: 25px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" id="autoPickProgressBar" style="width: 0%"></div>
+                            </div>
+                            <p class="text-center text-muted mt-2" id="autoPickStatus">Finding active streams...</p>
+                        </div>
+
+                        <!-- Auto-timeout notice -->
+                        <div class="text-center mt-3">
+                            <small class="text-muted" id="autoTimeoutNotice">
+                                <i class="material-icons align-middle" style="font-size: 14px;">schedule</i>
+                                If you don't select within <span id="autoTimeoutCountdown">180</span>s, Medium will be auto-selected
+                            </small>
+                        </div>
+                    </div>
+
+                    <!-- Manual Pick Panel -->
+                    <div class="tab-pane fade" id="manual-pick-panel" role="tabpanel">
+                        <div class="alert alert-info">
+                            <i class="material-icons align-middle me-1">info</i>
+                            Manually select which streams to predict on. Only streams with active oracles (published in last 15 minutes) are shown.
+                        </div>
+
+                        <div class="mb-3">
+                            <div class="input-group">
+                                <span class="input-group-text"><i class="material-icons">search</i></span>
+                                <input type="text" class="form-control" id="streamSearchInput" placeholder="Search streams..." onkeyup="filterStreamsList()">
+                            </div>
+                        </div>
+
+                        <div class="mb-2 d-flex justify-content-between align-items-center">
+                            <span class="text-muted">
+                                <span id="selectedStreamCount">0</span> selected
+                            </span>
+                            <div>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="selectAllStreams()">Select All</button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="deselectAllStreams()">Clear</button>
+                            </div>
+                        </div>
+
+                        <div id="streamsList" class="list-group mb-3" style="max-height: 300px; overflow-y: auto;">
+                            <div class="text-center py-4">
+                                <div class="spinner-border spinner-border-sm" role="status"></div>
+                                <span class="ms-2">Loading available streams...</span>
+                            </div>
+                        </div>
+
+                        <div class="text-center">
+                            <button class="btn btn-primary btn-lg" onclick="claimSelectedStreams()" id="claimSelectedBtn" disabled>
+                                <i class="material-icons align-middle me-1">check_circle</i>
+                                Claim Selected Streams
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Skip Panel -->
+                    <div class="tab-pane fade" id="skip-panel" role="tabpanel">
+                        <div class="alert alert-warning">
+                            <i class="material-icons align-middle me-1">warning</i>
+                            <strong>Note:</strong> Without claimed streams, your node won't make predictions or earn rewards.
+                        </div>
+
+                        <p>
+                            You can always claim streams later from the Predictions page. Your node will still:
+                        </p>
+                        <ul>
+                            <li>Connect to the P2P network</li>
+                            <li>Participate in data relay</li>
+                            <li>Sync with other nodes</li>
+                        </ul>
+
+                        <div class="text-center">
+                            <button class="btn btn-outline-secondary btn-lg" onclick="skipOnboarding()">
+                                <i class="material-icons align-middle me-1">skip_next</i>
+                                Skip for Now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid var(--border-color);">
+                <small class="text-muted">
+                    <i class="material-icons align-middle" style="font-size: 14px;">help_outline</i>
+                    You can manage your streams anytime from the Predictions page
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="container-fluid py-4">
     <div class="row g-4">
         <!-- Wallet Section -->
@@ -665,6 +844,56 @@
                         </a>
                     </div>
                 </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- My Claimed Streams Row -->
+    <div class="row g-4 mt-2">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center"
+                     style="cursor: pointer;"
+                     data-bs-toggle="collapse"
+                     data-bs-target="#myClaimsCollapse"
+                     aria-expanded="false"
+                     aria-controls="myClaimsCollapse">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">playlist_add_check</i>
+                        My Claimed Streams
+                        <span class="badge bg-primary ms-2" id="claimedStreamsCount">0</span>
+                    </h5>
+                    <div>
+                        <button class="btn btn-sm btn-outline-success me-2" onclick="event.stopPropagation(); renewAllClaims()" title="Renew All Claims">
+                            <i class="material-icons align-middle" style="font-size: 16px;">autorenew</i>
+                            Renew All
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadMyClaims()">
+                            <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                        </button>
+                    </div>
+                </div>
+                <div class="collapse" id="myClaimsCollapse">
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Stream</th>
+                                        <th>Slot</th>
+                                        <th>Claimed</th>
+                                        <th>Expires</th>
+                                        <th>Status</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="myClaimsTable">
+                                    <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2787,10 +3016,15 @@
         try {
             // Load prediction stats
             const stats = await apiCall('/p2p/predictions/stats');
+            // Also load Engine status to get actual active stream models
+            const engineStatus = await apiCall('/p2p/streams/engine-status');
+            const activeModels = engineStatus?.active_models || 0;
+
             if (stats) {
                 // Update summary stats
                 document.getElementById('predictionCount').textContent = stats.my_predictions || 0;
-                document.getElementById('predictionStreams').textContent = stats.subscribed_streams || 0;
+                // Use actual Engine stream models count, not protocol subscription count
+                document.getElementById('predictionStreams').textContent = activeModels;
 
                 // Accuracy from average score (score is 0-1, convert to %)
                 const accuracy = stats.my_average_score ? (stats.my_average_score * 100).toFixed(1) + '%' : '--%';
@@ -2800,12 +3034,15 @@
                 const statusAlert = document.getElementById('predictionStatus');
                 const statusText = document.getElementById('predictionStatusText');
 
-                if (stats.started) {
+                if (activeModels > 0) {
                     statusAlert.className = 'alert alert-success py-2 mb-0';
-                    statusText.textContent = 'Active - Predicting on ' + (stats.subscribed_streams || 0) + ' streams';
+                    statusText.textContent = 'Active - Predicting on ' + activeModels + ' streams';
+                } else if (stats.started) {
+                    statusAlert.className = 'alert alert-warning py-2 mb-0';
+                    statusText.textContent = 'Protocol active - Claim streams to start predicting';
                 } else {
                     statusAlert.className = 'alert alert-secondary py-2 mb-0';
-                    statusText.textContent = 'Not started - Subscribe to streams to begin';
+                    statusText.textContent = 'Not started - Claim streams to begin';
                 }
             }
 
@@ -3354,6 +3591,472 @@
         }
     }
 
+    // =========================================================================
+    // STREAM ONBOARDING FUNCTIONS
+    // =========================================================================
+
+    // Load levels: Light=5, Medium=15, Heavy=30
+    const LOAD_LEVELS = {
+        light: 5,
+        medium: 15,
+        heavy: 30
+    };
+
+    let selectedLoadLevel = 'medium';  // Default to medium
+    let availableStreams = [];  // Cached list of available streams
+    let selectedStreamIds = new Set();  // For manual selection
+    let onboardingTimeoutId = null;  // Auto-pick timeout
+    let onboardingCountdown = 180;  // 3 minutes
+
+    function selectLoadLevel(level) {
+        selectedLoadLevel = level;
+        // Update UI
+        document.querySelectorAll('.load-level-card').forEach(card => {
+            if (card.dataset.level === level) {
+                card.classList.add('selected');
+                card.style.border = '2px solid var(--accent-color)';
+            } else {
+                card.classList.remove('selected');
+                card.style.border = '';
+            }
+        });
+    }
+
+    async function loadAvailableStreams() {
+        try {
+            // Load streams with activity info
+            const result = await apiCall('/p2p/streams/discover?limit=200');
+            if (result && result.streams) {
+                // Sort by activity (active streams first)
+                availableStreams = result.streams.sort((a, b) => {
+                    // Active streams first
+                    if (a.is_active && !b.is_active) return -1;
+                    if (!a.is_active && b.is_active) return 1;
+                    // Then by last observation time (most recent first)
+                    return (b.last_observation_time || 0) - (a.last_observation_time || 0);
+                });
+                renderStreamsList();
+            }
+        } catch (e) {
+            console.error('Failed to load streams:', e);
+        }
+    }
+
+    function renderStreamsList() {
+        const container = document.getElementById('streamsList');
+        if (!availableStreams || availableStreams.length === 0) {
+            container.innerHTML = '<div class="text-center py-4 text-muted">No streams available yet. Try again later.</div>';
+            return;
+        }
+
+        container.innerHTML = availableStreams.map(stream => {
+            const streamId = stream.stream_id;
+            const displayName = streamId.split('|').slice(2).join('/') || streamId;
+            const source = stream.source || 'unknown';
+            const isSelected = selectedStreamIds.has(streamId);
+            const isActive = stream.is_active;
+
+            // Format last observation time
+            let activityInfo = '';
+            if (stream.last_observation_time > 0) {
+                const ageSeconds = Math.floor(Date.now() / 1000 - stream.last_observation_time);
+                if (ageSeconds < 60) {
+                    activityInfo = `${ageSeconds}s ago`;
+                } else if (ageSeconds < 3600) {
+                    activityInfo = `${Math.floor(ageSeconds / 60)}m ago`;
+                } else {
+                    activityInfo = `${Math.floor(ageSeconds / 3600)}h ago`;
+                }
+            }
+
+            return `
+                <label class="list-group-item d-flex align-items-center stream-item" data-stream-id="${streamId}">
+                    <input type="checkbox" class="form-check-input me-2 stream-checkbox"
+                           value="${streamId}"
+                           ${isSelected ? 'checked' : ''}
+                           onchange="toggleStreamSelection('${streamId}', this.checked)">
+                    <div class="flex-grow-1">
+                        <span class="fw-medium">${displayName}</span>
+                        ${isActive ? '<span class="badge bg-success ms-2">Active</span>' : ''}
+                        <br><small class="text-muted">Source: ${source}${activityInfo ? ' | Last: ' + activityInfo : ''}</small>
+                    </div>
+                </label>
+            `;
+        }).join('');
+    }
+
+    function filterStreamsList() {
+        const query = document.getElementById('streamSearchInput').value.toLowerCase();
+        document.querySelectorAll('.stream-item').forEach(item => {
+            const streamId = item.dataset.streamId.toLowerCase();
+            item.style.display = streamId.includes(query) ? '' : 'none';
+        });
+    }
+
+    function toggleStreamSelection(streamId, selected) {
+        if (selected) {
+            selectedStreamIds.add(streamId);
+        } else {
+            selectedStreamIds.delete(streamId);
+        }
+        updateSelectedCount();
+    }
+
+    function selectAllStreams() {
+        availableStreams.forEach(s => selectedStreamIds.add(s.stream_id));
+        document.querySelectorAll('.stream-checkbox').forEach(cb => cb.checked = true);
+        updateSelectedCount();
+    }
+
+    function deselectAllStreams() {
+        selectedStreamIds.clear();
+        document.querySelectorAll('.stream-checkbox').forEach(cb => cb.checked = false);
+        updateSelectedCount();
+    }
+
+    function updateSelectedCount() {
+        document.getElementById('selectedStreamCount').textContent = selectedStreamIds.size;
+        document.getElementById('claimSelectedBtn').disabled = selectedStreamIds.size === 0;
+    }
+
+    async function autoPickStreams() {
+        const targetCount = LOAD_LEVELS[selectedLoadLevel];
+        const progressDiv = document.getElementById('autoPickProgress');
+        const progressBar = document.getElementById('autoPickProgressBar');
+        const statusEl = document.getElementById('autoPickStatus');
+
+        progressDiv.style.display = 'block';
+        progressBar.style.width = '10%';
+        statusEl.textContent = 'Finding active streams...';
+
+        // Stop the auto-timeout
+        stopOnboardingTimeout();
+
+        try {
+            // First discover available streams (prefer active ones)
+            const result = await apiCall('/p2p/streams/discover?limit=200');
+            progressBar.style.width = '30%';
+
+            if (!result || !result.streams || result.streams.length === 0) {
+                statusEl.textContent = 'No streams available. Please try again later.';
+                progressBar.classList.remove('progress-bar-animated');
+                progressBar.classList.add('bg-warning');
+                return;
+            }
+
+            // Sort by activity (active streams first), then take top N
+            const sortedStreams = result.streams.sort((a, b) => {
+                // Active streams first
+                if (a.is_active && !b.is_active) return -1;
+                if (!a.is_active && b.is_active) return 1;
+                // Then by last observation time (most recent first)
+                return (b.last_observation_time || 0) - (a.last_observation_time || 0);
+            });
+            const streamsToClaim = sortedStreams.slice(0, targetCount);
+            statusEl.textContent = `Claiming ${streamsToClaim.length} streams...`;
+            progressBar.style.width = '40%';
+
+            let claimed = 0;
+            let failed = 0;
+
+            for (let i = 0; i < streamsToClaim.length; i++) {
+                const stream = streamsToClaim[i];
+                try {
+                    const claimResult = await apiCall('/p2p/streams/claim', 'POST', {
+                        stream_id: stream.stream_id
+                    });
+                    if (claimResult && claimResult.success) {
+                        claimed++;
+                    } else {
+                        failed++;
+                    }
+                } catch (e) {
+                    failed++;
+                }
+
+                const progress = 40 + ((i + 1) / streamsToClaim.length) * 55;
+                progressBar.style.width = progress + '%';
+                statusEl.textContent = `Claimed ${claimed}/${streamsToClaim.length} streams...`;
+            }
+
+            progressBar.style.width = '100%';
+            progressBar.classList.remove('progress-bar-animated');
+
+            if (claimed > 0) {
+                progressBar.classList.add('bg-success');
+                statusEl.textContent = `Successfully claimed ${claimed} streams! ${failed > 0 ? `(${failed} failed)` : ''}`;
+
+                // Close modal after short delay
+                setTimeout(() => {
+                    closeOnboardingModal();
+                    loadPredictionStats();  // Refresh prediction stats
+                    showToast(`Claimed ${claimed} streams. AI predictions starting...`);
+                }, 1500);
+            } else {
+                progressBar.classList.add('bg-danger');
+                statusEl.textContent = 'Failed to claim any streams. Please try manual selection.';
+            }
+
+        } catch (e) {
+            console.error('Auto-pick failed:', e);
+            progressBar.classList.add('bg-danger');
+            statusEl.textContent = 'Error: ' + e.message;
+        }
+    }
+
+    async function claimSelectedStreams() {
+        if (selectedStreamIds.size === 0) return;
+
+        const btn = document.getElementById('claimSelectedBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Claiming...';
+
+        // Stop the auto-timeout
+        stopOnboardingTimeout();
+
+        let claimed = 0;
+        let failed = 0;
+
+        for (const streamId of selectedStreamIds) {
+            try {
+                const result = await apiCall('/p2p/streams/claim', 'POST', {
+                    stream_id: streamId
+                });
+                if (result && result.success) {
+                    claimed++;
+                } else {
+                    failed++;
+                }
+            } catch (e) {
+                failed++;
+            }
+        }
+
+        btn.innerHTML = '<i class="material-icons align-middle me-1">check_circle</i> Claim Selected Streams';
+        btn.disabled = false;
+
+        if (claimed > 0) {
+            closeOnboardingModal();
+            loadPredictionStats();
+            showToast(`Claimed ${claimed} streams. ${failed > 0 ? `(${failed} failed)` : ''}`);
+        } else {
+            showToast('Failed to claim any streams', true);
+        }
+    }
+
+    function skipOnboarding() {
+        // Mark as skipped in localStorage
+        localStorage.setItem('satori-onboarding-skipped', 'true');
+        stopOnboardingTimeout();
+        closeOnboardingModal();
+        showToast('Onboarding skipped. Claim streams from Predictions page when ready.');
+    }
+
+    function closeOnboardingModal() {
+        const modal = bootstrap.Modal.getInstance(document.getElementById('streamOnboardingModal'));
+        if (modal) {
+            modal.hide();
+        }
+        stopOnboardingTimeout();
+    }
+
+    function startOnboardingTimeout() {
+        onboardingCountdown = 180;  // 3 minutes
+        document.getElementById('autoTimeoutCountdown').textContent = onboardingCountdown;
+
+        onboardingTimeoutId = setInterval(() => {
+            onboardingCountdown--;
+            document.getElementById('autoTimeoutCountdown').textContent = onboardingCountdown;
+
+            if (onboardingCountdown <= 0) {
+                stopOnboardingTimeout();
+                // Auto-pick with medium load level
+                selectLoadLevel('medium');
+                autoPickStreams();
+            }
+        }, 1000);
+    }
+
+    function stopOnboardingTimeout() {
+        if (onboardingTimeoutId) {
+            clearInterval(onboardingTimeoutId);
+            onboardingTimeoutId = null;
+        }
+        // Hide the timeout notice
+        const notice = document.getElementById('autoTimeoutNotice');
+        if (notice) {
+            notice.style.display = 'none';
+        }
+    }
+
+    async function checkAndShowOnboarding() {
+        // Skip if already dismissed
+        if (localStorage.getItem('satori-onboarding-skipped') === 'true') {
+            return;
+        }
+
+        try {
+            // Check if user already has claimed streams
+            const myStreams = await apiCall('/p2p/streams/my');
+            if (myStreams && myStreams.streams && myStreams.streams.length > 0) {
+                // Already has streams, no need for onboarding
+                return;
+            }
+
+            // Also check Engine status
+            const engineStatus = await apiCall('/p2p/streams/engine-status');
+            if (engineStatus && engineStatus.active_models > 0) {
+                // Already has active models
+                return;
+            }
+
+            // Show onboarding modal
+            const modal = new bootstrap.Modal(document.getElementById('streamOnboardingModal'));
+            modal.show();
+
+            // Load available streams for manual selection
+            loadAvailableStreams();
+
+            // Start auto-timeout countdown
+            startOnboardingTimeout();
+
+        } catch (e) {
+            console.error('Failed to check onboarding status:', e);
+        }
+    }
+
+    // Tab change handler for onboarding modal - stop timeout when switching tabs
+    document.addEventListener('shown.bs.tab', function(e) {
+        if (e.target.id === 'manual-pick-tab' || e.target.id === 'skip-tab') {
+            stopOnboardingTimeout();
+        } else if (e.target.id === 'auto-pick-tab') {
+            // Restart timeout when going back to auto-pick
+            startOnboardingTimeout();
+        }
+    });
+
+    // =========================================================================
+    // MY CLAIMED STREAMS FUNCTIONS
+    // =========================================================================
+
+    async function loadMyClaims() {
+        const tbody = document.getElementById('myClaimsTable');
+        const countBadge = document.getElementById('claimedStreamsCount');
+
+        try {
+            const result = await apiCall('/p2p/streams/my-claims');
+            const claims = result?.claims || [];
+            countBadge.textContent = claims.length;
+
+            if (claims.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No claimed streams. Use the onboarding modal or claim streams from the Oracle page.</td></tr>';
+                return;
+            }
+
+            const now = Math.floor(Date.now() / 1000);
+            const GRACE_PERIOD = 1800;  // 30 minutes
+
+            tbody.innerHTML = claims.map(claim => {
+                const streamId = claim.stream_id || '';
+                const displayName = streamId.split('|').slice(2).join('/') || streamId;
+                const slot = claim.slot_index ?? '--';
+                const claimedDate = claim.timestamp ? new Date(claim.timestamp * 1000).toLocaleString() : '--';
+
+                // Calculate expiry status
+                let expiryText = 'Never';
+                let statusBadge = '<span class="badge bg-success">Active</span>';
+                let timeToExpiry = 0;
+
+                if (claim.expires && claim.expires > 0) {
+                    timeToExpiry = claim.expires - now;
+                    const expiryDate = new Date(claim.expires * 1000);
+
+                    if (timeToExpiry > 0) {
+                        // Not expired yet
+                        const hours = Math.floor(timeToExpiry / 3600);
+                        const mins = Math.floor((timeToExpiry % 3600) / 60);
+
+                        if (hours > 0) {
+                            expiryText = `${hours}h ${mins}m`;
+                        } else {
+                            expiryText = `${mins}m`;
+                        }
+
+                        // Warning if expiring soon (less than 2 hours)
+                        if (timeToExpiry < 7200) {
+                            statusBadge = '<span class="badge bg-warning text-dark">Expiring Soon</span>';
+                        }
+                    } else if (timeToExpiry > -GRACE_PERIOD) {
+                        // In grace period
+                        const graceMins = Math.floor((GRACE_PERIOD + timeToExpiry) / 60);
+                        expiryText = `Grace: ${graceMins}m`;
+                        statusBadge = '<span class="badge bg-danger">Grace Period</span>';
+                    } else {
+                        // Fully expired
+                        expiryText = 'Expired';
+                        statusBadge = '<span class="badge bg-dark">Expired</span>';
+                    }
+                }
+
+                return `<tr>
+                    <td><code title="${streamId}">${displayName}</code></td>
+                    <td>${slot}</td>
+                    <td><small>${claimedDate}</small></td>
+                    <td>${expiryText}</td>
+                    <td>${statusBadge}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-danger" onclick="releaseClaim('${streamId}')" title="Release this claim">
+                            <i class="material-icons align-middle" style="font-size: 14px;">close</i>
+                        </button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+        } catch (e) {
+            console.error('Failed to load my claims:', e);
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">Failed to load claims</td></tr>';
+        }
+    }
+
+    async function renewAllClaims() {
+        try {
+            showToast('Renewing all claims...');
+
+            const result = await apiCall('/p2p/streams/renew-claims', 'POST');
+
+            if (result && result.success) {
+                showToast(`Renewed ${result.renewed} claims. ${result.failed > 0 ? `(${result.failed} failed)` : ''}`);
+                loadMyClaims();  // Refresh the table
+            } else {
+                showToast('Failed to renew claims: ' + (result?.error || 'Unknown error'), true);
+            }
+        } catch (e) {
+            console.error('Failed to renew claims:', e);
+            showToast('Failed to renew claims: ' + e.message, true);
+        }
+    }
+
+    async function releaseClaim(streamId) {
+        if (!confirm(`Release claim on ${streamId}? This will stop predictions for this stream.`)) {
+            return;
+        }
+
+        try {
+            const result = await apiCall('/p2p/streams/release', 'POST', { stream_id: streamId });
+
+            if (result && result.success) {
+                showToast(`Released claim on ${streamId}`);
+                loadMyClaims();  // Refresh the table
+                loadPredictionStats();  // Update prediction stats
+            } else {
+                showToast('Failed to release claim: ' + (result?.error || 'Unknown error'), true);
+            }
+        } catch (e) {
+            console.error('Failed to release claim:', e);
+            showToast('Failed to release claim: ' + e.message, true);
+        }
+    }
+
     // Initialize dashboard
     document.addEventListener('DOMContentLoaded', function() {
         // Set up wallet import file input handler for modal
@@ -3403,6 +4106,7 @@
         loadMyRewardsHistory();  // Load personal rewards history
         loadPredictionStats();  // Load prediction stats
         loadPerformance();  // Load AI engine performance charts (upstream feature)
+        loadMyClaims();  // Load my claimed streams
 
         // Periodic refresh of P2P data (every 30s)
         setInterval(loadP2PHealth, 30000);
@@ -3410,6 +4114,9 @@
         setInterval(loadPredictionStats, 60000);  // Refresh prediction stats every minute
         setInterval(loadTreasuryAlerts, 60000);  // Refresh alerts every minute
         setInterval(loadMyRewardsHistory, 120000);  // Refresh rewards every 2 minutes
+
+        // Check if onboarding modal should be shown (after 2 second delay for P2P to initialize)
+        setTimeout(checkAndShowOnboarding, 2000);
     });
 </script>
 {% endblock %}

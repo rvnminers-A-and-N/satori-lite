@@ -36,11 +36,14 @@ oracles:
   # =========================================================================
   # Cryptocurrency Prices - No API key needed
   # =========================================================================
+  # NOTE: Set enabled: true to become an oracle for these streams.
+  # Most users should leave these disabled and just predict on streams.
+  # Only enable if you want to contribute as a data source (oracle).
 
   - type: crypto
     name: Bitcoin Price USD
     stream_id: crypto|satori|BTC|USD
-    enabled: true  # Enabled for testing
+    enabled: false  # Set true to become an oracle for this stream
     poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: bitcoin
@@ -50,7 +53,7 @@ oracles:
   - type: crypto
     name: Ethereum Price USD
     stream_id: crypto|satori|ETH|USD
-    enabled: true  # Enabled for testing
+    enabled: false  # Set true to become an oracle for this stream
     poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: ethereum
@@ -59,7 +62,7 @@ oracles:
   - type: crypto
     name: Evrmore Price USD
     stream_id: crypto|satori|EVR|USD
-    enabled: true  # Enabled for testing
+    enabled: false  # Set true to become an oracle for this stream
     poll_interval: 300  # 5 minutes (CoinGecko rate limits)
     extra:
       coin: evrmore

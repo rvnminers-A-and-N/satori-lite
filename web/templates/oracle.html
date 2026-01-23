@@ -246,7 +246,7 @@
         <div class="tab-pane fade" id="oraclesTab">
             <!-- Oracle Stats Row -->
             <div class="row g-4 mb-4">
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="oracleSubscribedStreams" class="mb-1" style="color: #00aaff;">--</h3>
@@ -254,15 +254,31 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="myOracleRegistrations" class="mb-1 text-success">--</h3>
-                            <small class="text-muted">My Oracle Registrations</small>
+                            <small class="text-muted">My Registrations</small>
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="myPrimaryOracles" class="mb-1" style="color: #ff6b6b;">--</h3>
+                            <small class="text-muted">Primary (Publishing)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="mySecondaryOracles" class="mb-1" style="color: #4ecdc4;">--</h3>
+                            <small class="text-muted">Secondary (Relay)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="knownOracles" class="mb-1" style="color: #ffd700;">--</h3>
@@ -270,7 +286,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="cachedObservations" class="mb-1" style="color: #00ff88;">--</h3>
@@ -315,9 +331,9 @@
                 </div>
             </div>
 
-            <!-- Register as Oracle Row -->
+            <!-- Subscribe to Observations -->
             <div class="row g-4 mt-2">
-                <div class="col-md-6">
+                <div class="col-12">
                     <div class="card">
                         <div class="card-header">
                             <h6 class="mb-0">
@@ -335,24 +351,127 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
+            </div>
+
+            <!-- Primary Oracle Registration with Template Picker -->
+            <div class="row g-4 mt-2">
+                <div class="col-12">
                     <div class="card">
-                        <div class="card-header">
+                        <div class="card-header d-flex justify-content-between align-items-center" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#primaryOracleCollapse">
                             <h6 class="mb-0">
-                                <i class="material-icons align-middle me-2">how_to_reg</i>
-                                Register as Oracle
+                                <i class="material-icons align-middle me-2">cloud_upload</i>
+                                Become a Primary Oracle (Data Publisher)
+                                <i class="material-icons align-middle float-end">expand_more</i>
                             </h6>
                         </div>
-                        <div class="card-body">
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="registerOracleStreamId" placeholder="Stream ID">
-                                <div class="input-group-text">
-                                    <input class="form-check-input mt-0" type="checkbox" id="registerOraclePrimary">
-                                    <label class="form-check-label ms-1" for="registerOraclePrimary">Primary</label>
+                        <div class="collapse" id="primaryOracleCollapse">
+                            <div class="card-body">
+                                <p class="text-muted mb-3">
+                                    <strong>Primary oracles</strong> fetch real data from external sources (APIs, exchanges) and publish observations to the network.
+                                    Select a data source template or configure a custom API.
+                                </p>
+
+                                <!-- Step 1: Select Data Source Template -->
+                                <div class="mb-4">
+                                    <label class="form-label fw-bold">Step 1: Select Data Source</label>
+                                    <div id="templateSelector" class="row g-2">
+                                        <div class="text-center py-3 text-muted">
+                                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                            Loading templates...
+                                        </div>
+                                    </div>
                                 </div>
-                                <button class="btn btn-success" onclick="registerAsOracle()">Register</button>
+
+                                <!-- Step 2: Configure Data Source (dynamic based on template) -->
+                                <div class="mb-4" id="dataSourceConfig" style="display: none;">
+                                    <label class="form-label fw-bold">Step 2: Configure <span id="selectedTemplateName">Data Source</span></label>
+                                    <div class="card bg-dark">
+                                        <div class="card-body">
+                                            <!-- Template-specific fields will be inserted here -->
+                                            <div id="templateFields"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 3: Stream ID -->
+                                <div class="mb-4" id="streamIdSection" style="display: none;">
+                                    <label class="form-label fw-bold">Step 3: Stream Identifier</label>
+                                    <div class="row g-2">
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primarySource" placeholder="Source (e.g., binance)">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primaryStream" placeholder="Stream (e.g., BTCUSDT)">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primaryTarget" placeholder="Target (e.g., close)">
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">This creates a unique stream ID for your data feed</small>
+                                </div>
+
+                                <!-- Register Button -->
+                                <div id="primaryRegisterSection" style="display: none;">
+                                    <button class="btn btn-danger w-100" onclick="registerAsPrimaryOracle()" id="registerPrimaryBtn">
+                                        <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_upload</i>
+                                        Register as Primary Oracle
+                                    </button>
+                                    <div id="primaryRegisterResult" class="mt-2"></div>
+                                </div>
                             </div>
-                            <small class="text-muted">Register yourself as an oracle to publish observations</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Secondary Oracle Registration (Stream Picker) -->
+            <div class="row g-4 mt-2">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">
+                                <i class="material-icons align-middle me-2">sync</i>
+                                Become a Secondary (Relay) Oracle
+                            </h6>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadSecondaryStreamPicker()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <p class="text-muted mb-3">
+                                <strong>Secondary oracles</strong> help distribute data across the network by relaying observations from primary oracles.
+                                Select streams with active primaries to become a relay node. No API keys or data sources needed.
+                            </p>
+
+                            <!-- Search -->
+                            <div class="mb-3">
+                                <div class="input-group">
+                                    <span class="input-group-text"><i class="material-icons" style="font-size: 18px;">search</i></span>
+                                    <input type="text" class="form-control" id="secondaryStreamSearch" placeholder="Search streams..." onkeyup="filterSecondaryStreams()">
+                                </div>
+                            </div>
+
+                            <!-- Stream List -->
+                            <div id="secondaryStreamsList" class="list-group mb-3" style="max-height: 300px; overflow-y: auto;">
+                                <div class="text-center py-3 text-muted">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                    Loading available streams...
+                                </div>
+                            </div>
+
+                            <!-- Selection Summary -->
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="text-muted">
+                                    <span id="secondarySelectedCount">0</span> streams selected
+                                </span>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary me-2" onclick="clearSecondarySelection()">Clear</button>
+                                    <button class="btn btn-info" onclick="registerSelectedAsSecondary()" id="registerSecondaryBtn" disabled>
+                                        <i class="material-icons align-middle me-1" style="font-size: 16px;">sync</i>
+                                        Register as Secondary Oracle
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -691,11 +810,17 @@ async function registerStream() {
 
 async function loadOracleStats() {
     try {
+        // Load basic oracle stats
         const stats = await apiCall('/p2p/oracle/stats');
         document.getElementById('oracleSubscribedStreams').textContent = stats.subscribed_streams || 0;
         document.getElementById('myOracleRegistrations').textContent = stats.my_oracle_registrations || 0;
         document.getElementById('knownOracles').textContent = stats.known_oracles || 0;
         document.getElementById('cachedObservations').textContent = stats.cached_observations || 0;
+
+        // Load primary/secondary summary
+        const summary = await apiCall('/p2p/oracle/summary');
+        document.getElementById('myPrimaryOracles').textContent = summary.primary_count || 0;
+        document.getElementById('mySecondaryOracles').textContent = summary.secondary_count || 0;
     } catch (e) {
         console.error('Failed to load oracle stats:', e);
     }
@@ -704,17 +829,35 @@ async function loadOracleStats() {
 async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
     try {
-        const result = await apiCall('/p2p/oracle/oracles');
+        // Get both oracles list and our summary to identify our registrations
+        const [result, summary] = await Promise.all([
+            apiCall('/p2p/oracle/oracles'),
+            apiCall('/p2p/oracle/summary')
+        ]);
+
+        // Build set of our streams for quick lookup
+        const myStreams = new Set([
+            ...(summary.primary_streams || []),
+            ...(summary.secondary_streams || [])
+        ]);
+
         if (result.oracles && result.oracles.length > 0) {
             tbody.innerHTML = result.oracles.map(o => {
                 const addr = o.oracle_address || '';
                 const peerId = o.peer_id || '--';
-                return `<tr>
-                    <td>${o.stream_id || ''}</td>
-                    <td><code>${addr}</code></td>
-                    <td>${peerId}</td>
+                const streamId = o.stream_id || '';
+                const isOurs = myStreams.has(streamId);
+                const typeBadge = o.is_primary
+                    ? '<span class="badge bg-danger">Primary</span>'
+                    : '<span class="badge bg-info">Secondary</span>';
+                const oursBadge = isOurs ? ' <span class="badge bg-success">Ours</span>' : '';
+
+                return `<tr${isOurs ? ' class="table-active"' : ''}>
+                    <td><code title="${streamId}">${streamId.split('|').slice(2).join('/') || streamId}</code></td>
+                    <td><code class="small">${addr.slice(0, 12)}...</code></td>
+                    <td class="small">${peerId.slice(0, 16)}...</td>
                     <td>${Math.round((o.reputation || 1.0) * 100)}%</td>
-                    <td>${o.is_primary ? '<span class="badge bg-primary">Primary</span>' : '<span class="badge bg-secondary">Secondary</span>'}</td>
+                    <td>${typeBadge}${oursBadge}</td>
                 </tr>`;
             }).join('');
         } else {
@@ -758,23 +901,328 @@ async function unsubscribeFromObservations() {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
-async function registerAsOracle() {
-    const streamId = document.getElementById('registerOracleStreamId').value.trim();
-    const isPrimary = document.getElementById('registerOraclePrimary').checked;
-    if (!streamId) { alert('Please enter a stream ID'); return; }
+// =========================================================================
+// PRIMARY ORACLE TEMPLATE PICKER
+// =========================================================================
+
+let oracleTemplates = [];
+let selectedTemplate = null;
+
+async function loadOracleTemplates() {
+    const container = document.getElementById('templateSelector');
 
     try {
-        const result = await apiCall('/p2p/oracle/register', 'POST', { stream_id: streamId, is_primary: isPrimary });
+        const result = await apiCall('/p2p/oracle/templates');
+        if (result.success && result.templates) {
+            oracleTemplates = result.templates;
+            renderTemplateSelector();
+        } else {
+            container.innerHTML = '<div class="text-center text-danger py-3">Failed to load templates</div>';
+        }
+    } catch (e) {
+        console.error('Failed to load oracle templates:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load templates</div>';
+    }
+}
+
+function renderTemplateSelector() {
+    const container = document.getElementById('templateSelector');
+
+    if (oracleTemplates.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted py-3">No templates available</div>';
+        return;
+    }
+
+    container.innerHTML = oracleTemplates.map(t => {
+        const isSelected = selectedTemplate && selectedTemplate.id === t.id;
+        const iconMap = {
+            'binance': 'currency_bitcoin',
+            'binance_kline': 'candlestick_chart',
+            'coingecko': 'pets',
+            'coinmarketcap': 'bar_chart',
+            'kraken': 'waves',
+            'coinbase': 'account_balance',
+            'custom': 'settings',
+        };
+        const icon = iconMap[t.id] || 'api';
+
+        return `<div class="col-md-4 col-6">
+            <div class="card h-100 template-card ${isSelected ? 'border-danger' : ''}"
+                 style="cursor: pointer; ${isSelected ? 'background: rgba(220, 53, 69, 0.1);' : ''}"
+                 onclick="selectTemplate('${t.id}')">
+                <div class="card-body text-center py-3">
+                    <i class="material-icons mb-2" style="font-size: 32px; color: ${isSelected ? '#dc3545' : '#00aaff'};">${icon}</i>
+                    <h6 class="mb-1">${t.name}</h6>
+                    <small class="text-muted">${t.description}</small>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function selectTemplate(templateId) {
+    selectedTemplate = oracleTemplates.find(t => t.id === templateId);
+    if (!selectedTemplate) return;
+
+    // Re-render selector to show selection
+    renderTemplateSelector();
+
+    // Show config section
+    document.getElementById('dataSourceConfig').style.display = 'block';
+    document.getElementById('selectedTemplateName').textContent = selectedTemplate.name;
+
+    // Generate template-specific fields
+    renderTemplateFields();
+
+    // Show stream ID and register sections
+    document.getElementById('streamIdSection').style.display = 'block';
+    document.getElementById('primaryRegisterSection').style.display = 'block';
+
+    // Pre-fill source if template has a name
+    if (selectedTemplate.id !== 'custom') {
+        document.getElementById('primarySource').value = selectedTemplate.id.replace('_kline', '');
+    }
+}
+
+function renderTemplateFields() {
+    const container = document.getElementById('templateFields');
+    const requires = selectedTemplate.requires || [];
+
+    let html = '';
+
+    // Symbol field (for Binance, Kraken, Coinbase, CMC)
+    if (requires.includes('symbol')) {
+        const example = selectedTemplate.example_symbol || 'BTCUSDT';
+        html += `<div class="mb-3">
+            <label class="form-label">Trading Pair / Symbol</label>
+            <input type="text" class="form-control" id="templateSymbol" placeholder="e.g., ${example}" value="">
+            <small class="text-muted">Example: ${example}</small>
+        </div>`;
+    }
+
+    // Base/Quote assets (for CoinGecko)
+    if (requires.includes('base_asset')) {
+        const exampleBase = selectedTemplate.example_base || 'bitcoin';
+        html += `<div class="mb-3">
+            <label class="form-label">Base Asset (CoinGecko ID)</label>
+            <input type="text" class="form-control" id="templateBaseAsset" placeholder="e.g., ${exampleBase}" value="">
+            <small class="text-muted">Use CoinGecko coin ID (e.g., bitcoin, ethereum, ripple)</small>
+        </div>`;
+    }
+
+    if (requires.includes('quote_asset')) {
+        const exampleQuote = selectedTemplate.example_quote || 'usd';
+        html += `<div class="mb-3">
+            <label class="form-label">Quote Currency</label>
+            <input type="text" class="form-control" id="templateQuoteAsset" placeholder="e.g., ${exampleQuote}" value="">
+            <small class="text-muted">e.g., usd, eur, btc</small>
+        </div>`;
+    }
+
+    // API Key (for CMC)
+    if (requires.includes('api_key')) {
+        html += `<div class="mb-3">
+            <label class="form-label">API Key</label>
+            <input type="password" class="form-control" id="templateApiKey" placeholder="Your API key">
+            <small class="text-muted">Required for ${selectedTemplate.name}</small>
+        </div>`;
+    }
+
+    // Custom API fields
+    if (requires.includes('api_url')) {
+        html += `<div class="mb-3">
+            <label class="form-label">API URL</label>
+            <input type="text" class="form-control" id="templateApiUrl" placeholder="https://api.example.com/data">
+            <small class="text-muted">Full URL to fetch data from</small>
+        </div>`;
+    }
+
+    if (requires.includes('json_path')) {
+        html += `<div class="mb-3">
+            <label class="form-label">JSON Path to Value</label>
+            <input type="text" class="form-control" id="templateJsonPath" placeholder="e.g., data.price or 0.close">
+            <small class="text-muted">Path to extract the value from JSON response</small>
+        </div>`;
+    }
+
+    // Additional headers for custom
+    if (selectedTemplate.id === 'custom') {
+        html += `<div class="mb-3">
+            <label class="form-label">HTTP Headers (JSON, optional)</label>
+            <input type="text" class="form-control" id="templateHeaders" placeholder='{"Authorization": "Bearer token"}'>
+            <small class="text-muted">Optional headers in JSON format</small>
+        </div>`;
+    }
+
+    // Fetch interval (optional override) - show for all templates
+    html += `<div class="row g-2 mt-3">
+        <div class="col-md-6">
+            <label class="form-label">Fetch Interval (seconds)</label>
+            <input type="number" class="form-control" id="templateFetchInterval" placeholder="60" value="60" min="1">
+            <small class="text-muted">How often to fetch data (default: 60s)</small>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label">Value Type</label>
+            <select class="form-select" id="templateValueType">
+                <option value="float" selected>Float (decimal number)</option>
+                <option value="int">Integer (whole number)</option>
+                <option value="string">String (text)</option>
+            </select>
+            <small class="text-muted">Expected data type of the value</small>
+        </div>
+    </div>`;
+
+    container.innerHTML = html || '<p class="text-muted">No additional configuration needed.</p>';
+}
+
+function buildDataSourceConfig() {
+    if (!selectedTemplate) return null;
+
+    const config = {
+        template: selectedTemplate.id,
+        api_url: selectedTemplate.api_url || '',
+        json_path: selectedTemplate.json_path || '',
+        value_type: selectedTemplate.value_type || 'float',
+        api_headers: {},
+        fetch_interval: 60,
+    };
+
+    // Get values from fields
+    const symbol = document.getElementById('templateSymbol')?.value.trim();
+    const baseAsset = document.getElementById('templateBaseAsset')?.value.trim();
+    const quoteAsset = document.getElementById('templateQuoteAsset')?.value.trim();
+    const apiKey = document.getElementById('templateApiKey')?.value.trim();
+    const apiUrl = document.getElementById('templateApiUrl')?.value.trim();
+    const jsonPath = document.getElementById('templateJsonPath')?.value.trim();
+    const headersStr = document.getElementById('templateHeaders')?.value.trim();
+    const fetchInterval = parseInt(document.getElementById('templateFetchInterval')?.value) || 60;
+    const valueType = document.getElementById('templateValueType')?.value || 'float';
+
+    // Set template params
+    if (symbol) config.symbol = symbol;
+    if (baseAsset) config.base_asset = baseAsset;
+    if (quoteAsset) config.quote_asset = quoteAsset;
+
+    // Replace placeholders in API URL
+    if (config.api_url) {
+        config.api_url = config.api_url
+            .replace('{symbol}', symbol || '')
+            .replace('{base_asset}', baseAsset || '')
+            .replace('{quote_asset}', quoteAsset || '');
+    }
+
+    // Replace placeholders in JSON path
+    if (config.json_path) {
+        config.json_path = config.json_path
+            .replace('{symbol}', symbol || '')
+            .replace('{base_asset}', baseAsset || '')
+            .replace('{quote_asset}', quoteAsset || '');
+    }
+
+    // Handle API key in headers
+    if (apiKey && selectedTemplate.api_headers) {
+        for (const [key, val] of Object.entries(selectedTemplate.api_headers)) {
+            config.api_headers[key] = val.replace('{api_key}', apiKey);
+        }
+    }
+
+    // Custom overrides
+    if (apiUrl) config.api_url = apiUrl;
+    if (jsonPath) config.json_path = jsonPath;
+
+    // Set fetch interval and value type from UI
+    config.fetch_interval = fetchInterval;
+    config.value_type = valueType;
+
+    // Parse custom headers
+    if (headersStr) {
+        try {
+            const parsedHeaders = JSON.parse(headersStr);
+            config.api_headers = { ...config.api_headers, ...parsedHeaders };
+        } catch (e) {
+            console.warn('Invalid headers JSON:', e);
+        }
+    }
+
+    return config;
+}
+
+async function registerAsPrimaryOracle() {
+    const source = document.getElementById('primarySource').value.trim();
+    const stream = document.getElementById('primaryStream').value.trim();
+    const target = document.getElementById('primaryTarget').value.trim();
+    const resultDiv = document.getElementById('primaryRegisterResult');
+
+    if (!source || !stream || !target) {
+        resultDiv.innerHTML = '<span class="text-danger">Please fill in Source, Stream, and Target</span>';
+        return;
+    }
+
+    if (!selectedTemplate) {
+        resultDiv.innerHTML = '<span class="text-danger">Please select a data source template</span>';
+        return;
+    }
+
+    // Build stream ID (using same format as stream registry)
+    // Format: source|stream|target (will be hashed by backend)
+    const streamId = `${source}|${stream}|${target}`;
+    const dataSource = buildDataSourceConfig();
+
+    const btn = document.getElementById('registerPrimaryBtn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Registering...';
+    resultDiv.innerHTML = '';
+
+    try {
+        const result = await apiCall('/p2p/oracle/register-primary', 'POST', {
+            stream_id: streamId,
+            data_source: dataSource,
+        });
+
         if (result.success) {
-            alert('Registered as oracle!');
-            document.getElementById('registerOracleStreamId').value = '';
+            resultDiv.innerHTML = `<span class="text-success">
+                <i class="material-icons align-middle" style="font-size: 16px;">check_circle</i>
+                Registered as primary oracle for ${source}/${stream}/${target}
+            </span>`;
+
+            // Refresh stats and oracles list
             loadOracleStats();
             loadRegisteredOracles();
+
+            // Clear form
+            setTimeout(() => {
+                document.getElementById('primarySource').value = '';
+                document.getElementById('primaryStream').value = '';
+                document.getElementById('primaryTarget').value = '';
+                selectedTemplate = null;
+                renderTemplateSelector();
+                document.getElementById('dataSourceConfig').style.display = 'none';
+                document.getElementById('streamIdSection').style.display = 'none';
+                document.getElementById('primaryRegisterSection').style.display = 'none';
+            }, 3000);
         } else {
-            alert('Failed: ' + (result.error || 'Unknown'));
+            resultDiv.innerHTML = `<span class="text-danger">${result.error || 'Registration failed'}</span>`;
         }
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) {
+        resultDiv.innerHTML = `<span class="text-danger">Error: ${e.message}</span>`;
+    } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
 }
+
+// Load templates when Primary Oracle section is expanded
+document.addEventListener('DOMContentLoaded', function() {
+    const primaryOracleCollapse = document.getElementById('primaryOracleCollapse');
+    if (primaryOracleCollapse) {
+        primaryOracleCollapse.addEventListener('shown.bs.collapse', function() {
+            if (oracleTemplates.length === 0) {
+                loadOracleTemplates();
+            }
+        });
+    }
+});
 
 // =========================================================================
 // OBSERVATIONS FUNCTIONS
@@ -903,5 +1351,197 @@ async function publishObservation(event) {
         resultSpan.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
     }
 }
+
+// =========================================================================
+// SECONDARY ORACLE STREAM PICKER
+// =========================================================================
+
+// Store for available streams and selected streams
+let secondaryAvailableStreams = [];
+let secondarySelectedStreams = new Set();
+
+async function loadSecondaryStreamPicker() {
+    const container = document.getElementById('secondaryStreamsList');
+    container.innerHTML = `<div class="text-center py-3 text-muted">
+        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+        Loading available streams...
+    </div>`;
+
+    try {
+        // Fetch all discovered streams and our oracle summary
+        const [streamsResult, oracleSummary, oraclesResult] = await Promise.all([
+            apiCall('/p2p/streams/discover?limit=100'),
+            apiCall('/p2p/oracle/summary'),
+            apiCall('/p2p/oracle/oracles')
+        ]);
+
+        const streams = streamsResult.streams || [];
+        const myPrimaryStreams = new Set(oracleSummary.primary_streams || []);
+        const mySecondaryStreams = new Set(oracleSummary.secondary_streams || []);
+        const oracles = oraclesResult.oracles || [];
+
+        // Build map of stream_id -> has primary oracle
+        const streamsWithPrimary = new Set();
+        oracles.forEach(o => {
+            if (o.is_primary) {
+                streamsWithPrimary.add(o.stream_id);
+            }
+        });
+
+        // Filter out streams we already have registrations for
+        secondaryAvailableStreams = streams.filter(s => {
+            // Exclude if we're already primary or secondary for this stream
+            if (myPrimaryStreams.has(s.stream_id) || mySecondaryStreams.has(s.stream_id)) {
+                return false;
+            }
+            return true;
+        });
+
+        // Sort: streams with active primaries first (they're ready for secondaries)
+        secondaryAvailableStreams.sort((a, b) => {
+            const aHasPrimary = streamsWithPrimary.has(a.stream_id);
+            const bHasPrimary = streamsWithPrimary.has(b.stream_id);
+            if (aHasPrimary && !bHasPrimary) return -1;
+            if (!aHasPrimary && bHasPrimary) return 1;
+            return 0;
+        });
+
+        // Add hasPrimary flag to each stream
+        secondaryAvailableStreams.forEach(s => {
+            s.hasPrimary = streamsWithPrimary.has(s.stream_id);
+        });
+
+        renderSecondaryStreamList();
+
+    } catch (e) {
+        console.error('Failed to load streams for secondary picker:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load streams</div>';
+    }
+}
+
+function renderSecondaryStreamList(filter = '') {
+    const container = document.getElementById('secondaryStreamsList');
+    const filterLower = filter.toLowerCase();
+
+    // Filter streams by search term
+    const filtered = secondaryAvailableStreams.filter(s => {
+        if (!filter) return true;
+        const searchable = `${s.source} ${s.stream} ${s.target} ${s.stream_id}`.toLowerCase();
+        return searchable.includes(filterLower);
+    });
+
+    if (filtered.length === 0) {
+        container.innerHTML = `<div class="text-center text-muted py-3">
+            ${filter ? 'No streams match your search.' : 'No streams available for secondary registration.'}
+        </div>`;
+        return;
+    }
+
+    container.innerHTML = filtered.map(s => {
+        const isSelected = secondarySelectedStreams.has(s.stream_id);
+        const streamLabel = `${s.source}/${s.stream}/${s.target}`;
+        const primaryBadge = s.hasPrimary
+            ? '<span class="badge bg-success ms-2" title="Has active primary oracle">Primary Active</span>'
+            : '<span class="badge bg-warning text-dark ms-2" title="No primary oracle yet">No Primary</span>';
+
+        return `<label class="list-group-item list-group-item-action d-flex align-items-center" style="cursor: pointer;">
+            <input type="checkbox" class="form-check-input me-3" value="${s.stream_id}"
+                   ${isSelected ? 'checked' : ''}
+                   onchange="toggleSecondaryStream('${s.stream_id}')">
+            <div class="flex-grow-1">
+                <div class="d-flex align-items-center">
+                    <strong>${streamLabel}</strong>
+                    ${primaryBadge}
+                </div>
+                <small class="text-muted">${s.datatype} | Cadence: ${s.cadence}s | ${s.predictor_slots} slots</small>
+            </div>
+        </label>`;
+    }).join('');
+}
+
+function filterSecondaryStreams() {
+    const searchValue = document.getElementById('secondaryStreamSearch').value.trim();
+    renderSecondaryStreamList(searchValue);
+}
+
+function toggleSecondaryStream(streamId) {
+    if (secondarySelectedStreams.has(streamId)) {
+        secondarySelectedStreams.delete(streamId);
+    } else {
+        secondarySelectedStreams.add(streamId);
+    }
+    updateSecondarySelectedCount();
+}
+
+function clearSecondarySelection() {
+    secondarySelectedStreams.clear();
+    updateSecondarySelectedCount();
+    // Re-render to uncheck all checkboxes
+    const searchValue = document.getElementById('secondaryStreamSearch').value.trim();
+    renderSecondaryStreamList(searchValue);
+}
+
+function updateSecondarySelectedCount() {
+    const count = secondarySelectedStreams.size;
+    document.getElementById('secondarySelectedCount').textContent = count;
+    document.getElementById('registerSecondaryBtn').disabled = count === 0;
+}
+
+async function registerSelectedAsSecondary() {
+    if (secondarySelectedStreams.size === 0) {
+        alert('Please select at least one stream');
+        return;
+    }
+
+    const btn = document.getElementById('registerSecondaryBtn');
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Registering...';
+
+    const streamIds = Array.from(secondarySelectedStreams);
+    const results = { success: 0, failed: 0, errors: [] };
+
+    // Register for each selected stream
+    for (const streamId of streamIds) {
+        try {
+            const result = await apiCall('/p2p/oracle/register-secondary', 'POST', { stream_id: streamId });
+            if (result.success) {
+                results.success++;
+            } else {
+                results.failed++;
+                results.errors.push(`${streamId.split('|').slice(2).join('/')}: ${result.error || 'Unknown error'}`);
+            }
+        } catch (e) {
+            results.failed++;
+            results.errors.push(`${streamId.split('|').slice(2).join('/')}: ${e.message}`);
+        }
+    }
+
+    btn.innerHTML = originalText;
+    btn.disabled = false;
+
+    // Show results
+    let message = `Registered as secondary oracle for ${results.success} stream(s).`;
+    if (results.failed > 0) {
+        message += `\n\nFailed for ${results.failed} stream(s):\n${results.errors.join('\n')}`;
+    }
+    alert(message);
+
+    // Clear selection and refresh
+    clearSecondarySelection();
+    loadOracleStats();
+    loadRegisteredOracles();
+    loadSecondaryStreamPicker();
+}
+
+// Load secondary stream picker when Oracles tab is shown
+document.addEventListener('DOMContentLoaded', function() {
+    const oraclesTab = document.querySelector('[data-bs-target="#oraclesTab"]');
+    if (oraclesTab) {
+        oraclesTab.addEventListener('shown.bs.tab', function() {
+            loadSecondaryStreamPicker();
+        });
+    }
+});
 </script>
 {% endblock %}

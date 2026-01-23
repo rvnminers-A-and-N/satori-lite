@@ -1284,6 +1284,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     from satorip2p.protocol.stream_registry import StreamRegistry
                     self._stream_registry = StreamRegistry(self._p2p_peers)
                     await self._stream_registry.start()
+                    # Wire stream registry to oracle network for activity tracking
+                    if hasattr(self, '_oracle_network') and self._oracle_network is not None:
+                        if hasattr(self._oracle_network, 'set_stream_registry'):
+                            self._oracle_network.set_stream_registry(self._stream_registry)
                     logging.info("P2P stream registry initialized", color="cyan")
                 except Exception as e:
                     logging.debug(f"Stream registry: {e}")
@@ -1564,6 +1568,33 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         pass  # Bridge may not be started yet
                 except Exception as e:
                     logging.debug(f"Governance protocol: {e}")
+
+            # 23. Spawn claim renewal background task
+            if hasattr(self, '_stream_registry') and self._stream_registry is not None:
+                async def claim_renewal_loop():
+                    """Periodically renew stream claims to prevent expiration."""
+                    import trio
+                    RENEWAL_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
+
+                    # Wait a bit before first renewal to let system stabilize
+                    await trio.sleep(60)
+
+                    while True:
+                        try:
+                            my_claims = self._stream_registry.get_my_claims()
+                            if my_claims:
+                                logging.info(f"Auto-renewing {len(my_claims)} stream claims...", color="cyan")
+                                result = await self._stream_registry.renew_claims()
+                                logging.info(f"Claim renewal complete: {result['renewed']} renewed, {result['failed']} failed", color="cyan")
+                        except Exception as e:
+                            logging.warning(f"Claim renewal failed: {e}")
+
+                        # Sleep until next renewal
+                        await trio.sleep(RENEWAL_INTERVAL)
+
+                if hasattr(self._p2p_peers, 'spawn_background_task'):
+                    self._p2p_peers.spawn_background_task(claim_renewal_loop)
+                    logging.info("Claim renewal background task spawned (every 12h)", color="cyan")
 
         except ImportError as e:
             logging.debug(f"satorip2p not available: {e}")
@@ -4125,6 +4156,190 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        @ipc_app.route('/p2p/oracle/summary')
+        def p2p_oracle_summary():
+            """Get summary of our oracle role (primary/secondary registrations)."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            if not oracle:
+                return jsonify({
+                    'primary_count': 0,
+                    'secondary_count': 0,
+                    'total_count': 0,
+                    'primary_streams': [],
+                    'secondary_streams': [],
+                })
+
+            if hasattr(oracle, 'get_my_oracle_summary'):
+                return jsonify(oracle.get_my_oracle_summary())
+
+            return jsonify({
+                'primary_count': 0,
+                'secondary_count': 0,
+                'total_count': 0,
+                'primary_streams': [],
+                'secondary_streams': [],
+            })
+
+        @ipc_app.route('/p2p/oracle/role/<stream_id>')
+        def p2p_oracle_role(stream_id: str):
+            """Get our oracle role for a specific stream."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            if not oracle:
+                return jsonify({'stream_id': stream_id, 'role': 'none'})
+
+            role = 'none'
+            if hasattr(oracle, 'get_oracle_role'):
+                role = oracle.get_oracle_role(stream_id)
+
+            return jsonify({'stream_id': stream_id, 'role': role})
+
+        @ipc_app.route('/p2p/oracle/register-secondary', methods=['POST'])
+        def p2p_oracle_register_secondary():
+            """Register as a secondary oracle for a stream."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            try:
+                async def do_register():
+                    return await oracle.register_as_secondary_oracle(stream_id)
+
+                if trio_token:
+                    registration = trio.from_thread.run(do_register, trio_token=trio_token)
+                else:
+                    registration = trio.run(do_register)
+
+                if registration:
+                    return jsonify({
+                        'success': True,
+                        'stream_id': stream_id,
+                        'role': 'secondary',
+                        'registration': registration.to_dict(),
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Registration failed'}), 500
+
+            except Exception as e:
+                logging.warning(f"Secondary oracle registration failed: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/oracle/templates')
+        def p2p_oracle_templates():
+            """Get available oracle data source templates."""
+            try:
+                from satorip2p.protocol.oracle_network import list_templates
+                templates = list_templates()
+                return jsonify({'success': True, 'templates': templates})
+            except ImportError:
+                return jsonify({'success': False, 'error': 'Oracle templates not available'}), 503
+            except Exception as e:
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/oracle/register-primary', methods=['POST'])
+        def p2p_oracle_register_primary():
+            """Register as a primary oracle for a stream with data source config."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            data_source_config = data.get('data_source')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            try:
+                from satorip2p.protocol.oracle_network import OracleDataSource
+
+                # Parse data source config
+                data_source = None
+                if data_source_config:
+                    data_source = OracleDataSource.from_dict(data_source_config)
+
+                async def do_register():
+                    return await oracle.register_as_oracle(
+                        stream_id,
+                        is_primary=True,
+                        data_source=data_source
+                    )
+
+                if trio_token:
+                    registration = trio.from_thread.run(do_register, trio_token=trio_token)
+                else:
+                    registration = trio.run(do_register)
+
+                if registration:
+                    return jsonify({
+                        'success': True,
+                        'stream_id': stream_id,
+                        'role': 'primary',
+                        'registration': registration.to_dict(),
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Registration failed'}), 500
+
+            except Exception as e:
+                logging.warning(f"Primary oracle registration failed: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/oracle/stream-info/<stream_id>')
+        def p2p_oracle_stream_info(stream_id: str):
+            """Get oracle info for a specific stream (primary, secondaries)."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            result = {
+                'stream_id': stream_id,
+                'primary': None,
+                'secondaries': [],
+                'my_role': 'none',
+            }
+
+            if not oracle:
+                return jsonify(result)
+
+            # Get primary oracle
+            if hasattr(oracle, 'get_primary_oracle'):
+                primary = oracle.get_primary_oracle(stream_id)
+                if primary:
+                    result['primary'] = {
+                        'oracle': primary.oracle,
+                        'peer_id': primary.peer_id,
+                        'timestamp': primary.timestamp,
+                        'reputation': primary.reputation,
+                    }
+
+            # Get secondary oracles
+            if hasattr(oracle, 'get_secondary_oracles'):
+                secondaries = oracle.get_secondary_oracles(stream_id)
+                result['secondaries'] = [
+                    {
+                        'oracle': s.oracle,
+                        'peer_id': s.peer_id,
+                        'timestamp': s.timestamp,
+                        'reputation': s.reputation,
+                    }
+                    for s in secondaries
+                ]
+
+            # Get our role
+            if hasattr(oracle, 'get_oracle_role'):
+                result['my_role'] = oracle.get_oracle_role(stream_id)
+
+            return jsonify(result)
+
         # =====================================================================
         # Stream Registry IPC Endpoints
         # =====================================================================
@@ -4222,6 +4437,9 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 datatype = request.args.get('datatype')
                 tags = request.args.getlist('tag')
                 limit = request.args.get('limit', 100, type=int)
+                # Filter for active streams only (with recent oracle activity)
+                active_only = request.args.get('active_only', 'false').lower() == 'true'
+                max_age = request.args.get('max_age', 900, type=int)  # Default 15 minutes
 
                 try:
                     async def do_discover():
@@ -4237,6 +4455,17 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     else:
                         streams = trio.run(do_discover)
 
+                    # Filter for active streams if requested
+                    if active_only:
+                        import time
+                        current_time = time.time()
+                        streams = [
+                            s for s in streams
+                            if hasattr(s, 'last_observation_time') and
+                               s.last_observation_time > 0 and
+                               (current_time - s.last_observation_time) < max_age
+                        ]
+
                     result['streams'] = [
                         {
                             'stream_id': getattr(s, 'stream_id', ''),
@@ -4249,6 +4478,8 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                             'creator': getattr(s, 'creator', ''),
                             'description': getattr(s, 'description', ''),
                             'tags': getattr(s, 'tags', []),
+                            'last_observation_time': getattr(s, 'last_observation_time', 0),
+                            'is_active': hasattr(s, 'is_active') and s.is_active(max_age),
                         }
                         for s in streams
                     ]
@@ -4314,10 +4545,14 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             if claim:
                 # After claiming, wire to Engine to start predicting
+                engine_wired = False
                 if hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
                     try:
-                        # TODO: Tell Engine to create StreamModel for this stream
-                        logging.info(f"Stream {stream_id} claimed - Engine wiring TODO")
+                        engine_wired = startupDag.aiengine.addStreamFromClaim(stream_id)
+                        if engine_wired:
+                            logging.info(f"Stream {stream_id} claimed and wired to Engine", color='green')
+                        else:
+                            logging.warning(f"Stream {stream_id} claimed but Engine wiring failed")
                     except Exception as e:
                         logging.warning(f"Failed to wire claim to Engine: {e}")
 
@@ -4329,7 +4564,8 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         'predictor': claim.predictor,
                         'timestamp': claim.timestamp,
                         'expires': claim.expires,
-                    }
+                    },
+                    'engine_wired': engine_wired
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to claim stream'})
@@ -4360,7 +4596,17 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             finally:
                 loop.close()
 
-            return jsonify({'success': success})
+            # After releasing, remove StreamModel from Engine
+            engine_removed = False
+            if success and hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                try:
+                    engine_removed = startupDag.aiengine.removeStreamFromClaim(stream_id)
+                    if engine_removed:
+                        logging.info(f"Stream {stream_id} released and removed from Engine", color='yellow')
+                except Exception as e:
+                    logging.warning(f"Failed to remove stream from Engine: {e}")
+
+            return jsonify({'success': success, 'engine_removed': engine_removed})
 
         @ipc_app.route('/p2p/streams/my-claims')
         def p2p_streams_my_claims():
@@ -4393,6 +4639,49 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     for c in claims
                 ]
                 result['count'] = len(result['claims'])
+
+            return jsonify(result)
+
+        @ipc_app.route('/p2p/streams/renew-claims', methods=['POST'])
+        def p2p_streams_renew_claims():
+            """Manually trigger renewal of all stream claims."""
+            registry = getattr(startupDag, '_stream_registry', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not registry:
+                return jsonify({'success': False, 'error': 'Stream registry not initialized'}), 503
+
+            try:
+                async def do_renew():
+                    return await registry.renew_claims()
+
+                if trio_token:
+                    result = trio.from_thread.run(do_renew, trio_token=trio_token)
+                else:
+                    result = trio.run(do_renew)
+
+                return jsonify({
+                    'success': True,
+                    'renewed': result.get('renewed', 0),
+                    'failed': result.get('failed', 0),
+                })
+            except Exception as e:
+                logging.warning(f"Claim renewal failed: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/streams/engine-status')
+        def p2p_streams_engine_status():
+            """Get Engine stream model status for dashboard."""
+            result = {
+                'active_models': 0,
+                'stream_uuids': [],
+                'engine_ready': False
+            }
+
+            if hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                result['engine_ready'] = True
+                result['active_models'] = startupDag.aiengine.getStreamModelCount()
+                result['stream_uuids'] = startupDag.aiengine.getClaimedStreamIds()
 
             return jsonify(result)
 
