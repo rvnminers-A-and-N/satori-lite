@@ -98,7 +98,7 @@
         <div class="tab-pane fade show active" id="streamsTab">
             <!-- Stream Stats Row -->
             <div class="row g-4 mb-4">
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="knownStreams" class="mb-1" style="color: #00aaff;">--</h3>
@@ -106,7 +106,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="myClaims" class="mb-1 text-success">--</h3>
@@ -114,7 +114,23 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="myPrimaryOracles" class="mb-1" style="color: #ff6b6b;">--</h3>
+                            <small class="text-muted">Primary (Publishing)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="mySecondaryOracles" class="mb-1" style="color: #4ecdc4;">--</h3>
+                            <small class="text-muted">Secondary (Relay)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="totalClaims" class="mb-1" style="color: #ffd700;">--</h3>
@@ -122,7 +138,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-3 col-6">
+                <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h4 id="streamRegistryStatus" class="mb-1 text-success">--</h4>
@@ -174,9 +190,9 @@
                 </div>
             </div>
 
-            <!-- Claim/Register Stream Row -->
+            <!-- Claim Predictor Slot -->
             <div class="row g-4 mt-2">
-                <div class="col-md-6">
+                <div class="col-12">
                     <div class="card">
                         <div class="card-header">
                             <h6 class="mb-0">
@@ -194,45 +210,130 @@
                         </div>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="card">
-                        <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#registerStreamCollapse">
-                            <h6 class="mb-0">
-                                <i class="material-icons align-middle me-2">add_circle</i>
-                                Register New Stream
-                                <i class="material-icons align-middle float-end">expand_more</i>
-                            </h6>
+            </div>
+
+            <!-- Primary Oracle Registration - Register a New Stream & Become its Oracle -->
+            <div class="row g-4 mt-2">
+                <div class="col-12">
+                    <div class="card border-danger">
+                        <div class="card-header d-flex justify-content-between align-items-center bg-danger bg-opacity-10" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#primaryOracleCollapse">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">cloud_upload</i>
+                                Register New Stream & Become Primary Oracle
+                                <i class="material-icons align-middle float-end" id="primaryCollapseIcon">expand_less</i>
+                            </h5>
                         </div>
-                        <div class="collapse" id="registerStreamCollapse">
+                        <div class="collapse show" id="primaryOracleCollapse">
                             <div class="card-body">
-                                <div class="row g-2">
-                                    <div class="col-4">
-                                        <input type="text" class="form-control form-control-sm" id="regStreamSource" placeholder="Source">
-                                    </div>
-                                    <div class="col-4">
-                                        <input type="text" class="form-control form-control-sm" id="regStreamName" placeholder="Stream">
-                                    </div>
-                                    <div class="col-4">
-                                        <input type="text" class="form-control form-control-sm" id="regStreamTarget" placeholder="Target">
-                                    </div>
-                                </div>
-                                <div class="row g-2 mt-1">
-                                    <div class="col-4">
-                                        <select class="form-select form-select-sm" id="regStreamDatatype">
-                                            <option value="numeric">Numeric</option>
-                                            <option value="price">Price</option>
-                                            <option value="volume">Volume</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-4">
-                                        <input type="number" class="form-control form-control-sm" id="regStreamCadence" value="60" placeholder="Cadence">
-                                    </div>
-                                    <div class="col-4">
-                                        <input type="number" class="form-control form-control-sm" id="regStreamSlots" value="10" placeholder="Slots">
+                                <p class="text-muted mb-3">
+                                    <strong>Primary oracles</strong> fetch real data from external sources (APIs, exchanges) and publish observations to the network.
+                                    When you register a new stream, you become its primary oracle and start publishing data.
+                                </p>
+
+                                <!-- Step 1: Select Data Source Template -->
+                                <div class="mb-4">
+                                    <label class="form-label fw-bold">Step 1: Select Data Source</label>
+                                    <div id="templateSelector" class="row g-2">
+                                        <div class="text-center py-3 text-muted">
+                                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                            Loading templates...
+                                        </div>
                                     </div>
                                 </div>
-                                <button class="btn btn-primary btn-sm mt-2" onclick="registerStream()">Register</button>
-                                <span id="registerStreamResult" class="ms-2 small"></span>
+
+                                <!-- Step 2: Configure Data Source (dynamic based on template) -->
+                                <div class="mb-4" id="dataSourceConfig" style="display: none;">
+                                    <label class="form-label fw-bold">Step 2: Configure <span id="selectedTemplateName">Data Source</span></label>
+                                    <div class="card bg-dark">
+                                        <div class="card-body">
+                                            <!-- Template-specific fields will be inserted here -->
+                                            <div id="templateFields"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Step 3: Stream ID -->
+                                <div class="mb-4" id="streamIdSection" style="display: none;">
+                                    <label class="form-label fw-bold">Step 3: Stream Identifier</label>
+                                    <div class="row g-2">
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primarySource" placeholder="Source (e.g., binance)">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primaryStream" placeholder="Stream (e.g., BTCUSDT)">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <input type="text" class="form-control" id="primaryTarget" placeholder="Target (e.g., close)">
+                                        </div>
+                                    </div>
+                                    <small class="text-muted">This creates a unique stream ID for your data feed</small>
+                                </div>
+
+                                <!-- Register Button -->
+                                <div id="primaryRegisterSection" style="display: none;">
+                                    <button class="btn btn-danger btn-lg w-100" onclick="registerAsPrimaryOracle()" id="registerPrimaryBtn">
+                                        <i class="material-icons align-middle me-1" style="font-size: 20px;">cloud_upload</i>
+                                        Register Stream & Become Primary Oracle
+                                    </button>
+                                    <div id="primaryRegisterResult" class="mt-2"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Secondary Oracle Registration (Stream Picker) -->
+            <div class="row g-4 mt-2">
+                <div class="col-12">
+                    <div class="card border-info">
+                        <div class="card-header d-flex justify-content-between align-items-center bg-info bg-opacity-10" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#secondaryOracleCollapse">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">sync</i>
+                                Become a Secondary (Relay) Oracle
+                                <i class="material-icons align-middle float-end" id="secondaryCollapseIcon">expand_less</i>
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadSecondaryStreamPicker()">
+                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                            </button>
+                        </div>
+                        <div class="collapse show" id="secondaryOracleCollapse">
+                            <div class="card-body">
+                                <p class="text-muted mb-3">
+                                    <strong>Secondary oracles</strong> help distribute data across the network by relaying observations from primary oracles.
+                                    Select streams with active primaries to become a relay node. No API keys or data sources needed.
+                                    <strong>You will automatically subscribe to observations when you register.</strong>
+                                </p>
+
+                                <!-- Search -->
+                                <div class="mb-3">
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="material-icons" style="font-size: 18px;">search</i></span>
+                                        <input type="text" class="form-control" id="secondaryStreamSearch" placeholder="Search streams..." onkeyup="filterSecondaryStreams()">
+                                    </div>
+                                </div>
+
+                                <!-- Stream List -->
+                                <div id="secondaryStreamsList" class="list-group mb-3" style="max-height: 300px; overflow-y: auto;">
+                                    <div class="text-center py-3 text-muted">
+                                        <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                                        Loading available streams...
+                                    </div>
+                                </div>
+
+                                <!-- Selection Summary -->
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span class="text-muted">
+                                        <span id="secondarySelectedCount">0</span> streams selected
+                                    </span>
+                                    <div>
+                                        <button class="btn btn-sm btn-outline-secondary me-2" onclick="clearSecondarySelection()">Clear</button>
+                                        <button class="btn btn-info btn-lg" onclick="registerSelectedAsSecondary()" id="registerSecondaryBtn" disabled>
+                                            <i class="material-icons align-middle me-1" style="font-size: 20px;">sync</i>
+                                            Register as Secondary Oracle
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -246,16 +347,9 @@
         <div class="tab-pane fade" id="oraclesTab">
             <!-- Oracle Stats Row -->
             <div class="row g-4 mb-4">
+                <!-- My Stats -->
                 <div class="col-md-2 col-6">
-                    <div class="card text-center h-100">
-                        <div class="card-body py-3">
-                            <h3 id="oracleSubscribedStreams" class="mb-1" style="color: #00aaff;">--</h3>
-                            <small class="text-muted">Subscribed Streams</small>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-2 col-6">
-                    <div class="card text-center h-100">
+                    <div class="card text-center h-100 border-success">
                         <div class="card-body py-3">
                             <h3 id="myOracleRegistrations" class="mb-1 text-success">--</h3>
                             <small class="text-muted">My Registrations</small>
@@ -265,24 +359,33 @@
                 <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
-                            <h3 id="myPrimaryOracles" class="mb-1" style="color: #ff6b6b;">--</h3>
-                            <small class="text-muted">Primary (Publishing)</small>
+                            <h3 id="oracleSubscribedStreams" class="mb-1" style="color: #00aaff;">--</h3>
+                            <small class="text-muted">My Subscriptions</small>
                         </div>
                     </div>
                 </div>
-                <div class="col-md-2 col-6">
-                    <div class="card text-center h-100">
-                        <div class="card-body py-3">
-                            <h3 id="mySecondaryOracles" class="mb-1" style="color: #4ecdc4;">--</h3>
-                            <small class="text-muted">Secondary (Relay)</small>
-                        </div>
-                    </div>
-                </div>
+                <!-- Network Stats -->
                 <div class="col-md-2 col-6">
                     <div class="card text-center h-100">
                         <div class="card-body py-3">
                             <h3 id="knownOracles" class="mb-1" style="color: #ffd700;">--</h3>
-                            <small class="text-muted">Known Oracles</small>
+                            <small class="text-muted">Network Oracles</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="networkPrimaryCount" class="mb-1" style="color: #ff6b6b;">--</h3>
+                            <small class="text-muted">Network Primary</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-2 col-6">
+                    <div class="card text-center h-100">
+                        <div class="card-body py-3">
+                            <h3 id="networkSecondaryCount" class="mb-1" style="color: #4ecdc4;">--</h3>
+                            <small class="text-muted">Network Secondary</small>
                         </div>
                     </div>
                 </div>
@@ -331,146 +434,34 @@
                 </div>
             </div>
 
-            <!-- Subscribe to Observations -->
-            <div class="row g-4 mt-2">
-                <div class="col-12">
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0">
-                                <i class="material-icons align-middle me-2">notifications</i>
-                                Subscribe to Observations
-                            </h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="input-group">
-                                <input type="text" class="form-control" id="oracleSubscribeStreamId" placeholder="Stream ID">
-                                <button class="btn btn-primary" onclick="subscribeToObservations()">Subscribe</button>
-                                <button class="btn btn-outline-danger" onclick="unsubscribeFromObservations()">Unsubscribe</button>
-                            </div>
-                            <small class="text-muted">Receive observations from oracles for this stream</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Primary Oracle Registration with Template Picker -->
-            <div class="row g-4 mt-2">
-                <div class="col-12">
-                    <div class="card">
-                        <div class="card-header d-flex justify-content-between align-items-center" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#primaryOracleCollapse">
-                            <h6 class="mb-0">
-                                <i class="material-icons align-middle me-2">cloud_upload</i>
-                                Become a Primary Oracle (Data Publisher)
-                                <i class="material-icons align-middle float-end">expand_more</i>
-                            </h6>
-                        </div>
-                        <div class="collapse" id="primaryOracleCollapse">
-                            <div class="card-body">
-                                <p class="text-muted mb-3">
-                                    <strong>Primary oracles</strong> fetch real data from external sources (APIs, exchanges) and publish observations to the network.
-                                    Select a data source template or configure a custom API.
-                                </p>
-
-                                <!-- Step 1: Select Data Source Template -->
-                                <div class="mb-4">
-                                    <label class="form-label fw-bold">Step 1: Select Data Source</label>
-                                    <div id="templateSelector" class="row g-2">
-                                        <div class="text-center py-3 text-muted">
-                                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                                            Loading templates...
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Step 2: Configure Data Source (dynamic based on template) -->
-                                <div class="mb-4" id="dataSourceConfig" style="display: none;">
-                                    <label class="form-label fw-bold">Step 2: Configure <span id="selectedTemplateName">Data Source</span></label>
-                                    <div class="card bg-dark">
-                                        <div class="card-body">
-                                            <!-- Template-specific fields will be inserted here -->
-                                            <div id="templateFields"></div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Step 3: Stream ID -->
-                                <div class="mb-4" id="streamIdSection" style="display: none;">
-                                    <label class="form-label fw-bold">Step 3: Stream Identifier</label>
-                                    <div class="row g-2">
-                                        <div class="col-md-4">
-                                            <input type="text" class="form-control" id="primarySource" placeholder="Source (e.g., binance)">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <input type="text" class="form-control" id="primaryStream" placeholder="Stream (e.g., BTCUSDT)">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <input type="text" class="form-control" id="primaryTarget" placeholder="Target (e.g., close)">
-                                        </div>
-                                    </div>
-                                    <small class="text-muted">This creates a unique stream ID for your data feed</small>
-                                </div>
-
-                                <!-- Register Button -->
-                                <div id="primaryRegisterSection" style="display: none;">
-                                    <button class="btn btn-danger w-100" onclick="registerAsPrimaryOracle()" id="registerPrimaryBtn">
-                                        <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_upload</i>
-                                        Register as Primary Oracle
-                                    </button>
-                                    <div id="primaryRegisterResult" class="mt-2"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Secondary Oracle Registration (Stream Picker) -->
+            <!-- My Oracle Registrations -->
             <div class="row g-4 mt-2">
                 <div class="col-12">
                     <div class="card">
                         <div class="card-header d-flex justify-content-between align-items-center">
-                            <h6 class="mb-0">
-                                <i class="material-icons align-middle me-2">sync</i>
-                                Become a Secondary (Relay) Oracle
-                            </h6>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadSecondaryStreamPicker()">
+                            <h5 class="mb-0">
+                                <i class="material-icons align-middle me-2">person</i>
+                                My Oracle Registrations
+                            </h5>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="loadMyOracleRegistrations()">
                                 <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
                             </button>
                         </div>
-                        <div class="card-body">
-                            <p class="text-muted mb-3">
-                                <strong>Secondary oracles</strong> help distribute data across the network by relaying observations from primary oracles.
-                                Select streams with active primaries to become a relay node. No API keys or data sources needed.
-                            </p>
-
-                            <!-- Search -->
-                            <div class="mb-3">
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="material-icons" style="font-size: 18px;">search</i></span>
-                                    <input type="text" class="form-control" id="secondaryStreamSearch" placeholder="Search streams..." onkeyup="filterSecondaryStreams()">
-                                </div>
-                            </div>
-
-                            <!-- Stream List -->
-                            <div id="secondaryStreamsList" class="list-group mb-3" style="max-height: 300px; overflow-y: auto;">
-                                <div class="text-center py-3 text-muted">
-                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                                    Loading available streams...
-                                </div>
-                            </div>
-
-                            <!-- Selection Summary -->
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="text-muted">
-                                    <span id="secondarySelectedCount">0</span> streams selected
-                                </span>
-                                <div>
-                                    <button class="btn btn-sm btn-outline-secondary me-2" onclick="clearSecondarySelection()">Clear</button>
-                                    <button class="btn btn-info" onclick="registerSelectedAsSecondary()" id="registerSecondaryBtn" disabled>
-                                        <i class="material-icons align-middle me-1" style="font-size: 16px;">sync</i>
-                                        Register as Secondary Oracle
-                                    </button>
-                                </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Stream</th>
+                                            <th>Type</th>
+                                            <th>Data Source</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="myOracleRegistrationsTable">
+                                        <tr><td colspan="4" class="text-center text-muted py-3">Loading...</td></tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -572,13 +563,13 @@
                         <div class="card-header" style="cursor: pointer;" data-bs-toggle="collapse" data-bs-target="#publishObservationCollapse">
                             <h5 class="mb-0">
                                 <i class="material-icons align-middle me-2">publish</i>
-                                Publish Observation
+                                Publish Observation (Manual)
                                 <i class="material-icons align-middle float-end">expand_more</i>
                             </h5>
                         </div>
                         <div class="collapse" id="publishObservationCollapse">
                             <div class="card-body">
-                                <p class="text-muted small">You must be registered as an oracle for a stream to publish observations.</p>
+                                <p class="text-muted small">You must be registered as an oracle for a stream to publish observations. Primary oracles publish automatically based on their data source configuration.</p>
                                 <form id="observationForm" onsubmit="publishObservation(event)">
                                     <div class="row g-3">
                                         <div class="col-md-5">
@@ -630,14 +621,59 @@ document.addEventListener('DOMContentLoaded', function() {
     loadDiscoveredStreams();
     loadMyClaimedStreams();
     loadRegisteredOracles();
+    loadMyOracleRegistrations();  // Load my registrations
     loadLatestObservations();
     loadMyPublishedObservations();
+    loadOracleTemplates();  // Load templates immediately since section is expanded
+    loadSecondaryStreamPicker();  // Load secondary picker immediately
 
     // Set up periodic refresh
     setInterval(loadStreamStats, 30000);
     setInterval(loadOracleStats, 30000);
     setInterval(loadLatestObservations, 15000);
     setInterval(loadMyPublishedObservations, 30000);
+    setInterval(loadMyOracleRegistrations, 30000);  // Refresh my registrations
+
+    // Handle tab switching - refresh data when switching tabs
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+        tab.addEventListener('shown.bs.tab', (e) => {
+            const target = e.target.getAttribute('data-bs-target');
+            if (target === '#oraclesTab') {
+                loadOracleStats();
+                loadRegisteredOracles();
+                loadMyOracleRegistrations();
+            } else if (target === '#observationsTab') {
+                loadLatestObservations();
+                loadMyPublishedObservations();
+            } else if (target === '#streamsTab') {
+                loadStreamStats();
+                loadDiscoveredStreams();
+                loadSecondaryStreamPicker();
+            }
+        });
+    });
+
+    // Handle collapse icon toggling
+    const primaryCollapse = document.getElementById('primaryOracleCollapse');
+    const secondaryCollapse = document.getElementById('secondaryOracleCollapse');
+
+    if (primaryCollapse) {
+        primaryCollapse.addEventListener('shown.bs.collapse', () => {
+            document.getElementById('primaryCollapseIcon').textContent = 'expand_less';
+        });
+        primaryCollapse.addEventListener('hidden.bs.collapse', () => {
+            document.getElementById('primaryCollapseIcon').textContent = 'expand_more';
+        });
+    }
+
+    if (secondaryCollapse) {
+        secondaryCollapse.addEventListener('shown.bs.collapse', () => {
+            document.getElementById('secondaryCollapseIcon').textContent = 'expand_less';
+        });
+        secondaryCollapse.addEventListener('hidden.bs.collapse', () => {
+            document.getElementById('secondaryCollapseIcon').textContent = 'expand_more';
+        });
+    }
 });
 
 // =========================================================================
@@ -662,12 +698,19 @@ async function apiCall(endpoint, method = 'GET', data = null) {
 
 async function loadStreamStats() {
     try {
-        const stats = await apiCall('/p2p/streams/stats');
+        const [stats, summary] = await Promise.all([
+            apiCall('/p2p/streams/stats'),
+            apiCall('/p2p/oracle/summary')
+        ]);
         document.getElementById('knownStreams').textContent = stats.known_streams || 0;
         document.getElementById('myClaims').textContent = stats.my_claims || 0;
         document.getElementById('totalClaims').textContent = stats.total_claims || 0;
         document.getElementById('streamRegistryStatus').textContent = stats.started ? 'Active' : 'Offline';
         document.getElementById('streamRegistryStatus').className = stats.started ? 'mb-1 text-success' : 'mb-1 text-danger';
+
+        // Oracle counts
+        document.getElementById('myPrimaryOracles').textContent = summary.primary_count || 0;
+        document.getElementById('mySecondaryOracles').textContent = summary.secondary_count || 0;
     } catch (e) {
         console.error('Failed to load stream stats:', e);
     }
@@ -698,7 +741,7 @@ async function loadDiscoveredStreams() {
                 </div>`;
             }).join('');
         } else {
-            container.innerHTML = '<div class="text-center text-muted py-5">No streams discovered. Register a stream or wait for network announcements.</div>';
+            container.innerHTML = '<div class="text-center text-muted py-5">No streams discovered. Register a stream below to get started!</div>';
         }
     } catch (e) {
         console.error('Failed to load streams:', e);
@@ -773,54 +816,32 @@ async function releaseStreamClaim() {
     } catch (e) { alert('Error: ' + e.message); }
 }
 
-async function registerStream() {
-    const source = document.getElementById('regStreamSource').value.trim();
-    const stream = document.getElementById('regStreamName').value.trim();
-    const target = document.getElementById('regStreamTarget').value.trim();
-    const datatype = document.getElementById('regStreamDatatype').value;
-    const cadence = parseInt(document.getElementById('regStreamCadence').value) || 60;
-    const slots = parseInt(document.getElementById('regStreamSlots').value) || 10;
-    const resultSpan = document.getElementById('registerStreamResult');
-
-    if (!source || !stream || !target) {
-        resultSpan.innerHTML = '<span class="text-danger">Fill source, stream, target</span>';
-        return;
-    }
-
-    try {
-        resultSpan.innerHTML = '<span class="text-info">Registering...</span>';
-        const result = await apiCall('/p2p/streams/register', 'POST', {
-            source, stream, target, datatype, cadence, predictor_slots: slots
-        });
-        if (result.success) {
-            resultSpan.innerHTML = '<span class="text-success">Registered!</span>';
-            loadStreamStats();
-            loadDiscoveredStreams();
-        } else {
-            resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';
-        }
-    } catch (e) {
-        resultSpan.innerHTML = '<span class="text-danger">Error</span>';
-    }
-}
-
 // =========================================================================
 // ORACLE FUNCTIONS
 // =========================================================================
 
 async function loadOracleStats() {
     try {
-        // Load basic oracle stats
-        const stats = await apiCall('/p2p/oracle/stats');
+        // Load basic oracle stats, summary, and oracles list
+        const [stats, summary, oraclesResult] = await Promise.all([
+            apiCall('/p2p/oracle/stats'),
+            apiCall('/p2p/oracle/summary'),
+            apiCall('/p2p/oracle/oracles')
+        ]);
+
+        // My stats
         document.getElementById('oracleSubscribedStreams').textContent = stats.subscribed_streams || 0;
         document.getElementById('myOracleRegistrations').textContent = stats.my_oracle_registrations || 0;
-        document.getElementById('knownOracles').textContent = stats.known_oracles || 0;
         document.getElementById('cachedObservations').textContent = stats.cached_observations || 0;
 
-        // Load primary/secondary summary
-        const summary = await apiCall('/p2p/oracle/summary');
-        document.getElementById('myPrimaryOracles').textContent = summary.primary_count || 0;
-        document.getElementById('mySecondaryOracles').textContent = summary.secondary_count || 0;
+        // Network-wide stats from oracles list
+        const oracles = oraclesResult.oracles || [];
+        const networkPrimaryCount = oracles.filter(o => o.is_primary).length;
+        const networkSecondaryCount = oracles.filter(o => !o.is_primary).length;
+
+        document.getElementById('knownOracles').textContent = oracles.length;
+        document.getElementById('networkPrimaryCount').textContent = networkPrimaryCount;
+        document.getElementById('networkSecondaryCount').textContent = networkSecondaryCount;
     } catch (e) {
         console.error('Failed to load oracle stats:', e);
     }
@@ -852,10 +873,16 @@ async function loadRegisteredOracles() {
                     : '<span class="badge bg-info">Secondary</span>';
                 const oursBadge = isOurs ? ' <span class="badge bg-success">Ours</span>' : '';
 
+                // Parse stream ID: source|stream|target -> source/stream/target
+                const streamParts = streamId.split('|');
+                const streamLabel = streamParts.length >= 3
+                    ? `${streamParts[0]}/${streamParts[1]}/${streamParts[2]}`
+                    : streamId;
+
                 return `<tr${isOurs ? ' class="table-active"' : ''}>
-                    <td><code title="${streamId}">${streamId.split('|').slice(2).join('/') || streamId}</code></td>
-                    <td><code class="small">${addr.slice(0, 12)}...</code></td>
-                    <td class="small">${peerId.slice(0, 16)}...</td>
+                    <td><code title="${streamId}">${streamLabel}</code></td>
+                    <td><code class="small" title="${addr}">${addr.slice(0, 12)}...</code></td>
+                    <td class="small" title="${peerId}">${peerId.slice(0, 16)}...</td>
                     <td>${Math.round((o.reputation || 1.0) * 100)}%</td>
                     <td>${typeBadge}${oursBadge}</td>
                 </tr>`;
@@ -869,36 +896,78 @@ async function loadRegisteredOracles() {
     }
 }
 
-async function subscribeToObservations() {
-    const streamId = document.getElementById('oracleSubscribeStreamId').value.trim();
-    if (!streamId) { alert('Please enter a stream ID'); return; }
-
+async function loadMyOracleRegistrations() {
+    const tbody = document.getElementById('myOracleRegistrationsTable');
     try {
-        const result = await apiCall('/p2p/oracle/subscribe', 'POST', { stream_id: streamId });
-        if (result.success) {
-            alert('Subscribed to observations');
-            document.getElementById('oracleSubscribeStreamId').value = '';
-            loadOracleStats();
-        } else {
-            alert('Failed: ' + (result.error || 'Unknown'));
+        const summary = await apiCall('/p2p/oracle/summary');
+
+        const rows = [];
+
+        // Helper to format stream ID
+        const formatStreamId = (streamId) => {
+            const parts = streamId.split('|');
+            return parts.length >= 3 ? `${parts[0]}/${parts[1]}/${parts[2]}` : streamId;
+        };
+
+        // Add primary registrations
+        for (const streamId of (summary.primary_streams || [])) {
+            const streamLabel = formatStreamId(streamId);
+            rows.push(`<tr>
+                <td><code title="${streamId}">${streamLabel}</code></td>
+                <td><span class="badge bg-danger">Primary</span></td>
+                <td><span class="text-muted">Configured</span></td>
+                <td>
+                    <button class="btn btn-outline-danger btn-sm" onclick="unregisterOracle('${streamId}')">
+                        Unregister
+                    </button>
+                </td>
+            </tr>`);
         }
-    } catch (e) { alert('Error: ' + e.message); }
+
+        // Add secondary registrations
+        for (const streamId of (summary.secondary_streams || [])) {
+            const streamLabel = formatStreamId(streamId);
+            rows.push(`<tr>
+                <td><code title="${streamId}">${streamLabel}</code></td>
+                <td><span class="badge bg-info">Secondary</span></td>
+                <td><span class="text-muted">Relay</span></td>
+                <td>
+                    <button class="btn btn-outline-danger btn-sm" onclick="unregisterOracle('${streamId}')">
+                        Unregister
+                    </button>
+                </td>
+            </tr>`);
+        }
+
+        if (rows.length > 0) {
+            tbody.innerHTML = rows.join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No oracle registrations. Register as a Primary or Secondary oracle on the Stream Registry tab.</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load my oracle registrations:', e);
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-danger py-3">Failed to load</td></tr>';
+    }
 }
 
-async function unsubscribeFromObservations() {
-    const streamId = document.getElementById('oracleSubscribeStreamId').value.trim();
-    if (!streamId) { alert('Please enter a stream ID'); return; }
+async function unregisterOracle(streamId) {
+    if (!confirm(`Unregister as oracle for this stream?`)) return;
 
     try {
-        const result = await apiCall('/p2p/oracle/unsubscribe', 'POST', { stream_id: streamId });
+        const result = await apiCall('/p2p/oracle/unregister', 'POST', { stream_id: streamId });
         if (result.success) {
-            alert('Unsubscribed');
-            document.getElementById('oracleSubscribeStreamId').value = '';
+            alert('Unregistered successfully');
             loadOracleStats();
+            loadRegisteredOracles();
+            loadMyOracleRegistrations();
+            loadStreamStats();
+            loadSecondaryStreamPicker();
         } else {
-            alert('Failed: ' + (result.error || 'Unknown'));
+            alert('Failed: ' + (result.error || 'Unknown error'));
         }
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
 }
 
 // =========================================================================
@@ -917,7 +986,7 @@ async function loadOracleTemplates() {
             oracleTemplates = result.templates;
             renderTemplateSelector();
         } else {
-            container.innerHTML = '<div class="text-center text-danger py-3">Failed to load templates</div>';
+            container.innerHTML = '<div class="text-center text-warning py-3">Oracle templates not available. Ensure satorip2p is up to date.</div>';
         }
     } catch (e) {
         console.error('Failed to load oracle templates:', e);
@@ -946,7 +1015,7 @@ function renderTemplateSelector() {
         };
         const icon = iconMap[t.id] || 'api';
 
-        return `<div class="col-md-4 col-6">
+        return `<div class="col-md-3 col-6 mb-2">
             <div class="card h-100 template-card ${isSelected ? 'border-danger' : ''}"
                  style="cursor: pointer; ${isSelected ? 'background: rgba(220, 53, 69, 0.1);' : ''}"
                  onclick="selectTemplate('${t.id}')">
@@ -1022,9 +1091,9 @@ function renderTemplateFields() {
     // API Key (for CMC)
     if (requires.includes('api_key')) {
         html += `<div class="mb-3">
-            <label class="form-label">API Key</label>
+            <label class="form-label">API Key <span class="badge bg-warning text-dark">Required</span></label>
             <input type="password" class="form-control" id="templateApiKey" placeholder="Your API key">
-            <small class="text-muted">Required for ${selectedTemplate.name}</small>
+            <small class="text-muted">Required for ${selectedTemplate.name}. Get your API key from their website.</small>
         </div>`;
     }
 
@@ -1054,7 +1123,7 @@ function renderTemplateFields() {
         </div>`;
     }
 
-    // Fetch interval (optional override) - show for all templates
+    // Fetch interval and value type - show for all templates
     html += `<div class="row g-2 mt-3">
         <div class="col-md-6">
             <label class="form-label">Fetch Interval (seconds)</label>
@@ -1163,8 +1232,14 @@ async function registerAsPrimaryOracle() {
         return;
     }
 
+    // Check required fields
+    const requires = selectedTemplate.requires || [];
+    if (requires.includes('api_key') && !document.getElementById('templateApiKey')?.value.trim()) {
+        resultDiv.innerHTML = '<span class="text-danger">API key is required for ' + selectedTemplate.name + '</span>';
+        return;
+    }
+
     // Build stream ID (using same format as stream registry)
-    // Format: source|stream|target (will be hashed by backend)
     const streamId = `${source}|${stream}|${target}`;
     const dataSource = buildDataSourceConfig();
 
@@ -1181,16 +1256,18 @@ async function registerAsPrimaryOracle() {
         });
 
         if (result.success) {
-            resultDiv.innerHTML = `<span class="text-success">
+            resultDiv.innerHTML = `<div class="alert alert-success">
                 <i class="material-icons align-middle" style="font-size: 16px;">check_circle</i>
-                Registered as primary oracle for ${source}/${stream}/${target}
-            </span>`;
+                <strong>Success!</strong> Registered stream and became primary oracle for <code>${source}/${stream}/${target}</code>
+            </div>`;
 
-            // Refresh stats and oracles list
-            loadOracleStats();
+            // Refresh all relevant data
+            loadStreamStats();
+            loadDiscoveredStreams();
             loadRegisteredOracles();
+            loadSecondaryStreamPicker();
 
-            // Clear form
+            // Clear form after delay
             setTimeout(() => {
                 document.getElementById('primarySource').value = '';
                 document.getElementById('primaryStream').value = '';
@@ -1200,155 +1277,16 @@ async function registerAsPrimaryOracle() {
                 document.getElementById('dataSourceConfig').style.display = 'none';
                 document.getElementById('streamIdSection').style.display = 'none';
                 document.getElementById('primaryRegisterSection').style.display = 'none';
-            }, 3000);
+                resultDiv.innerHTML = '';
+            }, 5000);
         } else {
-            resultDiv.innerHTML = `<span class="text-danger">${result.error || 'Registration failed'}</span>`;
+            resultDiv.innerHTML = `<div class="alert alert-danger">${result.error || 'Registration failed'}</div>`;
         }
     } catch (e) {
-        resultDiv.innerHTML = `<span class="text-danger">Error: ${e.message}</span>`;
+        resultDiv.innerHTML = `<div class="alert alert-danger">Error: ${e.message}</div>`;
     } finally {
         btn.innerHTML = originalText;
         btn.disabled = false;
-    }
-}
-
-// Load templates when Primary Oracle section is expanded
-document.addEventListener('DOMContentLoaded', function() {
-    const primaryOracleCollapse = document.getElementById('primaryOracleCollapse');
-    if (primaryOracleCollapse) {
-        primaryOracleCollapse.addEventListener('shown.bs.collapse', function() {
-            if (oracleTemplates.length === 0) {
-                loadOracleTemplates();
-            }
-        });
-    }
-});
-
-// =========================================================================
-// OBSERVATIONS FUNCTIONS
-// =========================================================================
-
-// Pagination state for My Published Observations
-let myObsCurrentPage = 1;
-let myObsTotalPages = 1;
-const myObsPerPage = 50;
-
-async function loadMyPublishedObservations(page = 1) {
-    const tbody = document.getElementById('myObservationsTable');
-    const countEl = document.getElementById('myObsCount');
-    const paginationEl = document.getElementById('myObsPagination');
-    const pageInfoEl = document.getElementById('myObsPageInfo');
-    const prevBtn = document.getElementById('myObsPrevBtn');
-    const nextBtn = document.getElementById('myObsNextBtn');
-
-    try {
-        const result = await apiCall(`/p2p/oracle/observations/my?page=${page}&per_page=${myObsPerPage}`);
-
-        // Update pagination state
-        myObsCurrentPage = result.page || 1;
-        myObsTotalPages = result.total_pages || 1;
-        const total = result.total || 0;
-
-        // Update count display
-        if (countEl) {
-            countEl.textContent = total > 0 ? `(${total} total)` : '';
-        }
-
-        if (result.observations && result.observations.length > 0) {
-            tbody.innerHTML = result.observations.map(obs => {
-                const date = new Date(obs.timestamp * 1000);
-                const streamId = obs.stream_id || '';
-                return `<tr>
-                    <td>${streamId}</td>
-                    <td><strong>${obs.value}</strong></td>
-                    <td>${date.toLocaleString()}</td>
-                </tr>`;
-            }).join('');
-
-            // Show pagination if more than one page
-            if (myObsTotalPages > 1) {
-                paginationEl.style.display = 'flex';
-                paginationEl.style.setProperty('display', 'flex', 'important');
-                pageInfoEl.textContent = `Page ${myObsCurrentPage} of ${myObsTotalPages}`;
-                prevBtn.disabled = myObsCurrentPage <= 1;
-                nextBtn.disabled = myObsCurrentPage >= myObsTotalPages;
-            } else {
-                paginationEl.style.display = 'none';
-                paginationEl.style.setProperty('display', 'none', 'important');
-            }
-        } else {
-            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">No published observations yet. Register as an oracle and publish observations.</td></tr>';
-            paginationEl.style.display = 'none';
-            paginationEl.style.setProperty('display', 'none', 'important');
-        }
-    } catch (e) {
-        console.error('Failed to load my observations:', e);
-        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Failed to load</td></tr>';
-        paginationEl.style.display = 'none';
-        paginationEl.style.setProperty('display', 'none', 'important');
-    }
-}
-
-function changeMyObsPage(delta) {
-    const newPage = myObsCurrentPage + delta;
-    if (newPage >= 1 && newPage <= myObsTotalPages) {
-        loadMyPublishedObservations(newPage);
-    }
-}
-
-async function loadLatestObservations() {
-    const tbody = document.getElementById('observationsTable');
-    try {
-        const result = await apiCall('/p2p/oracle/observations/latest');
-        if (result.observations && result.observations.length > 0) {
-            tbody.innerHTML = result.observations.map(obs => {
-                const date = new Date(obs.timestamp * 1000);
-                const streamId = obs.stream_id || '';
-                const oracleAddr = obs.oracle_address || '';
-                const peerId = obs.peer_id || '--';
-                return `<tr>
-                    <td>${streamId}</td>
-                    <td><strong>${obs.value}</strong></td>
-                    <td><code>${oracleAddr}</code></td>
-                    <td>${peerId}</td>
-                    <td>${date.toLocaleString()}</td>
-                </tr>`;
-            }).join('');
-        } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No observations yet. Subscribe to streams to see observations.</td></tr>';
-        }
-    } catch (e) {
-        console.error('Failed to load observations:', e);
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Failed to load</td></tr>';
-    }
-}
-
-async function publishObservation(event) {
-    event.preventDefault();
-
-    const streamId = document.getElementById('pubObsStreamId').value.trim();
-    const value = parseFloat(document.getElementById('pubObsValue').value);
-    const timestamp = document.getElementById('pubObsTimestamp').value;
-    const resultSpan = document.getElementById('publishResult');
-
-    resultSpan.innerHTML = '<span class="text-info">Publishing...</span>';
-
-    try {
-        const payload = { stream_id: streamId, value: value };
-        if (timestamp) payload.timestamp = parseInt(timestamp);
-
-        const result = await apiCall('/p2p/oracle/publish', 'POST', payload);
-        if (result.success) {
-            resultSpan.innerHTML = '<span class="text-success">Published!</span>';
-            document.getElementById('observationForm').reset();
-            loadLatestObservations();
-            loadMyPublishedObservations();
-            setTimeout(() => { resultSpan.innerHTML = ''; }, 3000);
-        } else {
-            resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';
-        }
-    } catch (e) {
-        resultSpan.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
     }
 }
 
@@ -1432,7 +1370,7 @@ function renderSecondaryStreamList(filter = '') {
 
     if (filtered.length === 0) {
         container.innerHTML = `<div class="text-center text-muted py-3">
-            ${filter ? 'No streams match your search.' : 'No streams available for secondary registration.'}
+            ${filter ? 'No streams match your search.' : 'No streams available for secondary registration. Register a primary oracle first, or wait for other nodes to register streams.'}
         </div>`;
         return;
     }
@@ -1441,12 +1379,13 @@ function renderSecondaryStreamList(filter = '') {
         const isSelected = secondarySelectedStreams.has(s.stream_id);
         const streamLabel = `${s.source}/${s.stream}/${s.target}`;
         const primaryBadge = s.hasPrimary
-            ? '<span class="badge bg-success ms-2" title="Has active primary oracle">Primary Active</span>'
-            : '<span class="badge bg-warning text-dark ms-2" title="No primary oracle yet">No Primary</span>';
+            ? '<span class="badge bg-success ms-2" title="Has active primary oracle - ready for relay">Primary Active</span>'
+            : '<span class="badge bg-warning text-dark ms-2" title="No primary oracle yet - cannot relay">No Primary</span>';
 
-        return `<label class="list-group-item list-group-item-action d-flex align-items-center" style="cursor: pointer;">
+        return `<label class="list-group-item list-group-item-action d-flex align-items-center ${s.hasPrimary ? '' : 'opacity-50'}" style="cursor: pointer;">
             <input type="checkbox" class="form-check-input me-3" value="${s.stream_id}"
                    ${isSelected ? 'checked' : ''}
+                   ${s.hasPrimary ? '' : 'disabled'}
                    onchange="toggleSecondaryStream('${s.stream_id}')">
             <div class="flex-grow-1">
                 <div class="d-flex align-items-center">
@@ -1501,15 +1440,20 @@ async function registerSelectedAsSecondary() {
     const streamIds = Array.from(secondarySelectedStreams);
     const results = { success: 0, failed: 0, errors: [] };
 
-    // Register for each selected stream
+    // Register for each selected stream (includes auto-subscribe)
     for (const streamId of streamIds) {
         try {
-            const result = await apiCall('/p2p/oracle/register-secondary', 'POST', { stream_id: streamId });
-            if (result.success) {
+            // Register as secondary AND subscribe to observations
+            const [regResult, subResult] = await Promise.all([
+                apiCall('/p2p/oracle/register-secondary', 'POST', { stream_id: streamId }),
+                apiCall('/p2p/oracle/subscribe', 'POST', { stream_id: streamId })
+            ]);
+
+            if (regResult.success) {
                 results.success++;
             } else {
                 results.failed++;
-                results.errors.push(`${streamId.split('|').slice(2).join('/')}: ${result.error || 'Unknown error'}`);
+                results.errors.push(`${streamId.split('|').slice(2).join('/')}: ${regResult.error || 'Unknown error'}`);
             }
         } catch (e) {
             results.failed++;
@@ -1521,7 +1465,7 @@ async function registerSelectedAsSecondary() {
     btn.disabled = false;
 
     // Show results
-    let message = `Registered as secondary oracle for ${results.success} stream(s).`;
+    let message = `Registered as secondary oracle for ${results.success} stream(s) and subscribed to observations.`;
     if (results.failed > 0) {
         message += `\n\nFailed for ${results.failed} stream(s):\n${results.errors.join('\n')}`;
     }
@@ -1532,16 +1476,135 @@ async function registerSelectedAsSecondary() {
     loadOracleStats();
     loadRegisteredOracles();
     loadSecondaryStreamPicker();
+    loadStreamStats();
 }
 
-// Load secondary stream picker when Oracles tab is shown
-document.addEventListener('DOMContentLoaded', function() {
-    const oraclesTab = document.querySelector('[data-bs-target="#oraclesTab"]');
-    if (oraclesTab) {
-        oraclesTab.addEventListener('shown.bs.tab', function() {
-            loadSecondaryStreamPicker();
-        });
+// =========================================================================
+// OBSERVATIONS FUNCTIONS
+// =========================================================================
+
+// Pagination state for My Published Observations
+let myObsCurrentPage = 1;
+let myObsTotalPages = 1;
+const myObsPerPage = 50;
+
+async function loadMyPublishedObservations(page = 1) {
+    const tbody = document.getElementById('myObservationsTable');
+    const countEl = document.getElementById('myObsCount');
+    const paginationEl = document.getElementById('myObsPagination');
+    const pageInfoEl = document.getElementById('myObsPageInfo');
+    const prevBtn = document.getElementById('myObsPrevBtn');
+    const nextBtn = document.getElementById('myObsNextBtn');
+
+    try {
+        const result = await apiCall(`/p2p/oracle/observations/my?page=${page}&per_page=${myObsPerPage}`);
+
+        // Update pagination state
+        myObsCurrentPage = result.page || 1;
+        myObsTotalPages = result.total_pages || 1;
+        const total = result.total || 0;
+
+        // Update count display
+        if (countEl) {
+            countEl.textContent = total > 0 ? `(${total} total)` : '';
+        }
+
+        if (result.observations && result.observations.length > 0) {
+            tbody.innerHTML = result.observations.map(obs => {
+                const date = new Date(obs.timestamp * 1000);
+                const streamId = obs.stream_id || '';
+                return `<tr>
+                    <td>${streamId}</td>
+                    <td><strong>${obs.value}</strong></td>
+                    <td>${date.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+
+            // Show pagination if more than one page
+            if (myObsTotalPages > 1) {
+                paginationEl.style.display = 'flex';
+                paginationEl.style.setProperty('display', 'flex', 'important');
+                pageInfoEl.textContent = `Page ${myObsCurrentPage} of ${myObsTotalPages}`;
+                prevBtn.disabled = myObsCurrentPage <= 1;
+                nextBtn.disabled = myObsCurrentPage >= myObsTotalPages;
+            } else {
+                paginationEl.style.display = 'none';
+                paginationEl.style.setProperty('display', 'none', 'important');
+            }
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-3">No published observations yet. Register as an oracle to start publishing.</td></tr>';
+            paginationEl.style.display = 'none';
+            paginationEl.style.setProperty('display', 'none', 'important');
+        }
+    } catch (e) {
+        console.error('Failed to load my observations:', e);
+        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-3">Failed to load</td></tr>';
+        paginationEl.style.display = 'none';
+        paginationEl.style.setProperty('display', 'none', 'important');
     }
-});
+}
+
+function changeMyObsPage(delta) {
+    const newPage = myObsCurrentPage + delta;
+    if (newPage >= 1 && newPage <= myObsTotalPages) {
+        loadMyPublishedObservations(newPage);
+    }
+}
+
+async function loadLatestObservations() {
+    const tbody = document.getElementById('observationsTable');
+    try {
+        const result = await apiCall('/p2p/oracle/observations/latest');
+        if (result.observations && result.observations.length > 0) {
+            tbody.innerHTML = result.observations.map(obs => {
+                const date = new Date(obs.timestamp * 1000);
+                const streamId = obs.stream_id || '';
+                const oracleAddr = obs.oracle_address || '';
+                const peerId = obs.peer_id || '--';
+                return `<tr>
+                    <td>${streamId}</td>
+                    <td><strong>${obs.value}</strong></td>
+                    <td><code>${oracleAddr}</code></td>
+                    <td>${peerId}</td>
+                    <td>${date.toLocaleString()}</td>
+                </tr>`;
+            }).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No observations yet. Register as an oracle or subscribe to streams.</td></tr>';
+        }
+    } catch (e) {
+        console.error('Failed to load observations:', e);
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Failed to load</td></tr>';
+    }
+}
+
+async function publishObservation(event) {
+    event.preventDefault();
+
+    const streamId = document.getElementById('pubObsStreamId').value.trim();
+    const value = parseFloat(document.getElementById('pubObsValue').value);
+    const timestamp = document.getElementById('pubObsTimestamp').value;
+    const resultSpan = document.getElementById('publishResult');
+
+    resultSpan.innerHTML = '<span class="text-info">Publishing...</span>';
+
+    try {
+        const payload = { stream_id: streamId, value: value };
+        if (timestamp) payload.timestamp = parseInt(timestamp);
+
+        const result = await apiCall('/p2p/oracle/publish', 'POST', payload);
+        if (result.success) {
+            resultSpan.innerHTML = '<span class="text-success">Published!</span>';
+            document.getElementById('observationForm').reset();
+            loadLatestObservations();
+            loadMyPublishedObservations();
+            setTimeout(() => { resultSpan.innerHTML = ''; }, 3000);
+        } else {
+            resultSpan.innerHTML = '<span class="text-danger">' + (result.error || 'Failed') + '</span>';
+        }
+    } catch (e) {
+        resultSpan.innerHTML = '<span class="text-danger">Error: ' + e.message + '</span>';
+    }
+}
 </script>
 {% endblock %}

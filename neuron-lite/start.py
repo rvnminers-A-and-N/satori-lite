@@ -5201,6 +5201,7 @@ def startWebUI(startupDag: StartupDag, host: str = '0.0.0.0', port: int = 24601)
                 '--worker-class', 'gthread',
                 '--timeout', '120',
                 '--log-level', 'warning',
+                '--no-sendfile',  # Disable sendfile - incompatible with gthread worker
                 'web.wsgi:app'
             ]
             logging.info(f"Starting Web UI with gunicorn at http://{host}:{port}", color="cyan")
