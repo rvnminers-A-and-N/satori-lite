@@ -6426,7 +6426,8 @@ def register_routes(app):
         try:
             from web.wsgi import _ipc_get
 
-            result = _ipc_get('/p2p/oracle/observations?limit=100')
+            include_own = request.args.get('include_own', 'true').lower()
+            result = _ipc_get(f'/p2p/oracle/observations?limit=100&include_own={include_own}')
             if result and result.get('observations'):
                 # Get latest per stream
                 latest_by_stream = {}
@@ -6908,17 +6909,20 @@ def register_routes(app):
             resp = req.get('http://127.0.0.1:24602/p2p/streams/my-claims', timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
-                # Transform to expected format
+                claims = data.get('claims', [])
+                # Return both 'streams' and 'claims' for compatibility
                 return jsonify({
-                    'streams': data.get('claims', []),
+                    'streams': claims,
+                    'claims': claims,
                     'total': data.get('count', 0),
+                    'count': data.get('count', 0),
                 })
             else:
-                return jsonify({'streams': [], 'error': f'IPC error: {resp.status_code}'})
+                return jsonify({'streams': [], 'claims': [], 'error': f'IPC error: {resp.status_code}'})
 
         except Exception as e:
             logger.warning(f"Failed to get my streams: {e}")
-            return jsonify({'streams': [], 'error': str(e)})
+            return jsonify({'streams': [], 'claims': [], 'error': str(e)})
 
     @app.route('/api/p2p/streams/my-claims')
     @login_required

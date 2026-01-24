@@ -1131,6 +1131,41 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         peers=self._p2p_peers,
                         wallet=self.identity,
                     )
+
+                    # Set up role callback for dynamic role determination
+                    def get_current_roles() -> list:
+                        """Get current node roles based on oracle/claim/signer state."""
+                        roles = []
+                        # Check if we're a primary oracle
+                        oracle_network = getattr(self, '_oracle_network', None)
+                        if oracle_network:
+                            primary_streams = getattr(oracle_network, '_primary_registrations', {})
+                            if primary_streams:
+                                roles.append('oracle')
+                            # Check if we're a relay (secondary oracle)
+                            secondary_streams = getattr(oracle_network, '_secondary_registrations', {})
+                            if secondary_streams:
+                                roles.append('relay')
+                        # Check if we're a signer
+                        signer = getattr(self, '_signer_node', None)
+                        if signer and getattr(signer, '_is_authorized', False):
+                            roles.append('signer')
+                        # Check if we have claimed prediction slots
+                        stream_registry = getattr(self, '_stream_registry', None)
+                        if stream_registry:
+                            claims = getattr(stream_registry, '_claims', {})
+                            my_address = getattr(self.identity, 'address', '')
+                            for stream_claims in claims.values():
+                                for claim in stream_claims.values():
+                                    if getattr(claim, 'predictor', '') == my_address:
+                                        if 'predictor' not in roles:
+                                            roles.append('predictor')
+                                        break
+                        # Default to node if no other roles
+                        return roles if roles else ['node']
+
+                    self._uptime_tracker.role_callback = get_current_roles
+
                     await self._uptime_tracker.start()
                     # Spawn heartbeat loop as background task (will start when run_forever creates nursery)
                     self._p2p_peers.spawn_background_task(self._uptime_tracker.run_heartbeat_loop)
@@ -1675,7 +1710,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         target=target,
                         datatype="price" if "USD" in target or "price" in stream_id.lower() else "numeric",
                         cadence=60,
-                        predictor_slots=10,
+                        predictor_slots=1000,
                         creator=getattr(stream_registry, 'evrmore_address', '') or '',
                         timestamp=int(time_module.time()),
                         description=f"Auto-discovered from oracle network",
@@ -3961,11 +3996,12 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             """Get recent observations."""
             oracle = getattr(startupDag, '_oracle_network', None)
             limit = request.args.get('limit', 20, type=int)
+            include_own = request.args.get('include_own', 'true').lower() == 'true'
 
             result = {'observations': [], 'count': 0}
 
             if oracle and hasattr(oracle, 'get_recent_observations'):
-                observations = oracle.get_recent_observations(limit=limit)
+                observations = oracle.get_recent_observations(limit=limit, include_own=include_own)
                 result['observations'] = [
                     {
                         'stream_id': o.stream_id if hasattr(o, 'stream_id') else str(o.get('stream_id', '')),
@@ -4408,7 +4444,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     result['known_streams'] = len(getattr(registry, '_streams', {}))
                     result['my_claims'] = len(getattr(registry, '_my_claims', {}))
                     result['total_claims'] = sum(
-                        len(claims) for claims in getattr(registry, '_stream_claims', {}).values()
+                        len(claims) for claims in getattr(registry, '_claims', {}).values()
                     )
 
             return jsonify(result)
@@ -4470,6 +4506,9 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                                (current_time - s.last_observation_time) < max_age
                         ]
 
+                    # Get claim counts per stream (registry uses _claims, not _stream_claims)
+                    stream_claims = getattr(registry, '_claims', {})
+
                     result['streams'] = [
                         {
                             'stream_id': getattr(s, 'stream_id', ''),
@@ -4479,6 +4518,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                             'datatype': getattr(s, 'datatype', ''),
                             'cadence': getattr(s, 'cadence', 0),
                             'predictor_slots': getattr(s, 'predictor_slots', 0),
+                            'claimed_count': len(stream_claims.get(getattr(s, 'stream_id', ''), {})),
                             'creator': getattr(s, 'creator', ''),
                             'description': getattr(s, 'description', ''),
                             'tags': getattr(s, 'tags', []),

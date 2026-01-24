@@ -792,7 +792,7 @@
                      style="cursor: pointer;"
                      data-bs-toggle="collapse"
                      data-bs-target="#predictionStatsCollapse"
-                     aria-expanded="false"
+                     aria-expanded="true"
                      aria-controls="predictionStatsCollapse">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">analytics</i>
@@ -802,7 +802,7 @@
                         <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
                     </button>
                 </div>
-                <div class="collapse" id="predictionStatsCollapse">
+                <div class="collapse show" id="predictionStatsCollapse">
                 <div class="card-body">
                     <!-- Prediction Summary -->
                     <div class="row text-center mb-3">
@@ -3009,17 +3009,19 @@
 
     async function loadPredictionStats() {
         try {
-            // Load prediction stats
-            const stats = await apiCall('/p2p/predictions/stats');
-            // Also load Engine status to get actual active stream models
-            const engineStatus = await apiCall('/p2p/streams/engine-status');
-            const activeModels = engineStatus?.active_models || 0;
+            // Load prediction stats and claimed streams in parallel
+            const [stats, claimsResult] = await Promise.all([
+                apiCall('/p2p/predictions/stats'),
+                apiCall('/p2p/streams/my-claims')
+            ]);
+            // Use claimed streams count (P2P claims), not all Engine models
+            const claimedStreams = claimsResult?.count || 0;
 
             if (stats) {
                 // Update summary stats
                 document.getElementById('predictionCount').textContent = stats.my_predictions || 0;
-                // Use actual Engine stream models count, not protocol subscription count
-                document.getElementById('predictionStreams').textContent = activeModels;
+                // Use claimed streams count (P2P), not all Engine models (includes Central Server streams)
+                document.getElementById('predictionStreams').textContent = claimedStreams;
 
                 // Accuracy from average score (score is 0-1, convert to %)
                 const accuracy = stats.my_average_score ? (stats.my_average_score * 100).toFixed(1) + '%' : '--%';
@@ -3029,9 +3031,9 @@
                 const statusAlert = document.getElementById('predictionStatus');
                 const statusText = document.getElementById('predictionStatusText');
 
-                if (activeModels > 0) {
+                if (claimedStreams > 0) {
                     statusAlert.className = 'alert alert-success py-2 mb-0';
-                    statusText.textContent = 'Active - Predicting on ' + activeModels + ' streams';
+                    statusText.textContent = 'Active - Predicting on ' + claimedStreams + ' streams';
                 } else if (stats.started) {
                     statusAlert.className = 'alert alert-warning py-2 mb-0';
                     statusText.textContent = 'Protocol active - Claim streams to start predicting';
@@ -3640,7 +3642,15 @@
     function renderStreamsList() {
         const container = document.getElementById('streamsList');
         if (!availableStreams || availableStreams.length === 0) {
-            container.innerHTML = '<div class="text-center py-4 text-muted">No streams available yet. Try again later.</div>';
+            container.innerHTML = `<div class="text-center py-4">
+                <i class="material-icons text-muted" style="font-size: 48px;">cloud_off</i>
+                <p class="text-muted mt-2 mb-3">No streams available yet.</p>
+                <p class="small text-muted">Be the first to create a data stream!</p>
+                <a href="/oracle" class="btn btn-danger btn-sm">
+                    <i class="material-icons align-middle me-1" style="font-size: 16px;">add</i>
+                    Become a Primary Oracle
+                </a>
+            </div>`;
             return;
         }
 

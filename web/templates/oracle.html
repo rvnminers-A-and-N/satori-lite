@@ -263,7 +263,7 @@
                                             <input type="text" class="form-control" id="primaryStream" placeholder="Stream (e.g., BTCUSDT)">
                                         </div>
                                         <div class="col-md-4">
-                                            <input type="text" class="form-control" id="primaryTarget" placeholder="Target (e.g., close)">
+                                            <input type="text" class="form-control" id="primaryTarget" placeholder="Target (e.g., price, close, mid)">
                                         </div>
                                     </div>
                                     <small class="text-muted">This creates a unique stream ID for your data feed</small>
@@ -405,7 +405,7 @@
                     <div class="card">
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">
-                                <i class="material-icons align-middle me-2">group</i>
+                                <i class="material-icons align-middle me-2">visibility</i>
                                 Registered Oracles
                             </h5>
                             <button class="btn btn-sm btn-outline-secondary" onclick="loadRegisteredOracles()">
@@ -419,13 +419,14 @@
                                         <tr>
                                             <th>Stream</th>
                                             <th>Oracle Address</th>
-                                            <th>Peer ID</th>
-                                            <th>Reputation</th>
-                                            <th>Type</th>
+                                            <th>Role</th>
+                                            <th>Relays</th>
+                                            <th>Predictors</th>
+                                            <th>My Status</th>
                                         </tr>
                                     </thead>
                                     <tbody id="oraclesTable">
-                                        <tr><td colspan="5" class="text-center text-muted py-3">Loading...</td></tr>
+                                        <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -482,9 +483,15 @@
                                 <i class="material-icons align-middle me-2">update</i>
                                 Recent Observations
                             </h5>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadLatestObservations()">
-                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
-                            </button>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" id="includeOwnObservations" checked onchange="loadLatestObservations()">
+                                    <label class="form-check-label small" for="includeOwnObservations">Include mine</label>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="loadLatestObservations()">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body p-0">
                             <div class="table-responsive">
@@ -720,28 +727,55 @@ async function loadDiscoveredStreams() {
     const container = document.getElementById('discoveredStreamsList');
     try {
         const result = await apiCall('/p2p/streams/discover?limit=20');
+        // Also load my claims to check if already claimed
+        const myClaims = await apiCall('/p2p/streams/my');
+        const myClaimedStreamIds = new Set((myClaims.claims || []).map(c => c.stream_id));
+
         if (result.streams && result.streams.length > 0) {
             container.innerHTML = result.streams.map(stream => {
-                const streamIdShort = stream.stream_id.substring(0, 12) + '...';
+                const alreadyClaimed = myClaimedStreamIds.has(stream.stream_id);
+                const slotsAvailable = stream.predictor_slots || 0;
+                const claimedCount = stream.claimed_count || 0;
+                const slotsRemaining = Math.max(0, slotsAvailable - claimedCount);
+
+                // Color code slots: green (plenty) -> yellow (medium) -> red (low/full)
+                let slotsClass = 'bg-success';  // green: > 500 remaining
+                if (slotsRemaining <= 10) {
+                    slotsClass = 'bg-danger';   // red: <= 10 remaining
+                } else if (slotsRemaining <= 100) {
+                    slotsClass = 'bg-warning text-dark';  // yellow: 11-100 remaining
+                } else if (slotsRemaining <= 500) {
+                    slotsClass = 'bg-info';     // blue: 101-500 remaining
+                }
+
                 return `<div class="p-3 border-bottom">
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
-                            <strong>${stream.source}/${stream.stream}</strong>
-                            <br><small class="text-muted">Target: ${stream.target} | ${stream.datatype}</small>
-                            <br><small class="text-muted" title="${stream.stream_id}">ID: ${streamIdShort}</small>
+                            <strong>${stream.source}/${stream.stream}/${stream.target}</strong>
+                            <br><small class="text-muted">Type: ${stream.datatype || 'float'}</small>
+                            <br><small class="text-muted">ID: <code>${stream.stream_id}</code></small>
                         </div>
                         <div class="text-end">
-                            <span class="badge bg-secondary">${stream.predictor_slots} slots</span>
-                            <br><button class="btn btn-outline-primary btn-sm mt-1" onclick="document.getElementById('claimStreamId').value='${stream.stream_id}'">
-                                Select
-                            </button>
+                            <span class="badge ${slotsClass}">${slotsRemaining}/${slotsAvailable} slots</span>
+                            ${alreadyClaimed
+                                ? '<br><span class="badge bg-success mt-1">Claimed</span>'
+                                : `<br><button class="btn btn-outline-primary btn-sm mt-1" onclick="document.getElementById('claimStreamId').value='${stream.stream_id}'">Select</button>`
+                            }
                         </div>
                     </div>
                     ${stream.description ? `<small class="text-muted">${stream.description}</small>` : ''}
                 </div>`;
             }).join('');
         } else {
-            container.innerHTML = '<div class="text-center text-muted py-5">No streams discovered. Register a stream below to get started!</div>';
+            container.innerHTML = `<div class="text-center py-5">
+                <i class="material-icons text-muted" style="font-size: 48px;">cloud_off</i>
+                <p class="text-muted mt-2 mb-3">No streams discovered yet.</p>
+                <p class="small text-muted">Be the first to create a data stream!</p>
+                <a href="#primaryOracleCollapse" class="btn btn-danger btn-sm" onclick="document.getElementById('primaryOracleCollapse').classList.add('show')">
+                    <i class="material-icons align-middle me-1" style="font-size: 16px;">add</i>
+                    Become a Primary Oracle
+                </a>
+            </div>`;
         }
     } catch (e) {
         console.error('Failed to load streams:', e);
@@ -753,16 +787,22 @@ async function loadMyClaimedStreams() {
     const container = document.getElementById('myClaimedStreamsList');
     try {
         const result = await apiCall('/p2p/streams/my');
-        if (result.claims && result.claims.length > 0) {
-            container.innerHTML = result.claims.map(claim => {
-                const streamIdShort = claim.stream_id.substring(0, 16) + '...';
+        const claims = result.claims || result.streams || [];
+        if (claims.length > 0) {
+            container.innerHTML = claims.map(claim => {
+                // Parse stream ID: source|stream|target -> source/stream/target
+                const streamParts = (claim.stream_id || '').split('|');
+                const streamLabel = streamParts.length >= 3
+                    ? `${streamParts[0]}/${streamParts[1]}/${streamParts[2]}`
+                    : claim.stream_id;
                 const expires = claim.expires ? new Date(claim.expires * 1000).toLocaleDateString() : 'Never';
                 const statusBadge = claim.is_expired ? '<span class="badge bg-danger">Expired</span>' : '<span class="badge bg-success">Active</span>';
                 return `<div class="p-3 border-bottom">
                     <div class="d-flex justify-content-between">
                         <div>
-                            <span title="${claim.stream_id}">${streamIdShort}</span>
-                            <br><small class="text-muted">Slot #${claim.slot_index} | Expires: ${expires}</small>
+                            <strong>${streamLabel}</strong>
+                            <br><small class="text-muted">Slot #${claim.slot_index || 0} | Expires: ${expires}</small>
+                            <br><small class="text-muted">ID: <code>${claim.stream_id}</code></small>
                         </div>
                         <div>
                             ${statusBadge}
@@ -774,7 +814,11 @@ async function loadMyClaimedStreams() {
                 </div>`;
             }).join('');
         } else {
-            container.innerHTML = '<div class="text-center text-muted py-5">No claimed streams. Claim a stream to start making predictions.</div>';
+            container.innerHTML = `<div class="text-center py-5">
+                <i class="material-icons text-muted" style="font-size: 48px;">playlist_add</i>
+                <p class="text-muted mt-2 mb-3">No claimed streams yet.</p>
+                <p class="small text-muted">Claim a stream from the Discovered Streams list to start making predictions!</p>
+            </div>`;
         }
     } catch (e) {
         console.error('Failed to load my claims:', e);
@@ -793,6 +837,7 @@ async function claimStream() {
             document.getElementById('claimStreamId').value = '';
             loadStreamStats();
             loadMyClaimedStreams();
+            loadDiscoveredStreams();  // Refresh to show "Claimed" badge
         } else {
             alert('Failed: ' + (result.error || 'Unknown error'));
         }
@@ -810,6 +855,7 @@ async function releaseStreamClaim() {
             document.getElementById('claimStreamId').value = '';
             loadStreamStats();
             loadMyClaimedStreams();
+            loadDiscoveredStreams();  // Refresh to remove "Claimed" badge
         } else {
             alert('Failed: ' + (result.error || 'Unknown error'));
         }
@@ -850,26 +896,72 @@ async function loadOracleStats() {
 async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
     try {
-        // Get oracles list and our identity to check if oracle is ours
-        const [result, identity] = await Promise.all([
+        // Get oracles list, our oracle summary, claimed streams, and stream stats
+        const [result, summary, myClaims, streamsResult] = await Promise.all([
             apiCall('/p2p/oracle/oracles'),
-            apiCall('/p2p/identity')
+            apiCall('/p2p/oracle/summary'),
+            apiCall('/p2p/streams/my'),
+            apiCall('/p2p/streams/discover?limit=200')
         ]);
 
-        // Our evrmore address for checking "ours" badge
-        const myAddress = identity.evrmore_address || '';
+        // Build sets of streams we're involved with
+        const myPrimaryStreams = new Set(summary.primary_streams || []);
+        const mySecondaryStreams = new Set(summary.secondary_streams || []);
+        const myClaimedStreams = new Set((myClaims.claims || myClaims.streams || []).map(c => c.stream_id));
 
-        if (result.oracles && result.oracles.length > 0) {
-            tbody.innerHTML = result.oracles.map(o => {
+        const oracles = result.oracles || [];
+
+        // Count secondary oracles per stream
+        const secondariesByStream = {};
+        oracles.forEach(o => {
+            if (!o.is_primary) {
+                secondariesByStream[o.stream_id] = (secondariesByStream[o.stream_id] || 0) + 1;
+            }
+        });
+
+        // Build predictor counts from streams (actual claimed count, not total slots)
+        const predictorsByStream = {};
+        (streamsResult.streams || []).forEach(s => {
+            predictorsByStream[s.stream_id] = s.claimed_count || 0;
+        });
+
+        if (oracles.length > 0) {
+            // One row per oracle registration
+            tbody.innerHTML = oracles.map(o => {
                 const addr = o.oracle_address || '';
-                const peerId = o.peer_id || '--';
                 const streamId = o.stream_id || '';
-                // Only mark as "ours" if the oracle address matches OUR address
-                const isOurs = myAddress && addr === myAddress;
+
+                // This oracle's role
                 const typeBadge = o.is_primary
                     ? '<span class="badge bg-danger">Primary</span>'
                     : '<span class="badge bg-info">Secondary</span>';
-                const oursBadge = isOurs ? ' <span class="badge bg-success">Ours</span>' : '';
+
+                // Counts for this stream (same for all oracles on same stream)
+                const relayCount = secondariesByStream[streamId] || 0;
+                const predictorCount = predictorsByStream[streamId] || 0;
+
+                // Color code predictor count: more predictors = healthier stream
+                let predictorClass = 'bg-secondary';  // gray: 0 predictors
+                if (predictorCount >= 10) {
+                    predictorClass = 'bg-success';    // green: 10+ predictors
+                } else if (predictorCount >= 5) {
+                    predictorClass = 'bg-info';       // blue: 5-9 predictors
+                } else if (predictorCount >= 1) {
+                    predictorClass = 'bg-warning text-dark';  // yellow: 1-4 predictors
+                }
+
+                // Our relationship to this stream
+                let relationshipBadge = '<span class="badge bg-secondary">Peer</span>';
+                if (myPrimaryStreams.has(streamId)) {
+                    relationshipBadge = '<span class="badge bg-warning text-dark">Publishing</span>';
+                } else if (mySecondaryStreams.has(streamId)) {
+                    relationshipBadge = '<span class="badge bg-success">Relaying</span>';
+                } else if (myClaimedStreams.has(streamId)) {
+                    relationshipBadge = '<span class="badge bg-primary">Predicting</span>';
+                }
+
+                // Highlight row if we're involved with this stream
+                const isInvolved = myPrimaryStreams.has(streamId) || mySecondaryStreams.has(streamId) || myClaimedStreams.has(streamId);
 
                 // Parse stream ID: source|stream|target -> source/stream/target
                 const streamParts = streamId.split('|');
@@ -877,20 +969,21 @@ async function loadRegisteredOracles() {
                     ? `${streamParts[0]}/${streamParts[1]}/${streamParts[2]}`
                     : streamId;
 
-                return `<tr${isOurs ? ' class="table-active"' : ''}>
+                return `<tr${isInvolved ? ' class="table-active"' : ''}>
                     <td><code title="${streamId}">${streamLabel}</code></td>
                     <td><code class="small">${addr}</code></td>
-                    <td class="small">${peerId}</td>
-                    <td>${Math.round((o.reputation || 1.0) * 100)}%</td>
-                    <td>${typeBadge}${oursBadge}</td>
+                    <td>${typeBadge}</td>
+                    <td><span class="badge bg-info">${relayCount}</span></td>
+                    <td><span class="badge ${predictorClass}">${predictorCount}</span></td>
+                    <td>${relationshipBadge}</td>
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No oracles registered</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No oracles registered</td></tr>';
         }
     } catch (e) {
         console.error('Failed to load oracles:', e);
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger py-3">Failed to load</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">Failed to load</td></tr>';
     }
 }
 
@@ -1551,8 +1644,9 @@ function changeMyObsPage(delta) {
 
 async function loadLatestObservations() {
     const tbody = document.getElementById('observationsTable');
+    const includeOwn = document.getElementById('includeOwnObservations')?.checked ?? true;
     try {
-        const result = await apiCall('/p2p/oracle/observations/latest');
+        const result = await apiCall(`/p2p/oracle/observations/latest?include_own=${includeOwn}`);
         if (result.observations && result.observations.length > 0) {
             tbody.innerHTML = result.observations.map(obs => {
                 const date = new Date(obs.timestamp * 1000);
@@ -1568,7 +1662,10 @@ async function loadLatestObservations() {
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No recent observations received from other oracles. If you are a Primary oracle, your published observations will appear in "My Published Observations" below.</td></tr>';
+            const msg = includeOwn
+                ? 'No observations yet. Register as an oracle to start publishing.'
+                : 'No observations received from other oracles yet.';
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">${msg}</td></tr>`;
         }
     } catch (e) {
         console.error('Failed to load observations:', e);
