@@ -4517,6 +4517,44 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     # Get claim counts per stream (registry uses _claims, not _stream_claims)
                     stream_claims = getattr(registry, '_claims', {})
 
+                    # Get oracle network for oracle peer ID lookups
+                    oracle_network = getattr(startupDag, '_oracle_network', None)
+                    # Get my peer ID to mark "is_me"
+                    my_peer_id = None
+                    if hasattr(startupDag, '_p2p_peers') and startupDag._p2p_peers:
+                        my_peer_id = getattr(startupDag._p2p_peers, 'peer_id', None)
+
+                    def get_oracle_peer_ids(stream_id):
+                        """Get list of oracle peer IDs for a stream, including self."""
+                        if not oracle_network:
+                            return []
+
+                        oracle_list = []
+                        seen_peers = set()
+
+                        # Get network-discovered oracles
+                        if hasattr(oracle_network, 'get_registered_oracles'):
+                            for o in oracle_network.get_registered_oracles(stream_id):
+                                if o.peer_id not in seen_peers:
+                                    oracle_list.append({
+                                        'peer_id': o.peer_id,
+                                        'is_primary': o.is_primary,
+                                        'is_me': o.peer_id == my_peer_id
+                                    })
+                                    seen_peers.add(o.peer_id)
+
+                        # Also include our own registration if not already in list
+                        if hasattr(oracle_network, '_my_registrations'):
+                            my_reg = oracle_network._my_registrations.get(stream_id)
+                            if my_reg and my_peer_id and my_peer_id not in seen_peers:
+                                oracle_list.append({
+                                    'peer_id': my_peer_id,
+                                    'is_primary': getattr(my_reg, 'is_primary', False),
+                                    'is_me': True
+                                })
+
+                        return oracle_list
+
                     result['streams'] = [
                         {
                             'stream_id': getattr(s, 'stream_id', ''),
@@ -4532,6 +4570,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                             'tags': getattr(s, 'tags', []),
                             'last_observation_time': getattr(s, 'last_observation_time', 0),
                             'is_active': hasattr(s, 'is_active') and s.is_active(max_age),
+                            'oracles': get_oracle_peer_ids(getattr(s, 'stream_id', '')),
                         }
                         for s in streams
                     ]
@@ -4625,6 +4664,33 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     except Exception as e:
                         logging.warning(f"Failed to wire claim to Engine: {e}")
 
+                # Also subscribe to observations via oracle network (using trio)
+                oracle_network = getattr(startupDag, '_oracle_network', None)
+                if oracle_network is not None and hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                    try:
+                        engine = startupDag.aiengine
+
+                        def observation_callback(observation):
+                            """Handle observation and pass to engine."""
+                            # Find the stream UUID for this stream_id
+                            for uuid, model in engine.streamModels.items():
+                                if getattr(model, 'stream_name', None) == stream_id:
+                                    engine._handleP2PObservation(uuid, observation, stream_id)
+                                    return
+                            # Fallback if no match found by stream_name
+                            engine._handleP2PObservation(stream_id, observation, stream_id)
+
+                        async def do_subscribe():
+                            return await oracle_network.subscribe_to_stream(stream_id, observation_callback)
+
+                        sub_loop = asyncio.new_event_loop()
+                        obs_subscribed = sub_loop.run_until_complete(do_subscribe())
+                        sub_loop.close()
+                        if obs_subscribed:
+                            logging.info(f"Subscribed to observations for {stream_id}", color='green')
+                    except Exception as e:
+                        logging.warning(f"Failed to subscribe to observations: {e}")
+
                 # Auto-subscribe to predictions for this stream
                 prediction_subscribed = False
                 prediction_protocol = getattr(startupDag, '_prediction_protocol', None)
@@ -4676,7 +4742,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
             async def do_release():
-                return await registry.release_stream(stream_id)
+                return await registry.release_claim(stream_id)
 
             import asyncio
             try:
@@ -4827,6 +4893,35 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                                     stream_name = name
                                     break
 
+                        # Get oracle peer IDs for this stream
+                        oracle_peer_ids = []
+                        oracle_network = getattr(startupDag, '_oracle_network', None)
+                        my_peer_id = None
+                        if hasattr(startupDag, '_p2p_peers') and startupDag._p2p_peers:
+                            my_peer_id = getattr(startupDag._p2p_peers, 'peer_id', None)
+
+                        if oracle_network and stream_name:
+                            seen_peers = set()
+                            # Get network-discovered oracles
+                            if hasattr(oracle_network, 'get_registered_oracles'):
+                                for o in oracle_network.get_registered_oracles(stream_name):
+                                    if o.peer_id not in seen_peers:
+                                        oracle_peer_ids.append({
+                                            'peer_id': o.peer_id,
+                                            'is_primary': o.is_primary,
+                                            'is_me': o.peer_id == my_peer_id
+                                        })
+                                        seen_peers.add(o.peer_id)
+                            # Include our own registration if not already in list
+                            if hasattr(oracle_network, '_my_registrations'):
+                                my_reg = oracle_network._my_registrations.get(stream_name)
+                                if my_reg and my_peer_id and my_peer_id not in seen_peers:
+                                    oracle_peer_ids.append({
+                                        'peer_id': my_peer_id,
+                                        'is_primary': getattr(my_reg, 'is_primary', False),
+                                        'is_me': True
+                                    })
+
                         result['stream_details'][stream_uuid] = {
                             'stream_name': stream_name,  # Full stream ID like "crypto|satori|BTC|USD"
                             'observation_count': observation_count,
@@ -4838,6 +4933,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                             'ready_to_predict': is_ready_to_predict,
                             'adapter': stream_model.adapter.__name__ if hasattr(stream_model, 'adapter') and stream_model.adapter else None,
                             'pending_p2p_commits': len(getattr(stream_model, '_pending_commits', {})),
+                            'oracles': oracle_peer_ids,
                         }
 
             return jsonify(result)

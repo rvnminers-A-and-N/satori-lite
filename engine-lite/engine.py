@@ -338,29 +338,42 @@ class Engine:
             oracle_network: The OracleNetwork instance initialized by start.py
         """
         self._oracle_network = oracle_network
+        # Propagate to all existing streamModels for oracle status checks
+        for streamUuid, streamModel in self.streamModels.items():
+            streamModel._oracle_network = oracle_network
         info("Oracle network wired to Engine for observation subscriptions", color="cyan")
 
-    def subscribeToP2PObservations(self, streamUuid: str) -> bool:
-        """Subscribe to P2P observations for a stream."""
+    def subscribeToP2PObservations(self, stream_id: str, streamUuid: str = None) -> bool:
+        """Subscribe to P2P observations for a stream.
+
+        Args:
+            stream_id: Full stream identifier like 'coingecko|SATORIUSD|price'
+            streamUuid: Stream UUID hash (optional, derived from stream_id if not provided)
+        """
         if self._oracle_network is None:
             return False
 
-        if streamUuid in self._p2p_observation_subscriptions:
+        # Use stream_id for subscription key
+        if stream_id in self._p2p_observation_subscriptions:
             return True  # Already subscribed
+
+        # If streamUuid not provided, use stream_id as lookup key
+        lookup_uuid = streamUuid or stream_id
 
         try:
             def on_p2p_observation(observation):
                 """Handle P2P observation and pass to stream model."""
-                self._handleP2PObservation(streamUuid, observation)
+                # Try to find stream model by UUID or by stream_id
+                self._handleP2PObservation(lookup_uuid, observation, stream_id)
 
             success = asyncio.run(self._oracle_network.subscribe_to_stream(
-                stream_id=streamUuid,
+                stream_id=stream_id,  # Use full stream_id for pubsub topic
                 callback=on_p2p_observation
             ))
 
             if success:
-                self._p2p_observation_subscriptions[streamUuid] = True
-                info(f"Subscribed to P2P observations for {streamUuid[:16]}...")
+                self._p2p_observation_subscriptions[stream_id] = True
+                info(f"Subscribed to P2P observations for {stream_id}")
                 return True
 
         except Exception as e:
@@ -368,11 +381,18 @@ class Engine:
 
         return False
 
-    def _handleP2PObservation(self, streamUuid: str, observation):
+    def _handleP2PObservation(self, streamUuid: str, observation, stream_id: str = None):
         """Handle a P2P observation and pass it to the stream model."""
         try:
             streamModel = self.streamModels.get(streamUuid)
+            # Fallback: try to find by stream_name if UUID lookup fails
+            if streamModel is None and stream_id:
+                for uuid, model in self.streamModels.items():
+                    if getattr(model, 'stream_name', None) == stream_id:
+                        streamModel = model
+                        break
             if streamModel is None:
+                debug(f"No stream model found for {streamUuid} / {stream_id}")
                 return
 
             # Track bandwidth if QoS manager is available
@@ -411,8 +431,10 @@ class Engine:
         if networking_mode in ('hybrid', 'p2p'):
             self.initializeP2P()
             # Subscribe to P2P observations for all streams
-            for streamUuid in self.streamModels.keys():
-                self.subscribeToP2PObservations(streamUuid)
+            for streamUuid, streamModel in self.streamModels.items():
+                # Get stream_name if available, otherwise use UUID
+                stream_name = getattr(streamModel, 'stream_name', None) or streamUuid
+                self.subscribeToP2PObservations(stream_name, streamUuid)
         info("Engine initialized successfully", color='green')
 
     def startService(self):
@@ -515,8 +537,9 @@ class Engine:
             streamModel.run_forever()
 
             # Subscribe to P2P observations for this stream
+            # Note: subscribe_to_stream uses stream_id (like 'coingecko|SATORIUSD|price'), not UUID
             if self._oracle_network is not None:
-                self.subscribeToP2PObservations(streamUuid)
+                self.subscribeToP2PObservations(stream_id, streamUuid)
             else:
                 debug(f"Oracle network not available for {stream_id} (hash: {streamUuid})")
 
@@ -888,6 +911,7 @@ class StreamModel:
         streamModel.storage = storage or EngineStorageManager.getInstance()
         # P2P commit-reveal support
         streamModel._prediction_protocol = None
+        streamModel._oracle_network = None  # For checking if we're an oracle
         streamModel._current_round_id: int = 0
         streamModel._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
         # Model training customization (from team)
@@ -927,6 +951,7 @@ class StreamModel:
         self.useServer: bool = False  # Default: use DataClient
         # P2P commit-reveal support
         self._prediction_protocol = None
+        self._oracle_network = None  # For checking if we're an oracle
         self._current_round_id: int = 0
         self._pending_commits: dict[int, float] = {}  # round_id -> predicted_value
         # Model training customization (from team)
@@ -1532,6 +1557,16 @@ class StreamModel:
             # If we have a prediction protocol instance, publish the prediction
             if self._prediction_protocol is not None:
                 try:
+                    # Check if we're an oracle for this stream
+                    is_oracle = False
+                    stream_name = getattr(self, 'stream_name', None) or self.streamUuid
+                    if self._oracle_network is not None:
+                        try:
+                            oracle_role = self._oracle_network.get_oracle_role(stream_name)
+                            is_oracle = oracle_role in ('primary', 'secondary')
+                        except Exception:
+                            pass
+
                     # Use the Peers' spawn_background_task to run async in Trio context
                     # This avoids conflicts with asyncio.run() and Trio event loops
                     if self._p2p_peers is not None and hasattr(self._p2p_peers, 'spawn_background_task'):
@@ -1541,9 +1576,11 @@ class StreamModel:
                                     stream_id=self.streamUuid,
                                     value=predicted_value,
                                     target_time=target_time,
-                                    confidence=0.5
+                                    confidence=0.5,
+                                    is_oracle=is_oracle
                                 )
-                                info(f"Published P2P prediction: stream={self.streamUuid[:16]}... value={predicted_value}", color="green")
+                                oracle_tag = " [oracle]" if is_oracle else ""
+                                info(f"Published P2P prediction{oracle_tag}: stream={self.streamUuid[:16]}... value={predicted_value}", color="green")
                             except Exception as e:
                                 warning(f"Failed to publish P2P prediction: {e}")
                         self._p2p_peers.spawn_background_task(_publish)
@@ -1553,7 +1590,8 @@ class StreamModel:
                             stream_id=self.streamUuid,
                             value=predicted_value,
                             target_time=target_time,
-                            confidence=0.5
+                            confidence=0.5,
+                            is_oracle=is_oracle
                         ))
                 except Exception as e:
                     debug(f"Failed to publish P2P prediction: {e}")

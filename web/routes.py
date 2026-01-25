@@ -6015,13 +6015,24 @@ def register_routes(app):
 
             protocol = startup._prediction_protocol
 
+            # Check if we're an oracle for this stream
+            is_oracle = False
+            oracle_network = getattr(startup, '_oracle_network', None)
+            if oracle_network is not None:
+                try:
+                    oracle_role = oracle_network.get_oracle_role(stream_id)
+                    is_oracle = oracle_role in ('primary', 'secondary')
+                except Exception:
+                    pass
+
             async def do_publish():
                 return await protocol.publish_prediction(
                     stream_id=stream_id,
                     value=value,
                     target_time=int(target_time),
                     confidence=float(confidence),
-                    metadata=metadata
+                    metadata=metadata,
+                    is_oracle=is_oracle
                 )
 
             try:
@@ -6041,6 +6052,7 @@ def register_routes(app):
                         'predictor': prediction.predictor,
                         'created_at': prediction.created_at,
                         'confidence': prediction.confidence,
+                        'is_oracle': prediction.is_oracle,
                     }
                 })
             else:
@@ -6077,6 +6089,7 @@ def register_routes(app):
                             'predictor': pred.predictor,
                             'created_at': pred.created_at,
                             'confidence': pred.confidence,
+                            'is_oracle': getattr(pred, 'is_oracle', False),
                         })
 
             # Sort by created_at descending
@@ -6116,6 +6129,7 @@ def register_routes(app):
                     'predictor': pred.predictor,
                     'created_at': pred.created_at,
                     'confidence': pred.confidence,
+                    'is_oracle': getattr(pred, 'is_oracle', False),
                 })
 
             return jsonify({

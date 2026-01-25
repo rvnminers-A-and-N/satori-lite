@@ -237,13 +237,16 @@
                     <div class="tab-pane fade" id="manual-pick-panel" role="tabpanel">
                         <div class="alert alert-info">
                             <i class="material-icons align-middle me-1">info</i>
-                            Manually select which streams to predict on. Only streams with active oracles (published in last 15 minutes) are shown.
+                            Select streams to predict on, or become an oracle to provide data for the network.
                         </div>
 
                         <div class="mb-3">
                             <div class="input-group">
                                 <span class="input-group-text"><i class="material-icons">search</i></span>
                                 <input type="text" class="form-control" id="streamSearchInput" placeholder="Search streams..." onkeyup="filterStreamsList()">
+                                <button class="btn btn-outline-secondary" onclick="refreshAvailableStreams()" title="Refresh stream list">
+                                    <i class="material-icons align-middle" style="font-size: 18px;">refresh</i>
+                                </button>
                             </div>
                         </div>
 
@@ -257,18 +260,61 @@
                             </div>
                         </div>
 
-                        <div id="streamsList" class="list-group mb-3" style="max-height: 300px; overflow-y: auto;">
+                        <div id="streamsList" class="list-group mb-3" style="max-height: 250px; overflow-y: auto;">
                             <div class="text-center py-4">
                                 <div class="spinner-border spinner-border-sm" role="status"></div>
                                 <span class="ms-2">Loading available streams...</span>
                             </div>
                         </div>
 
-                        <div class="text-center">
-                            <button class="btn btn-primary btn-lg" onclick="claimSelectedStreams()" id="claimSelectedBtn" disabled>
-                                <i class="material-icons align-middle me-1">check_circle</i>
-                                Claim Selected Streams
-                            </button>
+                        <!-- Action Buttons -->
+                        <div class="card mb-3" style="background: var(--bg-secondary);">
+                            <div class="card-body py-3">
+                                <h6 class="mb-2">What would you like to do with selected streams?</h6>
+                                <div class="d-flex flex-wrap gap-2 justify-content-center">
+                                    <!-- Predict Button -->
+                                    <button class="btn btn-success" onclick="claimSelectedStreams()" id="claimSelectedBtn" disabled title="Claim prediction slots on selected streams">
+                                        <i class="material-icons align-middle me-1" style="font-size: 18px;">trending_up</i>
+                                        Predict
+                                    </button>
+
+                                    <!-- Oracle Dropdown -->
+                                    <div class="btn-group">
+                                        <button type="button" class="btn btn-info dropdown-toggle" data-bs-toggle="dropdown" id="oracleDropdownBtn" disabled title="Become an oracle for selected streams">
+                                            <i class="material-icons align-middle me-1" style="font-size: 18px;">cloud</i>
+                                            Oracle
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="becomePrimaryOracle(); return false;">
+                                                <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_upload</i>
+                                                Primary Oracle <small class="text-muted">(fetch data)</small>
+                                            </a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="becomeSecondaryOracle(); return false;">
+                                                <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_sync</i>
+                                                Secondary Oracle <small class="text-muted">(relay data)</small>
+                                            </a></li>
+                                        </ul>
+                                    </div>
+
+                                    <!-- Both Dropdown -->
+                                    <div class="btn-group">
+                                        <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" id="bothDropdownBtn" disabled title="Both predict and become an oracle">
+                                            <i class="material-icons align-middle me-1" style="font-size: 18px;">all_inclusive</i>
+                                            Both
+                                        </button>
+                                        <ul class="dropdown-menu">
+                                            <li><a class="dropdown-item" href="#" onclick="claimAndBecomePrimaryOracle(); return false;">
+                                                <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_upload</i>
+                                                Predict + Primary Oracle
+                                            </a></li>
+                                            <li><a class="dropdown-item" href="#" onclick="claimAndBecomeSecondaryOracle(); return false;">
+                                                <i class="material-icons align-middle me-1" style="font-size: 16px;">cloud_sync</i>
+                                                Predict + Secondary Oracle
+                                            </a></li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -3670,19 +3716,23 @@
             container.innerHTML = `<div class="text-center py-4">
                 <i class="material-icons text-muted" style="font-size: 48px;">cloud_off</i>
                 <p class="text-muted mt-2 mb-3">No streams available yet.</p>
-                <p class="small text-muted">Be the first to create a data stream!</p>
-                <a href="/oracle" class="btn btn-danger btn-sm">
-                    <i class="material-icons align-middle me-1" style="font-size: 16px;">add</i>
-                    Become a Primary Oracle
-                </a>
+                <p class="small text-muted mb-3">Be the first to create a data stream, or try refreshing!</p>
+                <div class="d-flex gap-2 justify-content-center flex-wrap">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="refreshAvailableStreams()">
+                        <i class="material-icons align-middle me-1" style="font-size: 16px;">refresh</i>
+                        Refresh Streams
+                    </button>
+                    <a href="/oracle" class="btn btn-danger btn-sm" onclick="closeOnboardingModal()">
+                        <i class="material-icons align-middle me-1" style="font-size: 16px;">add</i>
+                        Become a Primary Oracle
+                    </a>
+                </div>
             </div>`;
             return;
         }
 
         container.innerHTML = availableStreams.map(stream => {
             const streamId = stream.stream_id;
-            const displayName = streamId.split('|').slice(2).join('/') || streamId;
-            const source = stream.source || 'unknown';
             const isSelected = selectedStreamIds.has(streamId);
             const isActive = stream.is_active;
 
@@ -3691,12 +3741,25 @@
             if (stream.last_observation_time > 0) {
                 const ageSeconds = Math.floor(Date.now() / 1000 - stream.last_observation_time);
                 if (ageSeconds < 60) {
-                    activityInfo = `${ageSeconds}s ago`;
+                    activityInfo = `Last: ${ageSeconds}s ago`;
                 } else if (ageSeconds < 3600) {
-                    activityInfo = `${Math.floor(ageSeconds / 60)}m ago`;
+                    activityInfo = `Last: ${Math.floor(ageSeconds / 60)}m ago`;
+                } else if (ageSeconds < 86400) {
+                    activityInfo = `Last: ${Math.floor(ageSeconds / 3600)}h ago`;
                 } else {
-                    activityInfo = `${Math.floor(ageSeconds / 3600)}h ago`;
+                    activityInfo = `Last: ${Math.floor(ageSeconds / 86400)}d ago`;
                 }
+            }
+
+            // Format oracle peer IDs
+            let oracleInfo = '';
+            if (stream.oracles && stream.oracles.length > 0) {
+                const oracleList = stream.oracles.map(o => {
+                    const label = o.is_primary ? 'Primary' : 'Secondary';
+                    const youLabel = o.is_me ? ' <span class="badge bg-warning text-dark">you</span>' : '';
+                    return `${label}: ${o.peer_id}${youLabel}`;
+                }).join('<br>');
+                oracleInfo = `<br><small class="text-muted">${oracleList}</small>`;
             }
 
             return `
@@ -3706,9 +3769,10 @@
                            ${isSelected ? 'checked' : ''}
                            onchange="toggleStreamSelection('${streamId}', this.checked)">
                     <div class="flex-grow-1">
-                        <span class="fw-medium">${displayName}</span>
+                        <span class="fw-medium">${streamId}</span>
                         ${isActive ? '<span class="badge bg-success ms-2">Active</span>' : ''}
-                        <br><small class="text-muted">Source: ${source}${activityInfo ? ' | Last: ' + activityInfo : ''}</small>
+                        ${activityInfo ? '<br><small class="text-muted">' + activityInfo + '</small>' : ''}
+                        ${oracleInfo}
                     </div>
                 </label>
             `;
@@ -3746,7 +3810,279 @@
 
     function updateSelectedCount() {
         document.getElementById('selectedStreamCount').textContent = selectedStreamIds.size;
-        document.getElementById('claimSelectedBtn').disabled = selectedStreamIds.size === 0;
+        const hasSelection = selectedStreamIds.size > 0;
+        document.getElementById('claimSelectedBtn').disabled = !hasSelection;
+        document.getElementById('oracleDropdownBtn').disabled = !hasSelection;
+        document.getElementById('bothDropdownBtn').disabled = !hasSelection;
+    }
+
+    let streamRefreshInterval = null;
+    let isRefreshing = false;
+
+    async function refreshAvailableStreams() {
+        if (isRefreshing) return;
+        isRefreshing = true;
+
+        const container = document.getElementById('streamsList');
+        const refreshBtn = document.querySelector('[onclick="refreshAvailableStreams()"]');
+        const originalContent = refreshBtn ? refreshBtn.innerHTML : '';
+
+        // Show spinner in button
+        if (refreshBtn) {
+            refreshBtn.innerHTML = `<span class="spinner-border spinner-border-sm" role="status"></span>`;
+            refreshBtn.disabled = true;
+        }
+
+        // Show loading in container if empty
+        if (!availableStreams || availableStreams.length === 0) {
+            container.innerHTML = `<div class="text-center py-4">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span class="ms-2">Searching for streams...</span>
+            </div>`;
+        }
+
+        try {
+            const result = await apiCall('/p2p/streams/discover?limit=200');
+            if (result && result.streams) {
+                availableStreams = result.streams;
+                renderStreamsList();
+            }
+        } catch (e) {
+            if (!availableStreams || availableStreams.length === 0) {
+                container.innerHTML = `<div class="text-center py-4 text-danger">
+                    <i class="material-icons">error</i>
+                    <p>Failed to load streams. Try again.</p>
+                </div>`;
+            }
+        } finally {
+            isRefreshing = false;
+            if (refreshBtn) {
+                refreshBtn.innerHTML = originalContent || `<i class="material-icons align-middle" style="font-size: 18px;">refresh</i>`;
+                refreshBtn.disabled = false;
+            }
+        }
+    }
+
+    function startStreamAutoRefresh() {
+        if (streamRefreshInterval) return;
+        streamRefreshInterval = setInterval(refreshAvailableStreams, 30000);
+    }
+
+    function stopStreamAutoRefresh() {
+        if (streamRefreshInterval) {
+            clearInterval(streamRefreshInterval);
+            streamRefreshInterval = null;
+        }
+    }
+
+    async function becomePrimaryOracle() {
+        if (selectedStreamIds.size === 0) return;
+
+        stopOnboardingTimeout();
+        const statusEl = document.getElementById('autoPickStatus');
+        const progressDiv = document.getElementById('autoPickProgress');
+        const progressBar = document.getElementById('autoPickProgressBar');
+
+        progressDiv.style.display = 'block';
+        progressBar.style.width = '10%';
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+        statusEl.textContent = 'Registering as primary oracle...';
+
+        let registered = 0;
+        let failed = 0;
+        const streams = Array.from(selectedStreamIds);
+
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 10 + ((i + 1) / streams.length * 80);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Registering as primary oracle for ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/oracle/register-primary', 'POST', { stream_id: streamId });
+                if (result && result.success) {
+                    registered++;
+                } else {
+                    failed++;
+                }
+            } catch (e) {
+                failed++;
+            }
+        }
+
+        progressBar.style.width = '100%';
+        progressBar.classList.remove('progress-bar-animated');
+
+        if (registered > 0) {
+            progressBar.classList.add('bg-success');
+            statusEl.textContent = `Registered as primary oracle for ${registered} stream(s)!`;
+            setTimeout(() => {
+                closeOnboardingModal();
+                location.reload();
+            }, 2000);
+        } else {
+            progressBar.classList.add('bg-danger');
+            statusEl.textContent = `Failed to register as primary oracle.`;
+        }
+    }
+
+    async function becomeSecondaryOracle() {
+        if (selectedStreamIds.size === 0) return;
+
+        stopOnboardingTimeout();
+        const statusEl = document.getElementById('autoPickStatus');
+        const progressDiv = document.getElementById('autoPickProgress');
+        const progressBar = document.getElementById('autoPickProgressBar');
+
+        progressDiv.style.display = 'block';
+        progressBar.style.width = '10%';
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-info';
+        statusEl.textContent = 'Registering as secondary oracle...';
+
+        let registered = 0;
+        let failed = 0;
+        const streams = Array.from(selectedStreamIds);
+
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 10 + ((i + 1) / streams.length * 80);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Registering as secondary oracle for ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/oracle/register-secondary', 'POST', { stream_id: streamId });
+                if (result && result.success) {
+                    registered++;
+                } else {
+                    failed++;
+                }
+            } catch (e) {
+                failed++;
+            }
+        }
+
+        progressBar.style.width = '100%';
+        progressBar.classList.remove('progress-bar-animated');
+
+        if (registered > 0) {
+            progressBar.classList.add('bg-success');
+            statusEl.textContent = `Registered as secondary oracle for ${registered} stream(s)!`;
+            setTimeout(() => {
+                closeOnboardingModal();
+                location.reload();
+            }, 2000);
+        } else {
+            progressBar.classList.add('bg-danger');
+            statusEl.textContent = `Failed to register. Try becoming a primary oracle instead.`;
+        }
+    }
+
+    async function claimAndBecomePrimaryOracle() {
+        if (selectedStreamIds.size === 0) return;
+
+        stopOnboardingTimeout();
+        const statusEl = document.getElementById('autoPickStatus');
+        const progressDiv = document.getElementById('autoPickProgress');
+        const progressBar = document.getElementById('autoPickProgressBar');
+
+        progressDiv.style.display = 'block';
+        progressBar.style.width = '5%';
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-danger';
+        statusEl.textContent = 'Setting up predictor and primary oracle roles...';
+
+        let claimedCount = 0;
+        let oracleCount = 0;
+        const streams = Array.from(selectedStreamIds);
+
+        // First claim as predictor
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 5 + ((i + 1) / streams.length * 45);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Claiming prediction slot: ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId });
+                if (result && result.success) claimedCount++;
+            } catch (e) { /* ignore */ }
+        }
+
+        // Then register as primary oracle
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 50 + ((i + 1) / streams.length * 45);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Registering as primary oracle: ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/oracle/register-primary', 'POST', { stream_id: streamId });
+                if (result && result.success) oracleCount++;
+            } catch (e) { /* ignore */ }
+        }
+
+        progressBar.style.width = '100%';
+        progressBar.classList.remove('progress-bar-animated');
+        progressBar.classList.add('bg-success');
+        statusEl.textContent = `Done! Claimed ${claimedCount} prediction slots, registered as primary oracle for ${oracleCount} streams.`;
+
+        setTimeout(() => {
+            closeOnboardingModal();
+            location.reload();
+        }, 2500);
+    }
+
+    async function claimAndBecomeSecondaryOracle() {
+        if (selectedStreamIds.size === 0) return;
+
+        stopOnboardingTimeout();
+        const statusEl = document.getElementById('autoPickStatus');
+        const progressDiv = document.getElementById('autoPickProgress');
+        const progressBar = document.getElementById('autoPickProgressBar');
+
+        progressDiv.style.display = 'block';
+        progressBar.style.width = '5%';
+        progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+        statusEl.textContent = 'Setting up predictor and secondary oracle roles...';
+
+        let claimedCount = 0;
+        let oracleCount = 0;
+        const streams = Array.from(selectedStreamIds);
+
+        // First claim as predictor
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 5 + ((i + 1) / streams.length * 45);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Claiming prediction slot: ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId });
+                if (result && result.success) claimedCount++;
+            } catch (e) { /* ignore */ }
+        }
+
+        // Then register as secondary oracle
+        for (let i = 0; i < streams.length; i++) {
+            const streamId = streams[i];
+            const progress = 50 + ((i + 1) / streams.length * 45);
+            progressBar.style.width = `${progress}%`;
+            statusEl.textContent = `Registering as secondary oracle: ${streamId.split('|').slice(2).join('/')}...`;
+
+            try {
+                const result = await apiCall('/p2p/oracle/register-secondary', 'POST', { stream_id: streamId });
+                if (result && result.success) oracleCount++;
+            } catch (e) { /* ignore */ }
+        }
+
+        progressBar.style.width = '100%';
+        progressBar.classList.remove('progress-bar-animated');
+        progressBar.classList.add('bg-success');
+        statusEl.textContent = `Done! Claimed ${claimedCount} prediction slots, registered as secondary oracle for ${oracleCount} streams.`;
+
+        setTimeout(() => {
+            closeOnboardingModal();
+            location.reload();
+        }, 2500);
     }
 
     async function autoPickStreams() {
@@ -3957,12 +4293,22 @@
 
     // Tab change handler for onboarding modal - stop timeout when switching tabs
     document.addEventListener('shown.bs.tab', function(e) {
-        if (e.target.id === 'manual-pick-tab' || e.target.id === 'skip-tab') {
+        if (e.target.id === 'manual-pick-tab') {
             stopOnboardingTimeout();
+            startStreamAutoRefresh();  // Start auto-refresh when on manual tab
+        } else if (e.target.id === 'skip-tab') {
+            stopOnboardingTimeout();
+            stopStreamAutoRefresh();
         } else if (e.target.id === 'auto-pick-tab') {
             // Restart timeout when going back to auto-pick
             startOnboardingTimeout();
+            stopStreamAutoRefresh();
         }
+    });
+
+    // Stop auto-refresh when modal is closed
+    document.getElementById('streamOnboardingModal')?.addEventListener('hidden.bs.modal', function() {
+        stopStreamAutoRefresh();
     });
 
     // =========================================================================

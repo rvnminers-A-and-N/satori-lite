@@ -315,6 +315,7 @@
                                 <tr>
                                     <th>Stream</th>
                                     <th>Predictor</th>
+                                    <th>Type</th>
                                     <th>Value</th>
                                     <th>Target Time</th>
                                     <th>Confidence</th>
@@ -322,7 +323,7 @@
                                 </tr>
                             </thead>
                             <tbody id="allPredictionsTable">
-                                <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                                <tr><td colspan="7" class="text-center text-muted py-3">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -444,6 +445,7 @@ async function loadEngineStatus() {
                 <tr>
                     <th>Stream</th>
                     <th>UUID</th>
+                    <th>Oracle</th>
                     <th>Status</th>
                     <th>Observations</th>
                     <th title="Model trained and ready to make predictions">Trained</th>
@@ -453,10 +455,9 @@ async function loadEngineStatus() {
             <tbody>`;
 
         for (const [uuid, detail] of Object.entries(details)) {
-            // Use stream name if available, otherwise truncated UUID
+            // Use stream name if available, otherwise UUID
             const streamName = detail.stream_name || uuid;
-            const streamDisplay = streamName.length > 30 ? streamName.substring(0, 30) + '...' : streamName;
-            const uuidShort = uuid.length > 12 ? uuid.substring(0, 8) + '...' : uuid;
+            const streamDisplay = streamName; // Show full stream name
 
             // Determine status badge
             let statusBadge, statusText;
@@ -486,9 +487,20 @@ async function loadEngineStatus() {
                 '<i class="material-icons text-success" style="font-size: 16px;" title="Model trained">check_circle</i>' :
                 '<i class="material-icons text-secondary" style="font-size: 16px;" title="Training in progress">hourglass_empty</i>';
 
+            // Format oracle peer IDs
+            let oracleDisplay = '--';
+            if (detail.oracles && detail.oracles.length > 0) {
+                oracleDisplay = detail.oracles.map(o => {
+                    const label = o.is_primary ? '<span class="badge bg-danger me-1">P</span>' : '<span class="badge bg-info me-1">S</span>';
+                    const youLabel = o.is_me ? ' <span class="badge bg-warning text-dark">you</span>' : '';
+                    return `${label}<span style="word-break: break-all;">${o.peer_id}</span>${youLabel}`;
+                }).join('<br>');
+            }
+
             tableHtml += `<tr>
                 <td title="${streamName}"><code>${streamDisplay}</code></td>
-                <td title="${uuid}"><small class="text-muted">${uuidShort}</small></td>
+                <td><small class="text-muted" style="word-break: break-all;">${uuid}</small></td>
+                <td><small class="text-muted">${oracleDisplay}</small></td>
                 <td><span class="badge ${statusBadge}">${statusText}</span></td>
                 <td>
                     <div class="d-flex align-items-center">
@@ -588,9 +600,13 @@ async function loadAllPredictions() {
                 const predictorShort = pred.predictor.length > 12 ?
                     pred.predictor.substring(0, 6) + '...' + pred.predictor.substring(pred.predictor.length - 4) :
                     pred.predictor;
+                const typeBadge = pred.is_oracle ?
+                    '<span class="badge bg-warning text-dark">Oracle</span>' :
+                    '<span class="badge bg-info">Predictor</span>';
                 return `<tr>
                     <td title="${pred.stream_id}">${streamShort}</td>
                     <td title="${pred.predictor}"><code>${predictorShort}</code></td>
+                    <td>${typeBadge}</td>
                     <td><strong>${pred.value}</strong></td>
                     <td>${targetDate.toLocaleString()}</td>
                     <td>${pred.confidence > 0 ? (pred.confidence * 100).toFixed(0) + '%' : '--'}</td>
@@ -598,11 +614,11 @@ async function loadAllPredictions() {
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No predictions in cache. Subscribe to streams to see predictions.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-3">No predictions in cache. Subscribe to streams to see predictions.</td></tr>';
         }
     } catch (e) {
         console.error('Failed to load all predictions:', e);
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">Failed to load predictions</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-3">Failed to load predictions</td></tr>';
     }
 }
 

@@ -425,6 +425,7 @@
                                         <tr>
                                             <th>Stream</th>
                                             <th>Oracle Address</th>
+                                            <th>Oracle Peer ID</th>
                                             <th>Role</th>
                                             <th>Relays</th>
                                             <th>Predictors</th>
@@ -432,7 +433,7 @@
                                         </tr>
                                     </thead>
                                     <tbody id="oraclesTable">
-                                        <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                                        <tr><td colspan="7" class="text-center text-muted py-3">Loading...</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -754,12 +755,24 @@ async function loadDiscoveredStreams() {
                     slotsClass = 'bg-info';     // blue: 101-500 remaining
                 }
 
+                // Format oracle peer IDs
+                let oracleInfo = '';
+                if (stream.oracles && stream.oracles.length > 0) {
+                    const oracleList = stream.oracles.map(o => {
+                        const label = o.is_primary ? '<span class="badge bg-danger">P</span>' : '<span class="badge bg-info">S</span>';
+                        const youLabel = o.is_me ? ' <span class="badge bg-warning text-dark">you</span>' : '';
+                        return `${label} <small style="word-break: break-all;">${o.peer_id}</small>${youLabel}`;
+                    }).join('<br>');
+                    oracleInfo = `<br><small class="text-muted">Oracles:</small><br>${oracleList}`;
+                }
+
                 return `<div class="p-3 border-bottom">
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <strong>${stream.source}/${stream.stream}/${stream.target}</strong>
                             <br><small class="text-muted">Type: ${stream.datatype || 'float'}</small>
                             <br><small class="text-muted">ID: <code>${stream.stream_id}</code></small>
+                            ${oracleInfo}
                         </div>
                         <div class="text-end">
                             <span class="badge ${slotsClass}">${slotsRemaining}/${slotsAvailable} slots</span>
@@ -792,8 +805,19 @@ async function loadDiscoveredStreams() {
 async function loadMyClaimedStreams() {
     const container = document.getElementById('myClaimedStreamsList');
     try {
-        const result = await apiCall('/p2p/streams/my');
+        // Fetch claims and stream details (which includes oracle info)
+        const [result, streamsResult] = await Promise.all([
+            apiCall('/p2p/streams/my'),
+            apiCall('/p2p/streams/discover?limit=200')
+        ]);
         const claims = result.claims || result.streams || [];
+
+        // Build a map of stream_id -> oracle info
+        const streamOracleMap = {};
+        (streamsResult.streams || []).forEach(s => {
+            streamOracleMap[s.stream_id] = s.oracles || [];
+        });
+
         if (claims.length > 0) {
             container.innerHTML = claims.map(claim => {
                 // Parse stream ID: source|stream|target -> source/stream/target
@@ -803,12 +827,26 @@ async function loadMyClaimedStreams() {
                     : claim.stream_id;
                 const expires = claim.expires ? new Date(claim.expires * 1000).toLocaleDateString() : 'Never';
                 const statusBadge = claim.is_expired ? '<span class="badge bg-danger">Expired</span>' : '<span class="badge bg-success">Active</span>';
+
+                // Get oracle info for this stream
+                const oracles = streamOracleMap[claim.stream_id] || [];
+                let oracleInfo = '';
+                if (oracles.length > 0) {
+                    const oracleList = oracles.map(o => {
+                        const label = o.is_primary ? '<span class="badge bg-danger">P</span>' : '<span class="badge bg-info">S</span>';
+                        const youLabel = o.is_me ? ' <span class="badge bg-warning text-dark">you</span>' : '';
+                        return `${label} <small style="word-break: break-all;">${o.peer_id}</small>${youLabel}`;
+                    }).join('<br>');
+                    oracleInfo = `<br><small class="text-muted">Oracles:</small><br>${oracleList}`;
+                }
+
                 return `<div class="p-3 border-bottom">
                     <div class="d-flex justify-content-between">
                         <div>
                             <strong>${streamLabel}</strong>
                             <br><small class="text-muted">Slot #${claim.slot_index || 0} | Expires: ${expires}</small>
                             <br><small class="text-muted">ID: <code>${claim.stream_id}</code></small>
+                            ${oracleInfo}
                         </div>
                         <div>
                             ${statusBadge}
@@ -978,15 +1016,13 @@ async function loadRegisteredOracles() {
                 // Highlight row if we're involved with this stream
                 const isInvolved = myPrimaryStreams.has(streamId) || mySecondaryStreams.has(streamId) || myClaimedStreams.has(streamId);
 
-                // Parse stream ID: source|stream|target -> source/stream/target
-                const streamParts = streamId.split('|');
-                const streamLabel = streamParts.length >= 3
-                    ? `${streamParts[0]}/${streamParts[1]}/${streamParts[2]}`
-                    : streamId;
+                // Get oracle peer ID
+                const peerId = o.peer_id || '--';
 
                 return `<tr${isInvolved ? ' class="table-active"' : ''}>
-                    <td><code title="${streamId}">${streamLabel}</code></td>
+                    <td><code>${streamId}</code></td>
                     <td><code class="small">${addr}</code></td>
+                    <td><small class="text-muted" style="word-break: break-all;">${peerId}</small></td>
                     <td>${typeBadge}</td>
                     <td><span class="badge bg-info">${relayCount}</span></td>
                     <td><span class="badge ${predictorClass}">${predictorCount}</span></td>
@@ -997,11 +1033,11 @@ async function loadRegisteredOracles() {
             const msg = includeOwn
                 ? 'No oracle streams registered yet.'
                 : 'No oracle streams from other nodes yet.';
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-3">${msg}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted py-3">${msg}</td></tr>`;
         }
     } catch (e) {
         console.error('Failed to load oracles:', e);
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger py-3">Failed to load</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger py-3">Failed to load</td></tr>';
     }
 }
 
