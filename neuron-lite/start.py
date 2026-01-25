@@ -868,8 +868,15 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.setRewardAddress(globally=True)  # Sync reward address with server
         self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
         self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
-        self.setupDefaultStream()
-        self.spawnEngine()
+        # In P2P and hybrid modes, engine is created when streams are claimed
+        # Only pure central mode auto-creates streams from server
+        if networking_mode == 'central':
+            self.setupDefaultStream()
+            self.spawnEngine()
+        else:
+            # P2P and hybrid modes: engine created on first stream claim
+            self.aiengine = None
+            logging.info(f"{networking_mode.upper()} mode: Engine will be initialized when streams are claimed", color="cyan")
         startWebUI(self, port=self.uiPort)  # Start web UI after sync
 
     def startWalletOnly(self):
@@ -881,6 +888,7 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
     def startWorker(self):
         """start the satori engine."""
         logging.info("running in worker mode", color="blue")
+        networking_mode = config.get().get('networking mode', 'central').lower().strip()
         if self.env == 'prod' and self.serverConnectedRecently():
             last_checkin = config.get().get('server checkin')
             elapsed_minutes = (time.time() - last_checkin) / 60
@@ -891,12 +899,20 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
         self.recordServerConnection()
         self.setMiningMode()
         self.createServerConn()
-        self.authWithCentral()
+        if networking_mode != 'p2p':
+            self.authWithCentral()  # Skip in pure P2P mode
         self.setRewardAddress(globally=True)  # Sync reward address with server
         self.announceToNetwork()  # P2P announcement (hybrid/p2p modes)
         self.initializeP2PComponents()  # Initialize consensus, rewards, etc.
-        self.setupDefaultStream()
-        self.spawnEngine()
+        # In P2P and hybrid modes, engine is created when streams are claimed
+        # Only pure central mode auto-creates streams from server
+        if networking_mode == 'central':
+            self.setupDefaultStream()
+            self.spawnEngine()
+        else:
+            # P2P and hybrid modes: engine created on first stream claim
+            self.aiengine = None
+            logging.info(f"{networking_mode.upper()} mode: Engine will be initialized when streams are claimed", color="cyan")
         startWebUI(self, port=self.uiPort)  # Start web UI after sync
         threading.Event().wait()
 
@@ -4582,6 +4598,23 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             if claim:
                 # After claiming, wire to Engine to start predicting
                 engine_wired = False
+
+                # In P2P mode, engine may not exist yet - create it on first claim
+                if not hasattr(startupDag, 'aiengine') or startupDag.aiengine is None:
+                    try:
+                        from engine import Engine
+                        startupDag.aiengine = Engine()
+                        # Wire P2P components if available
+                        if hasattr(startupDag, '_p2p_peers') and startupDag._p2p_peers is not None:
+                            startupDag.aiengine.setP2PPeers(startupDag._p2p_peers)
+                        if hasattr(startupDag, '_prediction_protocol') and startupDag._prediction_protocol is not None:
+                            startupDag.aiengine.setPredictionProtocol(startupDag._prediction_protocol)
+                        if hasattr(startupDag, '_oracle_network') and startupDag._oracle_network is not None:
+                            startupDag.aiengine.setOracleNetwork(startupDag._oracle_network)
+                        logging.info("Engine created for P2P stream claims", color='green')
+                    except Exception as e:
+                        logging.warning(f"Failed to create Engine for P2P claims: {e}")
+
                 if hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
                     try:
                         engine_wired = startupDag.aiengine.addStreamFromClaim(stream_id)
@@ -4743,6 +4776,22 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 result['active_models'] = engine.getStreamModelCount()
                 result['stream_uuids'] = engine.getClaimedStreamIds()
 
+                # Get stream names from stream registry or claims
+                stream_registry = getattr(startupDag, '_stream_registry', None)
+                stream_names = {}
+                if stream_registry:
+                    # Try to get stream names from my claims
+                    my_claims = getattr(stream_registry, '_my_claims', {})
+                    for stream_id, claim in my_claims.items():
+                        # stream_id is the full name like "crypto|satori|BTC|USD"
+                        stream_names[stream_id] = stream_id
+                    # Also check registered oracle streams
+                    oracle_network = getattr(startupDag, '_oracle_network', None)
+                    if oracle_network:
+                        my_regs = getattr(oracle_network, '_my_registrations', {})
+                        for stream_id in my_regs.keys():
+                            stream_names[stream_id] = stream_id
+
                 # Get detailed status for each stream model
                 for stream_uuid in result['stream_uuids']:
                     stream_model = engine.streamModels.get(stream_uuid)
@@ -4769,7 +4818,17 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         has_enough_data = observation_count >= min_observations
                         is_ready_to_predict = has_stable_model and has_enough_data and not is_paused
 
+                        # Find stream name - first check StreamModel, then claims/registrations
+                        stream_name = getattr(stream_model, 'stream_name', None)
+                        if not stream_name:
+                            for name, uuid_or_id in stream_names.items():
+                                # Match by UUID or by name pattern
+                                if stream_uuid in name or name in stream_uuid:
+                                    stream_name = name
+                                    break
+
                         result['stream_details'][stream_uuid] = {
+                            'stream_name': stream_name,  # Full stream ID like "crypto|satori|BTC|USD"
                             'observation_count': observation_count,
                             'has_enough_data': has_enough_data,
                             'min_observations': min_observations,

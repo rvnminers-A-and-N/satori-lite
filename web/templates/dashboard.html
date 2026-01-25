@@ -1534,12 +1534,12 @@
     function getRoleBadgeClass(role) {
         const roleMap = {
             'node': 'bg-secondary',
-            'oracle': 'bg-gradient-info',
-            'signer': 'bg-gradient-warning',
-            'pool-operator': 'bg-secondary',
-            'predictor': 'bg-gradient-success',
-            'relay': 'bg-danger',
-            'delegate': 'bg-gradient-primary'
+            'oracle': 'bg-info text-dark',          // Cyan/teal - data providers
+            'signer': 'bg-warning text-dark',       // Yellow/amber - signers
+            'pool-operator': 'bg-dark',             // Dark - pool operators
+            'predictor': 'bg-success',              // Green - predictors
+            'relay': 'bg-primary',                  // Blue - relays (libp2p circuit relay)
+            'delegate': 'bg-purple'                 // Purple - delegates (custom class)
         };
         return roleMap[role.toLowerCase()] || 'bg-secondary';
     }

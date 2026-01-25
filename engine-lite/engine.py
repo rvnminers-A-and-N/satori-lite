@@ -331,6 +331,15 @@ class Engine:
             info(f"P2P prediction protocol wired to stream {streamUuid[:16]}...", color="cyan")
         info("P2P prediction protocol wired to Engine", color="cyan")
 
+    def setOracleNetwork(self, oracle_network) -> None:
+        """Set the shared OracleNetwork instance from start.py.
+
+        Args:
+            oracle_network: The OracleNetwork instance initialized by start.py
+        """
+        self._oracle_network = oracle_network
+        info("Oracle network wired to Engine for observation subscriptions", color="cyan")
+
     def subscribeToP2PObservations(self, streamUuid: str) -> bool:
         """Subscribe to P2P observations for a stream."""
         if self._oracle_network is None:
@@ -459,7 +468,7 @@ class Engine:
 
             # Don't duplicate
             if streamUuid in self.streamModels:
-                info(f"StreamModel already exists for {stream_id} (UUID: {streamUuid[:16]}...)")
+                info(f"StreamModel already exists for {stream_id} (hash: {streamUuid})")
                 return True
 
             # Create a minimal StreamModel for P2P predictions
@@ -474,6 +483,7 @@ class Engine:
             streamModel.failedAdapters = []
             streamModel.thread = None
             streamModel.streamUuid = streamUuid
+            streamModel.stream_name = stream_id  # Full stream name for logs
             streamModel.predictionStreamUuid = streamUuid  # Same for P2P
             streamModel.subscriptionStream = None  # No server subscription
             streamModel.publicationStream = None
@@ -504,7 +514,13 @@ class Engine:
             streamModel.chooseAdapter(inplace=True)
             streamModel.run_forever()
 
-            info(f"Created StreamModel for claimed stream: {stream_id} (UUID: {streamUuid[:16]}...)", color='green')
+            # Subscribe to P2P observations for this stream
+            if self._oracle_network is not None:
+                self.subscribeToP2PObservations(streamUuid)
+            else:
+                debug(f"Oracle network not available for {stream_id} (hash: {streamUuid})")
+
+            info(f"Created StreamModel for claimed stream: {stream_id} (hash: {streamUuid})", color='green')
             return True
 
         except Exception as e:
@@ -538,7 +554,7 @@ class Engine:
             streamUuid = streamId.uuid
 
             if streamUuid not in self.streamModels:
-                info(f"No StreamModel found for {stream_id} (UUID: {streamUuid[:16]}...)")
+                info(f"No StreamModel found for {stream_id} (hash: {streamUuid})")
                 return True  # Already removed
 
             # Stop the model
@@ -551,7 +567,7 @@ class Engine:
             # Remove from dict
             del self.streamModels[streamUuid]
 
-            info(f"Removed StreamModel for released stream: {stream_id} (UUID: {streamUuid[:16]}...)", color='yellow')
+            info(f"Removed StreamModel for released stream: {stream_id} (hash: {streamUuid})", color='yellow')
             return True
 
         except Exception as e:

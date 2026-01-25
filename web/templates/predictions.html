@@ -443,16 +443,20 @@ async function loadEngineStatus() {
             <thead>
                 <tr>
                     <th>Stream</th>
+                    <th>UUID</th>
                     <th>Status</th>
                     <th>Observations</th>
-                    <th>Model</th>
+                    <th title="Model trained and ready to make predictions">Trained</th>
                     <th>Adapter</th>
                 </tr>
             </thead>
             <tbody>`;
 
         for (const [uuid, detail] of Object.entries(details)) {
-            const streamShort = uuid.length > 20 ? uuid.substring(0, 20) + '...' : uuid;
+            // Use stream name if available, otherwise truncated UUID
+            const streamName = detail.stream_name || uuid;
+            const streamDisplay = streamName.length > 30 ? streamName.substring(0, 30) + '...' : streamName;
+            const uuidShort = uuid.length > 12 ? uuid.substring(0, 8) + '...' : uuid;
 
             // Determine status badge
             let statusBadge, statusText;
@@ -477,13 +481,14 @@ async function loadEngineStatus() {
             const obsPercent = Math.min(100, (detail.observation_count / detail.min_observations) * 100);
             const obsProgressClass = detail.has_enough_data ? 'bg-success' : 'bg-warning';
 
-            // Model status icon
+            // Model status icon - indicates if a trained model exists
             const modelIcon = detail.model_ready ?
-                '<i class="material-icons text-success" style="font-size: 16px;">check_circle</i>' :
-                '<i class="material-icons text-secondary" style="font-size: 16px;">hourglass_empty</i>';
+                '<i class="material-icons text-success" style="font-size: 16px;" title="Model trained">check_circle</i>' :
+                '<i class="material-icons text-secondary" style="font-size: 16px;" title="Training in progress">hourglass_empty</i>';
 
             tableHtml += `<tr>
-                <td title="${uuid}"><code>${streamShort}</code></td>
+                <td title="${streamName}"><code>${streamDisplay}</code></td>
+                <td title="${uuid}"><small class="text-muted">${uuidShort}</small></td>
                 <td><span class="badge ${statusBadge}">${statusText}</span></td>
                 <td>
                     <div class="d-flex align-items-center">
