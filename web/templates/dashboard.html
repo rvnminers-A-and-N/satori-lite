@@ -4253,22 +4253,29 @@
             return;
         }
 
+        // Skip if already completed onboarding
+        if (localStorage.getItem('satori-onboarding-completed') === 'true') {
+            return;
+        }
+
         try {
             // Check if user already has claimed streams
             const myStreams = await apiCall('/p2p/streams/my');
             if (myStreams && myStreams.streams && myStreams.streams.length > 0) {
-                // Already has streams, no need for onboarding
+                // Already has streams, mark onboarding as completed
+                localStorage.setItem('satori-onboarding-completed', 'true');
                 return;
             }
 
-            // Also check Engine status
+            // Also check Engine status for active models
             const engineStatus = await apiCall('/p2p/streams/engine-status');
             if (engineStatus && engineStatus.active_models > 0) {
-                // Already has active models
+                // Already has active models, mark onboarding as completed
+                localStorage.setItem('satori-onboarding-completed', 'true');
                 return;
             }
 
-            // Show onboarding modal
+            // Show onboarding modal - no streams claimed yet
             const modal = new bootstrap.Modal(document.getElementById('streamOnboardingModal'));
             modal.show();
 
@@ -4280,6 +4287,15 @@
 
         } catch (e) {
             console.error('Failed to check onboarding status:', e);
+            // On error, still show onboarding modal (better to show than not)
+            try {
+                const modal = new bootstrap.Modal(document.getElementById('streamOnboardingModal'));
+                modal.show();
+                loadAvailableStreams();
+                startOnboardingTimeout();
+            } catch (modalError) {
+                console.error('Failed to show onboarding modal:', modalError);
+            }
         }
     }
 

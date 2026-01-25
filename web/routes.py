@@ -6575,46 +6575,35 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/register', methods=['POST'])
     @login_required
     def api_p2p_oracle_register():
-        """Register as an oracle for a stream."""
+        """Register as an oracle for a stream via IPC API."""
         try:
-            from satorineuron.init import start
-            import asyncio
+            from web.wsgi import _ipc_post
 
             data = request.get_json() or {}
             stream_id = data.get('stream_id')
             is_primary = data.get('is_primary', False)
+            data_source = data.get('data_source')
 
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            startup = start.getStart() if hasattr(start, 'getStart') else None
-            if not startup or not hasattr(startup, '_oracle_network') or not startup._oracle_network:
-                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
-
-            oracle = startup._oracle_network
-
-            async def do_register():
-                return await oracle.register_as_oracle(stream_id, is_primary)
-
-            try:
-                loop = asyncio.new_event_loop()
-                registration = loop.run_until_complete(do_register())
-            finally:
-                loop.close()
-
-            if registration:
-                return jsonify({
-                    'success': True,
-                    'registration': {
-                        'stream_id': registration.stream_id,
-                        'oracle': registration.oracle,
-                        'peer_id': registration.peer_id,
-                        'timestamp': registration.timestamp,
-                        'is_primary': registration.is_primary,
-                    }
-                })
+            # Use appropriate IPC endpoint based on role
+            if is_primary:
+                endpoint = '/p2p/oracle/register-primary'
+                payload = {'stream_id': stream_id}
+                if data_source:
+                    payload['data_source'] = data_source
             else:
-                return jsonify({'success': False, 'error': 'Failed to register'})
+                endpoint = '/p2p/oracle/register-secondary'
+                payload = {'stream_id': stream_id}
+
+            result = _ipc_post(endpoint, payload)
+
+            if result and result.get('success'):
+                return jsonify(result)
+            else:
+                error = result.get('error', 'Failed to register') if result else 'IPC request failed'
+                return jsonify({'success': False, 'error': error}), 500
 
         except Exception as e:
             logger.warning(f"Failed to register as oracle: {e}")

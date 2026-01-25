@@ -4059,6 +4059,58 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify(result)
 
+        @ipc_app.route('/p2p/oracle/publish-observation', methods=['POST'])
+        def p2p_oracle_publish_observation():
+            """Manually publish an observation (for testing). Must be registered as oracle."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+            value = data.get('value')
+            timestamp = data.get('timestamp')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+            if value is None:
+                return jsonify({'success': False, 'error': 'value is required'}), 400
+
+            try:
+                import trio
+                import time
+
+                timestamp = timestamp or int(time.time())
+
+                async def do_publish():
+                    return await oracle.publish_observation(
+                        stream_id=stream_id,
+                        value=float(value),
+                        timestamp=timestamp
+                    )
+
+                if trio_token:
+                    observation = trio.from_thread.run(do_publish, trio_token=trio_token)
+                else:
+                    return jsonify({'success': False, 'error': 'Trio not initialized'}), 503
+
+                if observation:
+                    return jsonify({
+                        'success': True,
+                        'stream_id': stream_id,
+                        'value': value,
+                        'timestamp': timestamp,
+                        'observation': observation.to_dict() if hasattr(observation, 'to_dict') else str(observation)
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Failed to publish (not registered as primary oracle?)'}), 400
+
+            except Exception as e:
+                logging.warning(f"Manual observation publish failed: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
         @ipc_app.route('/p2p/oracle/subscribe', methods=['POST'])
         def p2p_oracle_subscribe():
             """Subscribe to observations for a stream."""
