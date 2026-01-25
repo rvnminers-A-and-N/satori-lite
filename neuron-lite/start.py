@@ -1136,16 +1136,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     def get_current_roles() -> list:
                         """Get current node roles based on oracle/claim/signer state."""
                         roles = []
-                        # Check if we're a primary oracle
+                        # Check if we're a primary or secondary oracle (both are "oracle" role)
                         oracle_network = getattr(self, '_oracle_network', None)
                         if oracle_network:
-                            primary_streams = getattr(oracle_network, '_primary_registrations', {})
-                            if primary_streams:
+                            my_registrations = getattr(oracle_network, '_my_registrations', {})
+                            if my_registrations and 'oracle' not in roles:
+                                # Both primary and secondary oracles show as "oracle"
                                 roles.append('oracle')
-                            # Check if we're a relay (secondary oracle)
-                            secondary_streams = getattr(oracle_network, '_secondary_registrations', {})
-                            if secondary_streams:
-                                roles.append('relay')
                         # Check if we're a signer
                         signer = getattr(self, '_signer_node', None)
                         if signer and getattr(signer, '_is_authorized', False):
@@ -1153,14 +1150,9 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                         # Check if we have claimed prediction slots
                         stream_registry = getattr(self, '_stream_registry', None)
                         if stream_registry:
-                            claims = getattr(stream_registry, '_claims', {})
-                            my_address = getattr(self.identity, 'address', '')
-                            for stream_claims in claims.values():
-                                for claim in stream_claims.values():
-                                    if getattr(claim, 'predictor', '') == my_address:
-                                        if 'predictor' not in roles:
-                                            roles.append('predictor')
-                                        break
+                            my_claims = getattr(stream_registry, '_my_claims', {})
+                            if my_claims:
+                                roles.append('predictor')
                         # Default to node if no other roles
                         return roles if roles else ['node']
 
@@ -4600,6 +4592,27 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     except Exception as e:
                         logging.warning(f"Failed to wire claim to Engine: {e}")
 
+                # Auto-subscribe to predictions for this stream
+                prediction_subscribed = False
+                prediction_protocol = getattr(startupDag, '_prediction_protocol', None)
+                if prediction_protocol is not None:
+                    try:
+                        async def do_subscribe():
+                            def on_prediction_received(prediction):
+                                # Predictions are cached by the protocol, log for now
+                                logging.debug(f"Received prediction for {stream_id[:16]}...")
+                            return await prediction_protocol.subscribe_to_predictions(
+                                stream_id=stream_id,
+                                callback=on_prediction_received
+                            )
+                        sub_loop = asyncio.new_event_loop()
+                        prediction_subscribed = sub_loop.run_until_complete(do_subscribe())
+                        sub_loop.close()
+                        if prediction_subscribed:
+                            logging.info(f"Auto-subscribed to predictions for {stream_id[:16]}...", color='green')
+                    except Exception as e:
+                        logging.warning(f"Failed to auto-subscribe to predictions: {e}")
+
                 return jsonify({
                     'success': True,
                     'claim': {
@@ -4609,7 +4622,8 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         'timestamp': claim.timestamp,
                         'expires': claim.expires,
                     },
-                    'engine_wired': engine_wired
+                    'engine_wired': engine_wired,
+                    'prediction_subscribed': prediction_subscribed
                 })
             else:
                 return jsonify({'success': False, 'error': 'Failed to claim stream'})
@@ -4715,17 +4729,57 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
         @ipc_app.route('/p2p/streams/engine-status')
         def p2p_streams_engine_status():
-            """Get Engine stream model status for dashboard."""
+            """Get Engine stream model status for dashboard with per-stream details."""
             result = {
                 'active_models': 0,
                 'stream_uuids': [],
-                'engine_ready': False
+                'engine_ready': False,
+                'stream_details': {}  # Per-stream status
             }
 
             if hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                engine = startupDag.aiengine
                 result['engine_ready'] = True
-                result['active_models'] = startupDag.aiengine.getStreamModelCount()
-                result['stream_uuids'] = startupDag.aiengine.getClaimedStreamIds()
+                result['active_models'] = engine.getStreamModelCount()
+                result['stream_uuids'] = engine.getClaimedStreamIds()
+
+                # Get detailed status for each stream model
+                for stream_uuid in result['stream_uuids']:
+                    stream_model = engine.streamModels.get(stream_uuid)
+                    if stream_model:
+                        # Determine training status
+                        thread_running = (
+                            hasattr(stream_model, 'thread') and
+                            stream_model.thread is not None and
+                            stream_model.thread.is_alive()
+                        )
+                        has_stable_model = (
+                            hasattr(stream_model, 'stable') and
+                            stream_model.stable is not None
+                        )
+                        observation_count = len(stream_model.data) if hasattr(stream_model, 'data') else 0
+                        is_paused = getattr(stream_model, 'paused', False)
+
+                        # Determine readiness stage
+                        # Stage 1: Claimed (has StreamModel) - always true here
+                        # Stage 2: Has enough data (>= 10 observations for basic training)
+                        # Stage 3: Model trained (has stable model)
+                        # Stage 4: Actively predicting (thread running, not paused)
+                        min_observations = 10  # Minimum for training
+                        has_enough_data = observation_count >= min_observations
+                        is_ready_to_predict = has_stable_model and has_enough_data and not is_paused
+
+                        result['stream_details'][stream_uuid] = {
+                            'observation_count': observation_count,
+                            'has_enough_data': has_enough_data,
+                            'min_observations': min_observations,
+                            'training_active': thread_running,
+                            'model_ready': has_stable_model,
+                            'paused': is_paused,
+                            'ready_to_predict': is_ready_to_predict,
+                            'adapter': stream_model.adapter.__name__ if hasattr(stream_model, 'adapter') and stream_model.adapter else None,
+                            'pending_p2p_commits': len(getattr(stream_model, '_pending_commits', {})),
+                        }
 
             return jsonify(result)
 

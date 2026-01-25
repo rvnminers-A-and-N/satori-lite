@@ -4347,6 +4347,35 @@ def register_routes(app):
             logger.warning(f"P2P debug failed: {e}")
             return jsonify({'error': str(e)}), 500
 
+    @app.route('/api/p2p/identity')
+    @login_required
+    def api_p2p_identity():
+        """Get our own identity info (peer_id, evrmore_address)."""
+        try:
+            identity, peers = get_p2p_state()
+
+            result = {
+                'peer_id': None,
+                'evrmore_address': None,
+            }
+
+            # Get peer ID
+            if peers:
+                if hasattr(peers, 'peer_id') and peers.peer_id:
+                    result['peer_id'] = str(peers.peer_id)
+                elif hasattr(peers, 'node_id') and peers.node_id:
+                    result['peer_id'] = str(peers.node_id)
+
+            # Get evrmore address
+            if identity and hasattr(identity, 'address'):
+                result['evrmore_address'] = identity.address
+
+            return jsonify(result)
+
+        except Exception as e:
+            logger.warning(f"P2P identity failed: {e}")
+            return jsonify({'peer_id': None, 'evrmore_address': None})
+
     @app.route('/api/p2p/identify/stats')
     @login_required
     def api_p2p_identify_stats():
@@ -6472,25 +6501,58 @@ def register_routes(app):
     @app.route('/api/p2p/oracle/oracles')
     @login_required
     def api_p2p_oracle_oracles():
-        """List all registered oracles via IPC API."""
+        """List all registered oracles via IPC API (includes our own registrations)."""
         try:
             from web.wsgi import _ipc_get
 
-            result = _ipc_get('/p2p/oracle/known')
-            if result and result.get('oracles'):
-                stream_id = request.args.get('stream_id')
-                oracles = result['oracles']
+            # Get known oracles from network and our own registrations
+            known_result = _ipc_get('/p2p/oracle/known')
+            summary_result = _ipc_get('/p2p/oracle/summary')
+            identity_result = _ipc_get('/p2p/identity')
 
-                # Filter by stream_id if specified
-                if stream_id:
-                    oracles = [o for o in oracles if o.get('stream_id') == stream_id]
+            oracles = known_result.get('oracles', []) if known_result else []
 
-                return jsonify({
-                    'oracles': oracles,
-                    'total': len(oracles),
-                })
+            # Add our own primary/secondary registrations if not already in list
+            if summary_result and identity_result:
+                my_address = identity_result.get('evrmore_address') or identity_result.get('address', '')
+                my_peer_id = identity_result.get('peer_id', '')
 
-            return jsonify({'oracles': [], 'total': 0})
+                # Existing oracle addresses for deduplication
+                existing = {(o.get('stream_id'), o.get('oracle_address')) for o in oracles}
+
+                # Add our primary registrations
+                for stream_id in summary_result.get('primary_streams', []):
+                    if (stream_id, my_address) not in existing:
+                        oracles.append({
+                            'stream_id': stream_id,
+                            'oracle_address': my_address,
+                            'peer_id': my_peer_id,
+                            'reputation': 1.0,
+                            'is_primary': True,
+                            'timestamp': 0,
+                        })
+
+                # Add our secondary registrations
+                for stream_id in summary_result.get('secondary_streams', []):
+                    if (stream_id, my_address) not in existing:
+                        oracles.append({
+                            'stream_id': stream_id,
+                            'oracle_address': my_address,
+                            'peer_id': my_peer_id,
+                            'reputation': 1.0,
+                            'is_primary': False,
+                            'timestamp': 0,
+                        })
+
+            # Filter by stream_id if specified
+            stream_id_filter = request.args.get('stream_id')
+            if stream_id_filter:
+                oracles = [o for o in oracles if o.get('stream_id') == stream_id_filter]
+
+            return jsonify({
+                'oracles': oracles,
+                'total': len(oracles),
+            })
 
         except Exception as e:
             logger.warning(f"Failed to list oracles: {e}")

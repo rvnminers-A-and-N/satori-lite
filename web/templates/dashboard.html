@@ -1531,19 +1531,44 @@
         }
     }
 
+    function getRoleBadgeClass(role) {
+        const roleMap = {
+            'node': 'bg-secondary',
+            'oracle': 'bg-gradient-info',
+            'signer': 'bg-gradient-warning',
+            'pool-operator': 'bg-secondary',
+            'predictor': 'bg-gradient-success',
+            'relay': 'bg-danger',
+            'delegate': 'bg-gradient-primary'
+        };
+        return roleMap[role.toLowerCase()] || 'bg-secondary';
+    }
+
     async function loadHeartbeats() {
         try {
-            const data = await apiCall('/p2p/heartbeats?limit=10');
+            // Get heartbeats and our identity for "(you)" indicator
+            const [data, identity] = await Promise.all([
+                apiCall('/p2p/heartbeats?limit=10'),
+                apiCall('/p2p/identity')
+            ]);
             const feed = document.getElementById('heartbeatFeed');
+            const myAddress = identity?.evrmore_address || '';
 
             if (data && data.heartbeats && data.heartbeats.length > 0) {
                 feed.innerHTML = data.heartbeats.map(hb => {
                     const ago = Math.floor((Date.now()/1000) - hb.timestamp);
-                    const roles = hb.roles ? hb.roles.join(', ') : '';
-                    return `<div class="list-group-item py-1 px-2">
+                    const rolesList = hb.roles || ['node'];
+                    const fullAddr = hb.full_address || hb.address;
+                    const isMe = fullAddr === myAddress;
+                    const youBadge = isMe ? '<span class="badge bg-warning text-dark ms-1">you</span>' : '';
+                    // Generate colored badges for each role
+                    const roleBadges = rolesList.map(role =>
+                        `<span class="badge ${getRoleBadgeClass(role)} ms-1">${role}</span>`
+                    ).join('');
+                    return `<div class="list-group-item py-1 px-2${isMe ? ' bg-dark' : ''}">
                         <span class="text-success">❤️</span>
-                        <span class="text-muted">${hb.address}</span>
-                        <span class="badge bg-secondary ms-1">${roles || 'predictor'}</span>
+                        <code class="small text-muted">${fullAddr}</code>${youBadge}
+                        ${roleBadges}
                         <small class="text-muted float-end">${ago}s ago</small>
                     </div>`;
                 }).join('');
@@ -3963,7 +3988,11 @@
 
             tbody.innerHTML = claims.map(claim => {
                 const streamId = claim.stream_id || '';
-                const displayName = streamId.split('|').slice(2).join('/') || streamId;
+                // Parse stream ID: source|stream|target -> source/stream/target
+                const parts = streamId.split('|');
+                const displayName = parts.length >= 3
+                    ? `${parts[0]}/${parts[1]}/${parts[2]}`
+                    : streamId;
                 const slot = claim.slot_index ?? '--';
                 const claimedDate = claim.timestamp ? new Date(claim.timestamp * 1000).toLocaleString() : '--';
 
@@ -4004,7 +4033,7 @@
                 }
 
                 return `<tr>
-                    <td><code title="${streamId}">${displayName}</code></td>
+                    <td><code>${displayName}</code></td>
                     <td>${slot}</td>
                     <td><small>${claimedDate}</small></td>
                     <td>${expiryText}</td>

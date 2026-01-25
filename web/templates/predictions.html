@@ -113,6 +113,56 @@
         </div>
     </div>
 
+    <!-- Prediction Readiness Tracking Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="material-icons align-middle me-2">psychology</i>
+                        Prediction Readiness
+                    </h5>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="loadEngineStatus()">
+                        <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div id="engineStatusSummary" class="mb-3">
+                        <div class="row g-3">
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 rounded" style="background: rgba(0,170,255,0.1);">
+                                    <h4 id="engineActiveModels" class="mb-0">--</h4>
+                                    <small class="text-muted">Active Models</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 rounded" style="background: rgba(40,167,69,0.1);">
+                                    <h4 id="engineReadyCount" class="mb-0 text-success">--</h4>
+                                    <small class="text-muted">Ready to Predict</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 rounded" style="background: rgba(255,193,7,0.1);">
+                                    <h4 id="engineTrainingCount" class="mb-0" style="color: #ffc107;">--</h4>
+                                    <small class="text-muted">Training</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3 col-6">
+                                <div class="text-center p-2 rounded" style="background: rgba(108,117,125,0.1);">
+                                    <h4 id="engineNeedDataCount" class="mb-0 text-secondary">--</h4>
+                                    <small class="text-muted">Awaiting Data</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="streamReadinessTable" style="max-height: 300px; overflow-y: auto;">
+                        <div class="text-center text-muted py-4">Loading stream status...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Main Content Row -->
     <div class="row g-4">
         <!-- My Predictions Column -->
@@ -163,10 +213,15 @@
                 <div class="card-header">
                     <h5 class="mb-0">
                         <i class="material-icons align-middle me-2">notifications</i>
-                        Stream Subscriptions
+                        Additional Stream Subscriptions
                     </h5>
                 </div>
                 <div class="card-body">
+                    <div class="alert alert-info py-2 mb-3">
+                        <i class="material-icons align-middle me-1" style="font-size: 16px;">info</i>
+                        <strong>Note:</strong> Claiming a stream automatically subscribes you to predictions for that stream.
+                        Use this section to subscribe to streams you want to monitor but not predict for.
+                    </div>
                     <div class="row">
                         <div class="col-md-8">
                             <div class="input-group">
@@ -295,12 +350,14 @@ document.addEventListener('DOMContentLoaded', function() {
     loadMyPredictions();
     loadLeaderboard();
     loadAllPredictions();
+    loadEngineStatus();
 
     // Set up periodic refresh
     setInterval(loadStats, 30000);
     setInterval(loadMyPredictions, 60000);
     setInterval(loadLeaderboard, 60000);
     setInterval(loadAllPredictions, 30000);
+    setInterval(loadEngineStatus, 15000);
 });
 
 // =========================================================================
@@ -335,6 +392,118 @@ async function loadStats() {
         document.getElementById('protocolStatus').className = stats.started ? 'mb-1 text-success' : 'mb-1 text-danger';
     } catch (e) {
         console.error('Failed to load stats:', e);
+    }
+}
+
+async function loadEngineStatus() {
+    const container = document.getElementById('streamReadinessTable');
+    try {
+        const result = await apiCall('/p2p/streams/engine-status');
+
+        // Update summary counts
+        document.getElementById('engineActiveModels').textContent = result.active_models || 0;
+
+        if (!result.engine_ready) {
+            container.innerHTML = `<div class="alert alert-warning py-2 mb-0">
+                <i class="material-icons align-middle me-1" style="font-size: 16px;">warning</i>
+                Engine not initialized yet. Claim a stream to start predicting.
+            </div>`;
+            document.getElementById('engineReadyCount').textContent = '0';
+            document.getElementById('engineTrainingCount').textContent = '0';
+            document.getElementById('engineNeedDataCount').textContent = '0';
+            return;
+        }
+
+        // Count status categories
+        const details = result.stream_details || {};
+        let readyCount = 0;
+        let trainingCount = 0;
+        let needDataCount = 0;
+
+        Object.values(details).forEach(d => {
+            if (d.ready_to_predict) readyCount++;
+            else if (d.training_active && !d.has_enough_data) needDataCount++;
+            else if (d.training_active) trainingCount++;
+            else needDataCount++;
+        });
+
+        document.getElementById('engineReadyCount').textContent = readyCount;
+        document.getElementById('engineTrainingCount').textContent = trainingCount;
+        document.getElementById('engineNeedDataCount').textContent = needDataCount;
+
+        // Build table of stream statuses
+        if (Object.keys(details).length === 0) {
+            container.innerHTML = `<div class="text-center text-muted py-3">
+                No claimed streams. Visit the <a href="/oracle">Oracle page</a> to claim streams.
+            </div>`;
+            return;
+        }
+
+        let tableHtml = `<table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Stream</th>
+                    <th>Status</th>
+                    <th>Observations</th>
+                    <th>Model</th>
+                    <th>Adapter</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+        for (const [uuid, detail] of Object.entries(details)) {
+            const streamShort = uuid.length > 20 ? uuid.substring(0, 20) + '...' : uuid;
+
+            // Determine status badge
+            let statusBadge, statusText;
+            if (detail.paused) {
+                statusBadge = 'bg-secondary';
+                statusText = 'Paused';
+            } else if (detail.ready_to_predict) {
+                statusBadge = 'bg-success';
+                statusText = 'Predicting';
+            } else if (!detail.has_enough_data) {
+                statusBadge = 'bg-warning text-dark';
+                statusText = `Need ${detail.min_observations - detail.observation_count} more obs`;
+            } else if (detail.training_active) {
+                statusBadge = 'bg-info';
+                statusText = 'Training';
+            } else {
+                statusBadge = 'bg-secondary';
+                statusText = 'Waiting';
+            }
+
+            // Progress bar for observations
+            const obsPercent = Math.min(100, (detail.observation_count / detail.min_observations) * 100);
+            const obsProgressClass = detail.has_enough_data ? 'bg-success' : 'bg-warning';
+
+            // Model status icon
+            const modelIcon = detail.model_ready ?
+                '<i class="material-icons text-success" style="font-size: 16px;">check_circle</i>' :
+                '<i class="material-icons text-secondary" style="font-size: 16px;">hourglass_empty</i>';
+
+            tableHtml += `<tr>
+                <td title="${uuid}"><code>${streamShort}</code></td>
+                <td><span class="badge ${statusBadge}">${statusText}</span></td>
+                <td>
+                    <div class="d-flex align-items-center">
+                        <div class="progress flex-grow-1 me-2" style="height: 6px; width: 60px;">
+                            <div class="progress-bar ${obsProgressClass}" style="width: ${obsPercent}%"></div>
+                        </div>
+                        <small>${detail.observation_count}/${detail.min_observations}</small>
+                    </div>
+                </td>
+                <td>${modelIcon}</td>
+                <td><small class="text-muted">${detail.adapter || '--'}</small></td>
+            </tr>`;
+        }
+
+        tableHtml += '</tbody></table>';
+        container.innerHTML = tableHtml;
+
+    } catch (e) {
+        console.error('Failed to load engine status:', e);
+        container.innerHTML = '<div class="text-center text-danger py-3">Failed to load engine status</div>';
     }
 }
 

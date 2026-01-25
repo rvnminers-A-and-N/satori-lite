@@ -406,11 +406,17 @@
                         <div class="card-header d-flex justify-content-between align-items-center">
                             <h5 class="mb-0">
                                 <i class="material-icons align-middle me-2">visibility</i>
-                                Registered Oracles
+                                Registered Oracle Streams
                             </h5>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadRegisteredOracles()">
-                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
-                            </button>
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="form-check form-switch mb-0 me-2">
+                                    <input class="form-check-input" type="checkbox" id="includeOwnOracleStreams" checked onchange="loadRegisteredOracles()">
+                                    <label class="form-check-label small ms-1" for="includeOwnOracleStreams">Include mine</label>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="loadRegisteredOracles()">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body p-0">
                             <div class="table-responsive">
@@ -484,9 +490,9 @@
                                 Recent Observations
                             </h5>
                             <div class="d-flex align-items-center gap-2">
-                                <div class="form-check form-switch mb-0">
+                                <div class="form-check form-switch mb-0 me-2">
                                     <input class="form-check-input" type="checkbox" id="includeOwnObservations" checked onchange="loadLatestObservations()">
-                                    <label class="form-check-label small" for="includeOwnObservations">Include mine</label>
+                                    <label class="form-check-label small ms-1" for="includeOwnObservations">Include mine</label>
                                 </div>
                                 <button class="btn btn-sm btn-outline-secondary" onclick="loadLatestObservations()">
                                     <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
@@ -878,7 +884,9 @@ async function loadOracleStats() {
         // My stats
         document.getElementById('oracleSubscribedStreams').textContent = stats.subscribed_streams || 0;
         document.getElementById('myOracleRegistrations').textContent = stats.my_oracle_registrations || 0;
-        document.getElementById('cachedObservations').textContent = stats.cached_observations || 0;
+        // Show total observations (cached from network + our own published)
+        const totalObservations = (stats.cached_observations || 0) + (stats.my_published_observations || 0);
+        document.getElementById('cachedObservations').textContent = totalObservations;
 
         // Network-wide stats from oracles list
         const oracles = oraclesResult.oracles || [];
@@ -895,6 +903,7 @@ async function loadOracleStats() {
 
 async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
+    const includeOwn = document.getElementById('includeOwnOracleStreams')?.checked ?? true;
     try {
         // Get oracles list, our oracle summary, claimed streams, and stream stats
         const [result, summary, myClaims, streamsResult] = await Promise.all([
@@ -909,7 +918,13 @@ async function loadRegisteredOracles() {
         const mySecondaryStreams = new Set(summary.secondary_streams || []);
         const myClaimedStreams = new Set((myClaims.claims || myClaims.streams || []).map(c => c.stream_id));
 
-        const oracles = result.oracles || [];
+        let oracles = result.oracles || [];
+
+        // Filter out our own oracle registrations if "Include mine" is unchecked
+        if (!includeOwn) {
+            const myAddress = summary.evrmore_address || '';
+            oracles = oracles.filter(o => o.oracle_address !== myAddress);
+        }
 
         // Count secondary oracles per stream
         const secondariesByStream = {};
@@ -979,7 +994,10 @@ async function loadRegisteredOracles() {
                 </tr>`;
             }).join('');
         } else {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-3">No oracles registered</td></tr>';
+            const msg = includeOwn
+                ? 'No oracle streams registered yet.'
+                : 'No oracle streams from other nodes yet.';
+            tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-3">${msg}</td></tr>`;
         }
     } catch (e) {
         console.error('Failed to load oracles:', e);

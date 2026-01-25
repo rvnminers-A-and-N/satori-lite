@@ -204,10 +204,16 @@ class P2PWebSocketBridge:
             return
 
         try:
+            # Wire callback for received observations (from other oracles)
             if hasattr(oracle, 'on_observation_received'):
                 oracle.on_observation_received = self._on_observation
             elif hasattr(oracle, 'set_callback'):
                 oracle.set_callback('observation', self._on_observation)
+
+            # Wire callback for our own published observations (for primary oracles)
+            if hasattr(oracle, 'on_observation_published'):
+                oracle.on_observation_published = self._on_own_observation_published
+
             logger.debug("Wired oracle network for observations")
         except Exception as e:
             logger.warning(f"Failed to wire oracle network: {e}")
@@ -370,10 +376,34 @@ class P2PWebSocketBridge:
         except Exception as e:
             logger.debug(f"Failed to handle observation: {e}")
 
+    def _on_own_observation_published(self, observation) -> None:
+        """
+        Handle callback when WE publish an observation to the network.
+        Called by oracle_network.on_observation_published callback.
+        """
+        try:
+            stream_id = observation.stream_id if hasattr(observation, 'stream_id') else str(observation)
+
+            self._emit('network.observation', {
+                'stream_id': stream_id,
+                'peer_id': getattr(observation, 'peer_id', ''),
+                'oracle_address': getattr(observation, 'oracle', ''),
+                'value': getattr(observation, 'value', None),
+                'timestamp': getattr(observation, 'timestamp', int(time.time())),
+                'type': 'observation',
+                'is_own': True,  # Flag to indicate this is our own observation
+            })
+
+            self._counts['observations'] += 1
+            self._record_hourly_activity('observations')
+        except Exception as e:
+            logger.debug(f"Failed to handle own observation published: {e}")
+
     def emit_own_observation(self, stream_id: str, value, peer_id: str = '', oracle_address: str = '') -> None:
         """
         Emit event when WE publish an observation to the network.
         Call this after successfully publishing an observation.
+        NOTE: This is now deprecated - use on_observation_published callback instead.
         """
         try:
             self._emit('network.observation', {
