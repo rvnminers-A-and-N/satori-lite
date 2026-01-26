@@ -6871,6 +6871,36 @@ def register_routes(app):
             logger.warning(f"Failed to register as primary oracle: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
 
+    @app.route('/api/p2p/oracle/unregister', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_unregister():
+        """Unregister as an oracle for a stream."""
+        try:
+            import requests as req
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            # Call IPC API
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/oracle/unregister',
+                json={'stream_id': stream_id},
+                timeout=10
+            )
+
+            if resp.ok:
+                return jsonify(resp.json())
+            else:
+                error_data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {'error': resp.text}
+                return jsonify(error_data), resp.status_code
+
+        except Exception as e:
+            logger.warning(f"Failed to unregister as oracle: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+
     # =========================================================================
     # STREAM REGISTRY API ENDPOINTS
     # =========================================================================

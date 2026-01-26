@@ -1181,6 +1181,9 @@ async function unregisterOracle(streamId) {
             loadRegisteredOracles();
             loadMyOracleRegistrations();
             loadStreamStats();
+            loadDiscoveredStreams();
+            loadMyClaimedStreams();  // Refresh My Claimed Streams
+            loadPrimaryStreamPicker();
             loadSecondaryStreamPicker();
         } else {
             alert('Failed: ' + (result.error || 'Unknown error'));
@@ -1484,6 +1487,7 @@ async function registerAsPrimaryOracle() {
             // Refresh all relevant data
             loadStreamStats();
             loadDiscoveredStreams();
+            loadMyClaimedStreams();  // Refresh My Claimed Streams
             loadRegisteredOracles();
             loadMyOracleRegistrations();
             loadPrimaryStreamPicker();
@@ -1595,15 +1599,56 @@ function filterPrimaryStreams() {
     renderPrimaryStreamList(search);
 }
 
+// Store existing data source config from primary oracle (for auto-fill)
+let joinPrimaryExistingDataSource = null;
+
 async function selectJoinPrimaryStream(streamId) {
     selectedJoinPrimaryStream = streamId;
+    joinPrimaryExistingDataSource = null;  // Reset
+    joinPrimarySelectedTemplate = null;     // Reset template selection
     renderPrimaryStreamList(document.getElementById('primaryStreamSearch').value);
 
     // Show config section
     document.getElementById('joinPrimaryConfig').style.display = 'block';
     document.getElementById('joinPrimaryStreamId').textContent = streamId;
 
-    // Load templates for this section
+    // Fetch oracles for this stream to get existing primary's data source config
+    try {
+        const oraclesResult = await apiCall('/p2p/oracle/oracles');
+        const oracles = oraclesResult.oracles || [];
+
+        // Find a primary oracle for this stream that has data_source config
+        const primaryOracle = oracles.find(o =>
+            o.stream_id === streamId && o.is_primary && o.data_source
+        );
+
+        if (primaryOracle && primaryOracle.data_source) {
+            joinPrimaryExistingDataSource = primaryOracle.data_source;
+            joinPrimarySelectedTemplate = primaryOracle.data_source.template;
+            console.log('Found existing data source config:', joinPrimaryExistingDataSource);
+
+            // Hide template selector and fields - show auto-config confirmation instead
+            document.getElementById('joinPrimaryTemplateSelector').innerHTML = `
+                <div class="col-12">
+                    <div class="alert alert-success mb-0">
+                        <i class="material-icons align-middle me-2" style="font-size: 20px;">check_circle</i>
+                        <strong>Configuration auto-detected from existing primary oracle</strong>
+                        <div class="mt-2 small">
+                            <strong>Template:</strong> ${primaryOracle.data_source.template || 'N/A'}<br>
+                            ${primaryOracle.data_source.base_asset ? `<strong>Base Asset:</strong> ${primaryOracle.data_source.base_asset}<br>` : ''}
+                            ${primaryOracle.data_source.quote_asset ? `<strong>Quote Asset:</strong> ${primaryOracle.data_source.quote_asset}<br>` : ''}
+                            ${primaryOracle.data_source.symbol ? `<strong>Symbol:</strong> ${primaryOracle.data_source.symbol}<br>` : ''}
+                        </div>
+                    </div>
+                </div>`;
+            document.getElementById('joinPrimaryTemplateConfig').style.display = 'none';
+            return;  // Skip loading templates - we have everything we need
+        }
+    } catch (e) {
+        console.error('Failed to fetch oracle data for auto-fill:', e);
+    }
+
+    // No existing config found - load templates for manual selection
     await loadJoinPrimaryTemplates();
 }
 
@@ -1621,6 +1666,13 @@ async function loadJoinPrimaryTemplates() {
         }
 
         const templates = result.templates;
+
+        // Check if we have existing data source config to auto-select template
+        const autoSelectTemplate = joinPrimaryExistingDataSource?.template || null;
+        if (autoSelectTemplate && templates[autoSelectTemplate]) {
+            joinPrimarySelectedTemplate = autoSelectTemplate;
+        }
+
         container.innerHTML = Object.entries(templates).map(([key, tmpl]) => `
             <div class="col-md-3 col-6">
                 <div class="card h-100 template-card ${joinPrimarySelectedTemplate === key ? 'border-warning' : ''}"
@@ -1633,6 +1685,11 @@ async function loadJoinPrimaryTemplates() {
                 </div>
             </div>
         `).join('');
+
+        // If we auto-selected a template, load its fields with pre-filled values
+        if (joinPrimarySelectedTemplate) {
+            await loadJoinPrimaryTemplateFields(joinPrimarySelectedTemplate, templates[joinPrimarySelectedTemplate]);
+        }
 
     } catch (e) {
         console.error('Failed to load templates:', e);
@@ -1647,10 +1704,7 @@ async function selectJoinPrimaryTemplate(templateKey) {
     document.querySelectorAll('#joinPrimaryTemplateSelector .template-card').forEach(el => {
         el.classList.remove('border-warning');
     });
-    event.currentTarget.closest('.template-card')?.classList.add('border-warning');
-
-    // Show template config
-    document.getElementById('joinPrimaryTemplateConfig').style.display = 'block';
+    event.currentTarget?.closest('.template-card')?.classList.add('border-warning');
 
     // Load template fields
     try {
@@ -1658,20 +1712,44 @@ async function selectJoinPrimaryTemplate(templateKey) {
         const template = result.templates?.[templateKey];
         if (!template) return;
 
-        const fieldsContainer = document.getElementById('joinPrimaryTemplateFields');
-        const requires = template.requires || [];
-
-        fieldsContainer.innerHTML = requires.map(field => {
-            const placeholder = template[`example_${field}`] || template[`example`] || field;
-            return `<div class="mb-2">
-                <label class="form-label small">${field}</label>
-                <input type="text" class="form-control form-control-sm" id="joinPrimary_${field}"
-                       placeholder="e.g., ${placeholder}">
-            </div>`;
-        }).join('') || '<p class="text-muted mb-0">No additional configuration needed.</p>';
+        await loadJoinPrimaryTemplateFields(templateKey, template);
 
     } catch (e) {
         console.error('Failed to load template fields:', e);
+    }
+}
+
+// Helper function to load template fields with optional pre-fill from existing data source
+async function loadJoinPrimaryTemplateFields(templateKey, template) {
+    // Show template config section
+    document.getElementById('joinPrimaryTemplateConfig').style.display = 'block';
+
+    const fieldsContainer = document.getElementById('joinPrimaryTemplateFields');
+    const requires = template.requires || [];
+
+    // Build fields HTML with pre-filled values if available
+    fieldsContainer.innerHTML = requires.map(field => {
+        const placeholder = template[`example_${field}`] || template[`example`] || field;
+
+        // Check if we have an existing value from the primary oracle's data source
+        let existingValue = '';
+        if (joinPrimaryExistingDataSource && joinPrimaryExistingDataSource[field]) {
+            existingValue = joinPrimaryExistingDataSource[field];
+        }
+
+        return `<div class="mb-2">
+            <label class="form-label small">${field}${existingValue ? ' <span class="badge bg-success">auto-filled</span>' : ''}</label>
+            <input type="text" class="form-control form-control-sm" id="joinPrimary_${field}"
+                   placeholder="e.g., ${placeholder}" value="${existingValue}">
+        </div>`;
+    }).join('') || '<p class="text-muted mb-0">No additional configuration needed.</p>';
+
+    // Show info message if fields were auto-filled
+    if (joinPrimaryExistingDataSource && requires.some(f => joinPrimaryExistingDataSource[f])) {
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'alert alert-info py-2 mt-2';
+        infoDiv.innerHTML = '<small><i class="material-icons align-middle me-1" style="font-size: 16px;">info</i>Fields auto-filled from existing primary oracle. You can modify if needed.</small>';
+        fieldsContainer.appendChild(infoDiv);
     }
 }
 
@@ -1720,6 +1798,7 @@ async function registerAsJoinPrimaryOracle() {
             // Reload all relevant data
             loadStreamStats();
             loadDiscoveredStreams();
+            loadMyClaimedStreams();  // Refresh My Claimed Streams
             loadRegisteredOracles();
             loadMyOracleRegistrations();
             loadPrimaryStreamPicker();
@@ -1927,6 +2006,7 @@ async function registerSelectedAsSecondary() {
     loadSecondaryStreamPicker();
     loadStreamStats();
     loadDiscoveredStreams();
+    loadMyClaimedStreams();  // Refresh My Claimed Streams
 }
 
 // =========================================================================

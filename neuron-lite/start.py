@@ -1277,14 +1277,22 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                                 'hash': str(hash_val) if hash_val else None,
                             }])
 
-                            # Pass to all stream models in the engine
+                            # Find the matching stream model for this observation's stream_id
+                            matched = False
                             for streamUuid, streamModel in self.aiengine.streamModels.items():
                                 try:
-                                    streamModel.onDataReceived(df)
+                                    # Match by stream_name or by checking if stream_id is in the uuid/name
+                                    model_stream_name = getattr(streamModel, 'stream_name', None)
+                                    if model_stream_name == stream_id or stream_id in streamUuid or streamUuid in stream_id:
+                                        streamModel.onDataReceived(df)
+                                        matched = True
+                                        logging.info(f"Fed P2P observation to Engine: stream={stream_id}, value={value}, model={streamUuid}")
+                                        break  # Found the matching model
                                 except Exception as e:
                                     logging.debug(f"Error feeding observation to stream {streamUuid}: {e}")
 
-                            logging.debug(f"Fed P2P observation to Engine: stream={stream_id}, value={value}")
+                            if not matched:
+                                logging.debug(f"No matching stream model for observation: stream_id={stream_id}")
                         except Exception as e:
                             logging.debug(f"Error feeding observation to engine: {e}")
 
@@ -4210,14 +4218,26 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 oracles_list = []
                 for stream_id, registrations in oracle._oracle_registrations.items():
                     for oracle_addr, reg in registrations.items():
-                        oracles_list.append({
+                        oracle_info = {
                             'stream_id': stream_id,
                             'oracle_address': oracle_addr,
                             'peer_id': getattr(reg, 'peer_id', ''),
                             'reputation': getattr(reg, 'reputation', 1.0),
                             'is_primary': getattr(reg, 'is_primary', False),
                             'timestamp': getattr(reg, 'timestamp', 0),
-                        })
+                        }
+                        # Include data_source for primary oracles (useful for joining)
+                        if getattr(reg, 'is_primary', False) and hasattr(reg, 'data_source') and reg.data_source:
+                            ds = reg.data_source
+                            oracle_info['data_source'] = {
+                                'template': getattr(ds, 'template', ''),
+                                'base_asset': getattr(ds, 'base_asset', ''),
+                                'quote_asset': getattr(ds, 'quote_asset', ''),
+                                'symbol': getattr(ds, 'symbol', ''),
+                                'api_url': getattr(ds, 'api_url', ''),
+                                'json_path': getattr(ds, 'json_path', ''),
+                            }
+                        oracles_list.append(oracle_info)
                 result['oracles'] = oracles_list
                 result['count'] = len(oracles_list)
 
@@ -4393,6 +4413,43 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             except Exception as e:
                 logging.warning(f"Primary oracle registration failed: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @ipc_app.route('/p2p/oracle/unregister', methods=['POST'])
+        def p2p_oracle_unregister():
+            """Unregister as an oracle for a stream."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+            trio_token = getattr(startupDag, '_trio_token', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'}), 503
+
+            data = request.get_json() or {}
+            stream_id = data.get('stream_id')
+
+            if not stream_id:
+                return jsonify({'success': False, 'error': 'stream_id is required'}), 400
+
+            try:
+                async def do_unregister():
+                    return await oracle.unregister_as_oracle(stream_id)
+
+                if trio_token:
+                    success = trio.from_thread.run(do_unregister, trio_token=trio_token)
+                else:
+                    success = trio.run(do_unregister)
+
+                if success:
+                    return jsonify({
+                        'success': True,
+                        'stream_id': stream_id,
+                        'message': 'Unregistered successfully',
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Not registered as oracle for this stream'}), 400
+
+            except Exception as e:
+                logging.warning(f"Oracle unregistration failed: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
 
         @ipc_app.route('/p2p/oracle/stream-info/<stream_id>')
@@ -4718,6 +4775,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
                 # Also subscribe to observations via oracle network (using trio)
                 oracle_network = getattr(startupDag, '_oracle_network', None)
+                trio_token = getattr(startupDag, '_trio_token', None)
                 if oracle_network is not None and hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
                     try:
                         engine = startupDag.aiengine
@@ -4735,9 +4793,11 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         async def do_subscribe():
                             return await oracle_network.subscribe_to_stream(stream_id, observation_callback)
 
-                        sub_loop = asyncio.new_event_loop()
-                        obs_subscribed = sub_loop.run_until_complete(do_subscribe())
-                        sub_loop.close()
+                        # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
+                        if trio_token:
+                            obs_subscribed = trio.from_thread.run(do_subscribe, trio_token=trio_token)
+                        else:
+                            obs_subscribed = trio.run(do_subscribe)
                         if obs_subscribed:
                             logging.info(f"Subscribed to observations for {stream_id}", color='green')
                     except Exception as e:
