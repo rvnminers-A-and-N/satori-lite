@@ -1018,18 +1018,20 @@ async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
     const includeOwn = document.getElementById('includeOwnOracleStreams')?.checked ?? true;
     try {
-        // Get oracles list, our oracle summary, claimed streams, and stream stats
-        const [result, summary, myClaims, streamsResult] = await Promise.all([
+        // Get oracles list, our oracle summary, claimed streams, stream stats, and our peer ID
+        const [result, summary, myClaims, streamsResult, peerIdResult] = await Promise.all([
             apiCall('/p2p/oracle/oracles'),
             apiCall('/p2p/oracle/summary'),
             apiCall('/p2p/streams/my'),
-            apiCall('/p2p/streams/discover?limit=200')
+            apiCall('/p2p/streams/discover?limit=200'),
+            apiCall('/p2p/peer-id')
         ]);
 
         // Build sets of streams we're involved with
         const myPrimaryStreams = new Set(summary.primary_streams || []);
         const mySecondaryStreams = new Set(summary.secondary_streams || []);
         const myClaimedStreams = new Set((myClaims.claims || myClaims.streams || []).map(c => c.stream_id));
+        const myPeerId = peerIdResult.peer_id || '';
 
         let oracles = result.oracles || [];
 
@@ -1091,13 +1093,15 @@ async function loadRegisteredOracles() {
                 // Highlight row if we're involved with this stream
                 const isInvolved = myPrimaryStreams.has(streamId) || mySecondaryStreams.has(streamId) || myClaimedStreams.has(streamId);
 
-                // Get oracle peer ID
+                // Get oracle peer ID and check if it's ours
                 const peerId = o.peer_id || '--';
+                const isMyPeer = peerId && myPeerId && peerId === myPeerId;
+                const youBadge = isMyPeer ? ' <span class="badge bg-success" style="font-size: 0.65em; vertical-align: middle;">you</span>' : '';
 
                 return `<tr${isInvolved ? ' class="table-active"' : ''}>
                     <td><code>${streamId}</code></td>
                     <td><code class="small">${addr}</code></td>
-                    <td><small class="text-muted" style="word-break: break-all;">${peerId}</small></td>
+                    <td><small class="text-muted" style="word-break: break-all;">${peerId}</small>${youBadge}</td>
                     <td>${typeBadge}</td>
                     <td><span class="badge bg-info">${relayCount}</span></td>
                     <td><span class="badge ${predictorClass}">${predictorCount}</span></td>
@@ -1758,7 +1762,10 @@ async function registerAsJoinPrimaryOracle() {
         showToast('Please select a stream first', 'error');
         return;
     }
-    if (!joinPrimarySelectedTemplate) {
+
+    // Check if we have existing data source config (auto-detected from network)
+    // OR if user manually selected a template
+    if (!joinPrimaryExistingDataSource && !joinPrimarySelectedTemplate) {
         showToast('Please select a data source template', 'error');
         return;
     }
@@ -1769,21 +1776,29 @@ async function registerAsJoinPrimaryOracle() {
     btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Registering...';
 
     try {
-        // Build data source config
-        const dataSource = {
-            template: joinPrimarySelectedTemplate
-        };
+        let dataSource;
 
-        // Get template to find required fields
-        const templatesResult = await apiCall('/p2p/oracle/templates');
-        const template = templatesResult.templates?.[joinPrimarySelectedTemplate];
-        if (template?.requires) {
-            template.requires.forEach(field => {
-                const input = document.getElementById(`joinPrimary_${field}`);
-                if (input && input.value) {
-                    dataSource[field] = input.value;
-                }
-            });
+        // Use existing data source if we have it (auto-detected from network oracle)
+        if (joinPrimaryExistingDataSource) {
+            dataSource = joinPrimaryExistingDataSource;
+            console.log('Using auto-detected data source config:', dataSource);
+        } else {
+            // Build data source config from form fields
+            dataSource = {
+                template: joinPrimarySelectedTemplate
+            };
+
+            // Get template to find required fields
+            const templatesResult = await apiCall('/p2p/oracle/templates');
+            const template = templatesResult.templates?.[joinPrimarySelectedTemplate];
+            if (template?.requires) {
+                template.requires.forEach(field => {
+                    const input = document.getElementById(`joinPrimary_${field}`);
+                    if (input && input.value) {
+                        dataSource[field] = input.value;
+                    }
+                });
+            }
         }
 
         const result = await apiCall('/p2p/oracle/register', 'POST', {
