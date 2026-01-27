@@ -4747,14 +4747,15 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     ttl=int(ttl) if ttl else None
                 )
 
-            import asyncio
+            trio_token = getattr(startupDag, '_trio_token', None)
             try:
-                loop = asyncio.new_event_loop()
-                claim = loop.run_until_complete(do_claim())
+                # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
+                if trio_token:
+                    claim = trio.from_thread.run(do_claim, trio_token=trio_token)
+                else:
+                    claim = trio.run(do_claim)
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 500
-            finally:
-                loop.close()
 
             if claim:
                 # After claiming, wire to Engine to start predicting
@@ -4874,14 +4875,15 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             async def do_release():
                 return await registry.release_claim(stream_id)
 
-            import asyncio
+            trio_token = getattr(startupDag, '_trio_token', None)
             try:
-                loop = asyncio.new_event_loop()
-                success = loop.run_until_complete(do_release())
+                # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
+                if trio_token:
+                    success = trio.from_thread.run(do_release, trio_token=trio_token)
+                else:
+                    success = trio.run(do_release)
             except Exception as e:
                 return jsonify({'success': False, 'error': str(e)}), 500
-            finally:
-                loop.close()
 
             # After releasing, remove StreamModel from Engine
             engine_removed = False
