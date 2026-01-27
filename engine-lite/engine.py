@@ -206,6 +206,7 @@ class Engine:
         # P2P Integration
         self._p2p_peers = None
         self._oracle_network = None
+        self._trio_token = None  # For trio.from_thread.run() calls
         self._prediction_protocol = None
         self._bandwidth_qos = None
         self._version_manager = None
@@ -331,13 +332,16 @@ class Engine:
             info(f"P2P prediction protocol wired to stream {streamUuid[:16]}...", color="cyan")
         info("P2P prediction protocol wired to Engine", color="cyan")
 
-    def setOracleNetwork(self, oracle_network) -> None:
+    def setOracleNetwork(self, oracle_network, trio_token=None) -> None:
         """Set the shared OracleNetwork instance from start.py.
 
         Args:
             oracle_network: The OracleNetwork instance initialized by start.py
+            trio_token: Optional trio token for async operations from sync context
         """
         self._oracle_network = oracle_network
+        if trio_token:
+            self._trio_token = trio_token
         # Propagate to all existing streamModels for oracle status checks
         for streamUuid, streamModel in self.streamModels.items():
             streamModel._oracle_network = oracle_network
@@ -361,15 +365,24 @@ class Engine:
         lookup_uuid = streamUuid or stream_id
 
         try:
+            import trio
+
             def on_p2p_observation(observation):
                 """Handle P2P observation and pass to stream model."""
                 # Try to find stream model by UUID or by stream_id
                 self._handleP2PObservation(lookup_uuid, observation, stream_id)
 
-            success = asyncio.run(self._oracle_network.subscribe_to_stream(
-                stream_id=stream_id,  # Use full stream_id for pubsub topic
-                callback=on_p2p_observation
-            ))
+            async def do_subscribe():
+                return await self._oracle_network.subscribe_to_stream(
+                    stream_id=stream_id,  # Use full stream_id for pubsub topic
+                    callback=on_p2p_observation
+                )
+
+            # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
+            if self._trio_token:
+                success = trio.from_thread.run(do_subscribe, trio_token=self._trio_token)
+            else:
+                success = trio.run(do_subscribe)
 
             if success:
                 self._p2p_observation_subscriptions[stream_id] = True

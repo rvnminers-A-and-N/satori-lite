@@ -4253,11 +4253,24 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
             if oracle and hasattr(oracle, '_my_registrations'):
                 registrations = []
                 for stream_id, reg in oracle._my_registrations.items():
-                    registrations.append({
+                    reg_info = {
                         'stream_id': stream_id,
                         'oracle_address': getattr(reg, 'oracle', ''),
                         'timestamp': getattr(reg, 'timestamp', 0),
-                    })
+                        'is_primary': getattr(reg, 'is_primary', False),
+                    }
+                    # Include data_source for primary oracles
+                    if getattr(reg, 'is_primary', False) and hasattr(reg, 'data_source') and reg.data_source:
+                        ds = reg.data_source
+                        reg_info['data_source'] = {
+                            'template': getattr(ds, 'template', ''),
+                            'base_asset': getattr(ds, 'base_asset', ''),
+                            'quote_asset': getattr(ds, 'quote_asset', ''),
+                            'symbol': getattr(ds, 'symbol', ''),
+                            'api_url': getattr(ds, 'api_url', ''),
+                            'json_path': getattr(ds, 'json_path', ''),
+                        }
+                    registrations.append(reg_info)
                 result['registrations'] = registrations
                 result['count'] = len(registrations)
 
@@ -4758,7 +4771,10 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         if hasattr(startupDag, '_prediction_protocol') and startupDag._prediction_protocol is not None:
                             startupDag.aiengine.setPredictionProtocol(startupDag._prediction_protocol)
                         if hasattr(startupDag, '_oracle_network') and startupDag._oracle_network is not None:
-                            startupDag.aiengine.setOracleNetwork(startupDag._oracle_network)
+                            startupDag.aiengine.setOracleNetwork(
+                                startupDag._oracle_network,
+                                trio_token=getattr(startupDag, '_trio_token', None)
+                            )
                         logging.info("Engine created for P2P stream claims", color='green')
                     except Exception as e:
                         logging.warning(f"Failed to create Engine for P2P claims: {e}")
@@ -4808,7 +4824,7 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 prediction_protocol = getattr(startupDag, '_prediction_protocol', None)
                 if prediction_protocol is not None:
                     try:
-                        async def do_subscribe():
+                        async def do_subscribe_predictions():
                             def on_prediction_received(prediction):
                                 # Predictions are cached by the protocol, log for now
                                 logging.debug(f"Received prediction for {stream_id[:16]}...")
@@ -4816,9 +4832,11 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                                 stream_id=stream_id,
                                 callback=on_prediction_received
                             )
-                        sub_loop = asyncio.new_event_loop()
-                        prediction_subscribed = sub_loop.run_until_complete(do_subscribe())
-                        sub_loop.close()
+                        # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
+                        if trio_token:
+                            prediction_subscribed = trio.from_thread.run(do_subscribe_predictions, trio_token=trio_token)
+                        else:
+                            prediction_subscribed = trio.run(do_subscribe_predictions)
                         if prediction_subscribed:
                             logging.info(f"Auto-subscribed to predictions for {stream_id[:16]}...", color='green')
                     except Exception as e:

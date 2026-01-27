@@ -6521,42 +6521,35 @@ def register_routes(app):
 
             # Get known oracles from network and our own registrations
             known_result = _ipc_get('/p2p/oracle/known')
-            summary_result = _ipc_get('/p2p/oracle/summary')
+            my_registrations_result = _ipc_get('/p2p/oracle/my_registrations')
             identity_result = _ipc_get('/p2p/identity')
 
             oracles = known_result.get('oracles', []) if known_result else []
 
-            # Add our own primary/secondary registrations if not already in list
-            if summary_result and identity_result:
+            # Add our own registrations if not already in list (includes data_source)
+            if my_registrations_result and identity_result:
                 my_address = identity_result.get('evrmore_address') or identity_result.get('address', '')
                 my_peer_id = identity_result.get('peer_id', '')
 
                 # Existing oracle addresses for deduplication
                 existing = {(o.get('stream_id'), o.get('oracle_address')) for o in oracles}
 
-                # Add our primary registrations
-                for stream_id in summary_result.get('primary_streams', []):
+                # Add our registrations with full data including data_source
+                for reg in my_registrations_result.get('registrations', []):
+                    stream_id = reg.get('stream_id')
                     if (stream_id, my_address) not in existing:
-                        oracles.append({
+                        oracle_entry = {
                             'stream_id': stream_id,
                             'oracle_address': my_address,
                             'peer_id': my_peer_id,
                             'reputation': 1.0,
-                            'is_primary': True,
-                            'timestamp': 0,
-                        })
-
-                # Add our secondary registrations
-                for stream_id in summary_result.get('secondary_streams', []):
-                    if (stream_id, my_address) not in existing:
-                        oracles.append({
-                            'stream_id': stream_id,
-                            'oracle_address': my_address,
-                            'peer_id': my_peer_id,
-                            'reputation': 1.0,
-                            'is_primary': False,
-                            'timestamp': 0,
-                        })
+                            'is_primary': reg.get('is_primary', False),
+                            'timestamp': reg.get('timestamp', 0),
+                        }
+                        # Include data_source if present (for primary oracles)
+                        if reg.get('data_source'):
+                            oracle_entry['data_source'] = reg['data_source']
+                        oracles.append(oracle_entry)
 
             # Filter by stream_id if specified
             stream_id_filter = request.args.get('stream_id')

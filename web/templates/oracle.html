@@ -1018,20 +1018,29 @@ async function loadRegisteredOracles() {
     const tbody = document.getElementById('oraclesTable');
     const includeOwn = document.getElementById('includeOwnOracleStreams')?.checked ?? true;
     try {
-        // Get oracles list, our oracle summary, claimed streams, stream stats, and our peer ID
-        const [result, summary, myClaims, streamsResult, peerIdResult] = await Promise.all([
+        // Get oracles list, our oracle summary, claimed streams, stream stats
+        // peer-id is optional (may fail if P2P not fully initialized)
+        const [result, summary, myClaims, streamsResult] = await Promise.all([
             apiCall('/p2p/oracle/oracles'),
             apiCall('/p2p/oracle/summary'),
             apiCall('/p2p/streams/my'),
-            apiCall('/p2p/streams/discover?limit=200'),
-            apiCall('/p2p/peer-id')
+            apiCall('/p2p/streams/discover?limit=200')
         ]);
+
+        // Try to get peer ID from p2p-status (optional, for "you" badge)
+        let myPeerId = '';
+        try {
+            const p2pStatus = await apiCall('/p2p-status');
+            myPeerId = p2pStatus.peer_id || '';
+        } catch (e) {
+            // P2P not ready yet, continue without peer ID
+            console.debug('Peer ID not available yet:', e.message);
+        }
 
         // Build sets of streams we're involved with
         const myPrimaryStreams = new Set(summary.primary_streams || []);
         const mySecondaryStreams = new Set(summary.secondary_streams || []);
         const myClaimedStreams = new Set((myClaims.claims || myClaims.streams || []).map(c => c.stream_id));
-        const myPeerId = peerIdResult.peer_id || '';
 
         let oracles = result.oracles || [];
 
