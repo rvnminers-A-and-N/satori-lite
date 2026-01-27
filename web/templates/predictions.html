@@ -482,10 +482,16 @@ async function loadEngineStatus() {
             const obsPercent = Math.min(100, (detail.observation_count / detail.min_observations) * 100);
             const obsProgressClass = detail.has_enough_data ? 'bg-success' : 'bg-warning';
 
-            // Model status icon - indicates if a trained model exists
-            const modelIcon = detail.model_ready ?
-                '<i class="material-icons text-success" style="font-size: 16px;" title="Model trained">check_circle</i>' :
-                '<i class="material-icons text-secondary" style="font-size: 16px;" title="Training in progress">hourglass_empty</i>';
+            // Model status icon - 3 states based on observation count and model readiness
+            // 0 observations: X (not started), 1-9: hourglass (training), 10+: checkmark (ready)
+            let modelIcon;
+            if (detail.model_ready) {
+                modelIcon = '<i class="material-icons text-success" style="font-size: 16px;" title="Model trained">check_circle</i>';
+            } else if (detail.observation_count > 0) {
+                modelIcon = '<i class="material-icons text-warning" style="font-size: 16px;" title="Training in progress">hourglass_empty</i>';
+            } else {
+                modelIcon = '<i class="material-icons text-danger" style="font-size: 16px;" title="No observations yet">cancel</i>';
+            }
 
             // Format oracle peer IDs
             let oracleDisplay = '--';

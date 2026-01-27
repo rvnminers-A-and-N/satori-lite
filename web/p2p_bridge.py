@@ -190,10 +190,16 @@ class P2PWebSocketBridge:
             return
 
         try:
+            # Wire callback for received predictions (from other predictors)
             if hasattr(protocol, 'on_prediction_received'):
                 protocol.on_prediction_received = self._on_prediction
             elif hasattr(protocol, 'set_callback'):
                 protocol.set_callback('prediction', self._on_prediction)
+
+            # Wire callback for our own published predictions
+            if hasattr(protocol, 'on_prediction_published'):
+                protocol.on_prediction_published = self._on_own_prediction_published
+
             logger.debug("Wired prediction protocol")
         except Exception as e:
             logger.warning(f"Failed to wire prediction protocol: {e}")
@@ -356,6 +362,29 @@ class P2PWebSocketBridge:
             self._record_hourly_activity('predictions')
         except Exception as e:
             logger.debug(f"Failed to handle prediction: {e}")
+
+    def _on_own_prediction_published(self, prediction) -> None:
+        """
+        Handle callback when WE publish a prediction to the network.
+        Called by prediction_protocol.on_prediction_published callback.
+        """
+        try:
+            stream_id = prediction.stream_id if hasattr(prediction, 'stream_id') else str(prediction)
+
+            self._emit('network.prediction', {
+                'stream_id': stream_id,
+                'node_id': getattr(prediction, 'predictor', 'unknown'),
+                'value': getattr(prediction, 'value', None),
+                'timestamp': getattr(prediction, 'created_at', getattr(prediction, 'timestamp', int(time.time()))),
+                'target_time': getattr(prediction, 'target_time', None),
+                'type': 'prediction',
+                'is_own': True,  # Flag to indicate this is our own prediction
+            })
+
+            self._counts['predictions'] += 1
+            self._record_hourly_activity('predictions')
+        except Exception as e:
+            logger.debug(f"Failed to handle own prediction published: {e}")
 
     def _on_observation(self, observation) -> None:
         """Handle observation event."""

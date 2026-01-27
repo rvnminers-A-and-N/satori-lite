@@ -4460,6 +4460,10 @@ def register_routes(app):
                 oracle_result = _ipc_get('/p2p/oracle/my_registrations')
                 if oracle_result and oracle_result.get('registrations') and len(oracle_result['registrations']) > 0:
                     roles.append('oracle')
+                # Check if we have claimed prediction slots (predictor role)
+                claims_result = _ipc_get('/p2p/streams/my_claims')
+                if claims_result and claims_result.get('claims') and len(claims_result['claims']) > 0:
+                    roles.append('predictor')
                 # Could also check for other roles (signer, relay, etc.) here
             except Exception:
                 pass  # Role detection is supplementary
@@ -4488,6 +4492,7 @@ def register_routes(app):
             # Get oracle registrations to supplement role info
             from web.wsgi import _ipc_get
             oracle_peer_ids = set()
+            predictor_peer_ids = set()
             try:
                 oracle_result = _ipc_get('/p2p/oracle/known')
                 if oracle_result and 'oracles' in oracle_result:
@@ -4496,6 +4501,18 @@ def register_routes(app):
                             oracle_peer_ids.add(oracle['peer_id'])
             except Exception:
                 pass  # Oracle info is supplementary, don't fail if unavailable
+
+            # Get predictor/claim info to supplement role info
+            try:
+                claims_result = _ipc_get('/p2p/streams/all-claims')
+                if claims_result and 'predictor_peer_ids' in claims_result:
+                    predictor_peer_ids = set(claims_result['predictor_peer_ids'])
+                elif claims_result and 'claims' in claims_result:
+                    for claim in claims_result['claims']:
+                        if claim.get('peer_id'):
+                            predictor_peer_ids.add(claim['peer_id'])
+            except Exception:
+                pass  # Predictor info is supplementary
 
             # Track which peer IDs we've added
             known_peer_ids = set()
@@ -4508,6 +4525,9 @@ def register_routes(app):
                 # Supplement with oracle role if peer is a registered oracle
                 if peer_id_str in oracle_peer_ids and 'oracle' not in roles:
                     roles.append('oracle')
+                # Supplement with predictor role if peer has claimed streams
+                if peer_id_str in predictor_peer_ids and 'predictor' not in roles:
+                    roles.append('predictor')
                 peer_info = {
                     'peer_id': peer_id_str,
                     'evrmore_address': getattr(identity, 'evrmore_address', ''),
@@ -4527,6 +4547,9 @@ def register_routes(app):
                     # Check if this peer is a registered oracle
                     if peer_id_str in oracle_peer_ids:
                         roles.append('oracle')
+                    # Check if this peer has claimed streams (predictor)
+                    if peer_id_str in predictor_peer_ids:
+                        roles.append('predictor')
                     peer_list.append({
                         'peer_id': peer_id_str,
                         'evrmore_address': '',
@@ -6940,11 +6963,12 @@ def register_routes(app):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            # Call IPC API
+            # Call IPC API - use longer timeout since claiming involves
+            # engine initialization, P2P subscription, and observation setup
             resp = req.post(
                 'http://127.0.0.1:24602/p2p/streams/claim',
                 json=data,
-                timeout=10
+                timeout=60
             )
 
             if resp.status_code == 200:

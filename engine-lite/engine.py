@@ -329,7 +329,7 @@ class Engine:
             streamModel._prediction_protocol = protocol
             if self._p2p_peers is not None:
                 streamModel._p2p_peers = self._p2p_peers
-            info(f"P2P prediction protocol wired to stream {streamUuid[:16]}...", color="cyan")
+            info(f"P2P prediction protocol wired to stream {streamUuid}", color="cyan")
         info("P2P prediction protocol wired to Engine", color="cyan")
 
     def setOracleNetwork(self, oracle_network, trio_token=None) -> None:
@@ -430,7 +430,7 @@ class Engine:
             # Pass to stream model for processing
             streamModel.onDataReceived(data)
 
-            debug(f"P2P observation received for {streamUuid[:16]}... value={observation.value}")
+            debug(f"P2P observation received for {streamUuid} value={observation.value}")
 
         except Exception as e:
             error(f"Error handling P2P observation: {e}")
@@ -1004,9 +1004,9 @@ class StreamModel:
         """Load historical data from local SQLite storage (P2P mode)."""
         localData = self.storage.getStreamDataForEngine(self.streamUuid)
         if not localData.empty:
-            info(f"Loaded {len(localData)} rows from SQLite for stream {self.streamUuid[:16]}...", color='green')
+            info(f"Loaded {len(localData)} rows from SQLite for stream {self.streamUuid}", color='green')
             return localData
-        info(f"No local data for stream {self.streamUuid[:16]}..., starting fresh", color='yellow')
+        info(f"No local data for stream {self.streamUuid}, starting fresh", color='yellow')
         return pd.DataFrame(columns=["date_time", "value", "id"])
 
     def _loadTrainingDelay(self) -> int:
@@ -1565,10 +1565,25 @@ class StreamModel:
             # Store for potential reveal later
             self._pending_commits[self._current_round_id] = predicted_value
 
-            info(f"P2P prediction committed for {self.streamUuid[:16]}... round={self._current_round_id} value={predicted_value}", color="cyan")
+            info(f"P2P prediction committed for {self.streamUuid} round={self._current_round_id} value={predicted_value}", color="cyan")
 
             # If we have a prediction protocol instance, publish the prediction
-            if self._prediction_protocol is not None:
+            # Try to get it from various sources if not set on StreamModel
+            prediction_protocol = self._prediction_protocol
+            if prediction_protocol is None:
+                # Try to get from startupDag as fallback
+                try:
+                    from satorineuron.init import start
+                    startup = start.getStart() if hasattr(start, 'getStart') else None
+                    if startup and hasattr(startup, '_prediction_protocol'):
+                        prediction_protocol = startup._prediction_protocol
+                        # Cache it for future use
+                        self._prediction_protocol = prediction_protocol
+                        debug(f"Got prediction protocol from startupDag for {self.streamUuid}")
+                except Exception:
+                    pass
+
+            if prediction_protocol is not None:
                 try:
                     # Check if we're an oracle for this stream
                     is_oracle = False
@@ -1582,10 +1597,22 @@ class StreamModel:
 
                     # Use the Peers' spawn_background_task to run async in Trio context
                     # This avoids conflicts with asyncio.run() and Trio event loops
-                    if self._p2p_peers is not None and hasattr(self._p2p_peers, 'spawn_background_task'):
+                    p2p_peers = self._p2p_peers
+                    if p2p_peers is None:
+                        # Try to get from startupDag as fallback
+                        try:
+                            from satorineuron.init import start
+                            startup = start.getStart() if hasattr(start, 'getStart') else None
+                            if startup and hasattr(startup, '_p2p_peers'):
+                                p2p_peers = startup._p2p_peers
+                                self._p2p_peers = p2p_peers
+                        except Exception:
+                            pass
+
+                    if p2p_peers is not None and hasattr(p2p_peers, 'spawn_background_task'):
                         async def _publish():
                             try:
-                                await self._prediction_protocol.publish_prediction(
+                                await prediction_protocol.publish_prediction(
                                     stream_id=self.streamUuid,
                                     value=predicted_value,
                                     target_time=target_time,
@@ -1593,13 +1620,13 @@ class StreamModel:
                                     is_oracle=is_oracle
                                 )
                                 oracle_tag = " [oracle]" if is_oracle else ""
-                                info(f"Published P2P prediction{oracle_tag}: stream={self.streamUuid[:16]}... value={predicted_value}", color="green")
+                                info(f"Published P2P prediction{oracle_tag}: stream={self.streamUuid} value={predicted_value}", color="green")
                             except Exception as e:
                                 warning(f"Failed to publish P2P prediction: {e}")
-                        self._p2p_peers.spawn_background_task(_publish)
+                        p2p_peers.spawn_background_task(_publish)
                     else:
                         # Fallback to asyncio.run (may fail in Trio context)
-                        asyncio.run(self._prediction_protocol.publish_prediction(
+                        asyncio.run(prediction_protocol.publish_prediction(
                             stream_id=self.streamUuid,
                             value=predicted_value,
                             target_time=target_time,
@@ -1608,6 +1635,8 @@ class StreamModel:
                         ))
                 except Exception as e:
                     debug(f"Failed to publish P2P prediction: {e}")
+            else:
+                debug(f"No prediction protocol available for {self.streamUuid}")
 
         except ImportError:
             debug("satorip2p not available for P2P prediction commit")

@@ -1254,8 +1254,17 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
                     # Wire observations to Engine for P2P-first predictions
                     def _feed_observation_to_engine(observation):
-                        """Feed P2P observations to the AI Engine for predictions."""
+                        """Feed P2P observations to the AI Engine for predictions and emit to bridge."""
                         try:
+                            # Always emit to bridge for Live Data Streams UI (even if engine not ready)
+                            try:
+                                from web.p2p_bridge import get_bridge
+                                bridge = get_bridge()
+                                if bridge:
+                                    bridge._on_observation(observation)
+                            except Exception:
+                                pass  # Bridge may not be available
+
                             if not hasattr(self, 'aiengine') or self.aiengine is None:
                                 return  # Engine not ready yet
 
@@ -1298,6 +1307,16 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
                     # Set the callback on the oracle network
                     self._oracle_network.on_observation_received = _feed_observation_to_engine
+
+                    # Wire to WebSocket bridge for real-time UI updates
+                    try:
+                        from web.p2p_bridge import get_bridge
+                        bridge = get_bridge()
+                        # Wire our own published observations (for primary oracles)
+                        if hasattr(self._oracle_network, 'on_observation_published'):
+                            self._oracle_network.on_observation_published = bridge._on_own_observation_published
+                    except Exception:
+                        pass  # Bridge may not be started yet
 
                     logging.info("P2P oracle network initialized (wired to Engine)", color="cyan")
                 except Exception as e:
@@ -1354,6 +1373,13 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
                     if hasattr(self, 'aiengine') and self.aiengine is not None:
                         if hasattr(self.aiengine, 'setPredictionProtocol'):
                             self.aiengine.setPredictionProtocol(self._prediction_protocol)
+
+                    # Wire to WebSocket bridge for real-time UI updates (predictions from peers)
+                    try:
+                        from web.p2p_bridge import get_bridge
+                        get_bridge().wire_protocol('prediction_protocol', self._prediction_protocol)
+                    except Exception:
+                        pass  # Bridge may not be started yet
 
                     logging.info("P2P prediction protocol initialized", color="cyan")
                 except Exception as e:
@@ -4897,6 +4923,37 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             return jsonify({'success': success, 'engine_removed': engine_removed})
 
+        @ipc_app.route('/p2p/streams/all-claims')
+        def p2p_streams_all_claims():
+            """Get all claims from all predictors (for role detection)."""
+            registry = getattr(startupDag, '_stream_registry', None)
+
+            result = {'claims': [], 'count': 0, 'predictor_peer_ids': []}
+
+            if registry and hasattr(registry, '_claims'):
+                all_claims = registry._claims  # stream_id -> {slot: claim}
+                predictor_peer_ids = set()
+
+                for stream_id, slot_claims in all_claims.items():
+                    for slot, claim in slot_claims.items():
+                        peer_id = getattr(claim, 'peer_id', None) or getattr(claim, 'predictor_peer_id', '')
+                        predictor = getattr(claim, 'predictor', '')
+                        if peer_id:
+                            predictor_peer_ids.add(peer_id)
+                        result['claims'].append({
+                            'stream_id': stream_id,
+                            'slot_index': slot,
+                            'predictor': predictor,
+                            'peer_id': peer_id,
+                            'timestamp': getattr(claim, 'timestamp', 0),
+                            'expires': getattr(claim, 'expires', 0),
+                        })
+
+                result['count'] = len(result['claims'])
+                result['predictor_peer_ids'] = list(predictor_peer_ids)
+
+            return jsonify(result)
+
         @ipc_app.route('/p2p/streams/my-claims')
         def p2p_streams_my_claims():
             """Get my claimed streams."""
@@ -5000,21 +5057,24 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                             stream_model.thread is not None and
                             stream_model.thread.is_alive()
                         )
-                        has_stable_model = (
-                            hasattr(stream_model, 'stable') and
-                            stream_model.stable is not None
-                        )
                         observation_count = len(stream_model.data) if hasattr(stream_model, 'data') else 0
                         is_paused = getattr(stream_model, 'paused', False)
 
                         # Determine readiness stage
                         # Stage 1: Claimed (has StreamModel) - always true here
                         # Stage 2: Has enough data (>= 10 observations for basic training)
-                        # Stage 3: Model trained (has stable model)
+                        # Stage 3: Model trained (has stable model AND enough data)
                         # Stage 4: Actively predicting (thread running, not paused)
                         min_observations = 10  # Minimum for training
                         has_enough_data = observation_count >= min_observations
-                        is_ready_to_predict = has_stable_model and has_enough_data and not is_paused
+                        # Note: stream_model.stable is always set at creation (copy of pilot),
+                        # so we also require enough observations to consider the model "trained"
+                        has_stable_model = (
+                            hasattr(stream_model, 'stable') and
+                            stream_model.stable is not None and
+                            has_enough_data
+                        )
+                        is_ready_to_predict = has_stable_model and not is_paused
 
                         # Find stream name - first check StreamModel, then claims/registrations
                         stream_name = getattr(stream_model, 'stream_name', None)
