@@ -1552,6 +1552,10 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
             # This auto-populates the stream registry with streams that oracles are publishing
             await self._sync_oracle_streams_to_registry()
 
+            # 20.6. Subscribe to all known streams for UI visibility
+            # This allows ALL nodes to see network activity even if not predicting
+            await self._subscribe_to_network_streams_for_ui()
+
             # 21. Initialize StreamManager (oracle data streams)
             try:
                 try:
@@ -1789,6 +1793,53 @@ class StartupDag(StartupDagStruct, metaclass=SingletonMeta):
 
         except Exception as e:
             logging.debug(f"Oracle stream sync failed: {e}")
+
+    async def _subscribe_to_network_streams_for_ui(self):
+        """
+        Subscribe to all known oracle streams for UI visibility.
+
+        This allows ALL nodes (not just oracles/predictors) to see
+        network activity in the dashboard, regardless of whether
+        they're actively predicting on those streams.
+        """
+        try:
+            oracle_network = getattr(self, '_oracle_network', None)
+            if not oracle_network:
+                return
+
+            # Get all known streams from oracle registrations
+            all_stream_ids = set()
+
+            # Our own registrations
+            my_registrations = getattr(oracle_network, '_my_registrations', {})
+            all_stream_ids.update(my_registrations.keys())
+
+            # Registrations from other oracles
+            oracle_registrations = getattr(oracle_network, '_oracle_registrations', {})
+            all_stream_ids.update(oracle_registrations.keys())
+
+            # Already subscribed streams
+            already_subscribed = getattr(oracle_network, '_subscribed_streams', {})
+
+            subscribed_count = 0
+            for stream_id in all_stream_ids:
+                if stream_id in already_subscribed:
+                    continue  # Already subscribed
+
+                try:
+                    # Subscribe with a dummy callback that just feeds to bridge
+                    # (the on_observation_received callback already handles bridge feeding)
+                    await oracle_network.subscribe_to_stream(stream_id, callback=lambda obs: None)
+                    subscribed_count += 1
+                    logging.debug(f"Subscribed to stream for UI visibility: {stream_id}")
+                except Exception as e:
+                    logging.debug(f"Failed to subscribe to {stream_id} for UI: {e}")
+
+            if subscribed_count > 0:
+                logging.info(f"Subscribed to {subscribed_count} streams for network visibility", color="cyan")
+
+        except Exception as e:
+            logging.debug(f"Network stream subscription failed: {e}")
 
     def discoverStreams(
         self,
@@ -3689,6 +3740,24 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     return jsonify({'heartbeats': [], 'error': str(e)})
 
             return jsonify({'heartbeats': heartbeats})
+
+        @ipc_app.route('/p2p/uptime/node_roles')
+        def p2p_uptime_node_roles():
+            """Get roles for all nodes from heartbeat data.
+
+            This is the most reliable source of node roles since nodes
+            self-report their roles in heartbeats.
+            """
+            uptime_tracker = getattr(startupDag, '_uptime_tracker', None)
+
+            result = {'node_roles': {}}
+
+            if uptime_tracker and hasattr(uptime_tracker, '_node_roles'):
+                # _node_roles is Dict[str, Set[str]] - node_id -> set of roles
+                for node_id, roles in uptime_tracker._node_roles.items():
+                    result['node_roles'][node_id] = list(roles) if isinstance(roles, set) else roles
+
+            return jsonify(result)
 
         @ipc_app.route('/p2p/consensus/status')
         def p2p_consensus_status():

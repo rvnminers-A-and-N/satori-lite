@@ -203,8 +203,8 @@
                         <div class="card-body">
                             <div class="input-group">
                                 <input type="text" class="form-control" id="claimStreamId" placeholder="Stream ID">
-                                <button class="btn btn-primary" onclick="claimStream()">Claim</button>
-                                <button class="btn btn-outline-danger" onclick="releaseStreamClaim()">Release</button>
+                                <button class="btn btn-primary" id="claimBtn" onclick="claimStream()">Claim</button>
+                                <button class="btn btn-outline-danger" id="releaseBtn" onclick="releaseStreamClaim()">Release</button>
                             </div>
                             <small class="text-muted">Claim a slot to make predictions on this stream</small>
                         </div>
@@ -975,18 +975,28 @@ async function claimStream() {
     const streamId = document.getElementById('claimStreamId').value.trim();
     if (!streamId) { alert('Please enter a stream ID'); return; }
 
+    const btn = document.getElementById('claimBtn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Claiming...';
+
     try {
         const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId });
         if (result.success) {
-            alert('Claimed slot #' + (result.claim?.slot_index || 0));
+            showToast('Claimed slot #' + (result.claim?.slot_index || 0), 'success');
             document.getElementById('claimStreamId').value = '';
             loadStreamStats();
             loadMyClaimedStreams();
             loadDiscoveredStreams();  // Refresh to show "Claimed" badge
         } else {
-            alert('Failed: ' + (result.error || 'Unknown error'));
+            showToast('Failed: ' + (result.error || 'Unknown error'), 'error');
         }
-    } catch (e) { alert('Error: ' + e.message); }
+    } catch (e) {
+        showToast('Error: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
 }
 
 async function releaseStreamClaim() {

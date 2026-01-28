@@ -4514,6 +4514,17 @@ def register_routes(app):
             except Exception:
                 pass  # Predictor info is supplementary
 
+            # Get roles from heartbeats - this is the most reliable source!
+            # Heartbeats contain the actual roles nodes advertise about themselves
+            heartbeat_roles = {}  # peer_id -> set of roles
+            try:
+                heartbeat_result = _ipc_get('/p2p/uptime/node_roles')
+                if heartbeat_result and 'node_roles' in heartbeat_result:
+                    for peer_id, roles in heartbeat_result['node_roles'].items():
+                        heartbeat_roles[peer_id] = set(roles) if isinstance(roles, list) else roles
+            except Exception:
+                pass  # Heartbeat info is supplementary
+
             # Track which peer IDs we've added
             known_peer_ids = set()
 
@@ -4522,6 +4533,13 @@ def register_routes(app):
                 peer_id_str = str(peer_id)
                 known_peer_ids.add(peer_id_str)
                 roles = list(getattr(identity, 'roles', []))
+
+                # First, supplement from heartbeats (most reliable - nodes self-report)
+                if peer_id_str in heartbeat_roles:
+                    for role in heartbeat_roles[peer_id_str]:
+                        if role not in roles:
+                            roles.append(role)
+
                 # Supplement with oracle role if peer is a registered oracle
                 if peer_id_str in oracle_peer_ids and 'oracle' not in roles:
                     roles.append('oracle')
@@ -4543,13 +4561,19 @@ def register_routes(app):
             # Add connected peers that don't have identities yet (with default node role)
             for peer_id_str in connected_peers:
                 if peer_id_str not in known_peer_ids:
-                    roles = ['node']
+                    roles = []
+                    # First check heartbeat roles (most reliable)
+                    if peer_id_str in heartbeat_roles:
+                        roles = list(heartbeat_roles[peer_id_str])
                     # Check if this peer is a registered oracle
-                    if peer_id_str in oracle_peer_ids:
+                    if peer_id_str in oracle_peer_ids and 'oracle' not in roles:
                         roles.append('oracle')
                     # Check if this peer has claimed streams (predictor)
-                    if peer_id_str in predictor_peer_ids:
+                    if peer_id_str in predictor_peer_ids and 'predictor' not in roles:
                         roles.append('predictor')
+                    # Default to 'node' if no roles found
+                    if not roles:
+                        roles = ['node']
                     peer_list.append({
                         'peer_id': peer_id_str,
                         'evrmore_address': '',
