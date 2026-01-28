@@ -538,6 +538,7 @@ class Engine:
             # P2P commit-reveal support
             streamModel._prediction_protocol = self._prediction_protocol
             streamModel._p2p_peers = self._p2p_peers
+            streamModel._oracle_network = self._oracle_network
             streamModel._current_round_id = 0
             streamModel._pending_commits = {}
             streamModel.trainingDelay = streamModel._loadTrainingDelay()
