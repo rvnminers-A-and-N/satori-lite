@@ -994,8 +994,8 @@ async function claimStream() {
     btn.textContent = 'Claiming...';
 
     try {
-        // Use 70s timeout (backend has 60s timeout for claim operations)
-        const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId }, 70000);
+        // Use 15s timeout (backend has 10s timeout)
+        const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId }, 15000);
         if (result.success) {
             showToast('Claimed slot #' + (result.claim?.slot_index || 0), 'success');
             document.getElementById('claimStreamId').value = '';

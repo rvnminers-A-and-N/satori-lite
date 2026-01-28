@@ -7002,12 +7002,11 @@ def register_routes(app):
             if not stream_id:
                 return jsonify({'success': False, 'error': 'stream_id is required'}), 400
 
-            # Call IPC API - use longer timeout since claiming involves
-            # engine initialization, P2P subscription, and observation setup
+            # Call IPC API
             resp = req.post(
                 'http://127.0.0.1:24602/p2p/streams/claim',
                 json=data,
-                timeout=60
+                timeout=10
             )
 
             if resp.status_code == 200:
