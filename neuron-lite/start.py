@@ -4894,60 +4894,9 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                     except Exception as e:
                         logging.warning(f"Failed to wire claim to Engine: {e}")
 
-                # Also subscribe to observations via oracle network (using trio)
-                oracle_network = getattr(startupDag, '_oracle_network', None)
-                trio_token = getattr(startupDag, '_trio_token', None)
-                if oracle_network is not None and hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
-                    try:
-                        engine = startupDag.aiengine
-
-                        def observation_callback(observation):
-                            """Handle observation and pass to engine."""
-                            # Find the stream UUID for this stream_id
-                            for uuid, model in engine.streamModels.items():
-                                if getattr(model, 'stream_name', None) == stream_id:
-                                    engine._handleP2PObservation(uuid, observation, stream_id)
-                                    return
-                            # Fallback if no match found by stream_name
-                            engine._handleP2PObservation(stream_id, observation, stream_id)
-
-                        async def do_subscribe():
-                            return await oracle_network.subscribe_to_stream(stream_id, observation_callback)
-
-                        # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
-                        if trio_token:
-                            obs_subscribed = trio.from_thread.run(do_subscribe, trio_token=trio_token)
-                        else:
-                            obs_subscribed = trio.run(do_subscribe)
-                        if obs_subscribed:
-                            logging.info(f"Subscribed to observations for {stream_id}", color='green')
-                    except Exception as e:
-                        logging.warning(f"Failed to subscribe to observations: {e}")
-
-                # Auto-subscribe to predictions for this stream
-                prediction_subscribed = False
-                prediction_protocol = getattr(startupDag, '_prediction_protocol', None)
-                if prediction_protocol is not None:
-                    try:
-                        async def do_subscribe_predictions():
-                            def on_prediction_received(prediction):
-                                # Predictions are cached by the protocol, log for now
-                                logging.debug(f"Received prediction for {stream_id[:16]}...")
-                            return await prediction_protocol.subscribe_to_predictions(
-                                stream_id=stream_id,
-                                callback=on_prediction_received
-                            )
-                        # Use trio.from_thread if we have a trio token, otherwise fall back to trio.run
-                        if trio_token:
-                            prediction_subscribed = trio.from_thread.run(do_subscribe_predictions, trio_token=trio_token)
-                        else:
-                            prediction_subscribed = trio.run(do_subscribe_predictions)
-                        if prediction_subscribed:
-                            logging.info(f"Auto-subscribed to predictions for {stream_id[:16]}...", color='green')
-                    except Exception as e:
-                        logging.warning(f"Failed to auto-subscribe to predictions: {e}")
-
-                return jsonify({
+                # Return success immediately - subscriptions happen in background
+                # The claim succeeded and engine is wired, that's what matters for UX
+                response = jsonify({
                     'success': True,
                     'claim': {
                         'stream_id': claim.stream_id,
@@ -4957,8 +4906,59 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                         'expires': claim.expires,
                     },
                     'engine_wired': engine_wired,
-                    'prediction_subscribed': prediction_subscribed
                 })
+
+                # Spawn background subscriptions (don't block the response)
+                def setup_subscriptions_background():
+                    """Setup P2P subscriptions in background thread."""
+                    oracle_network = getattr(startupDag, '_oracle_network', None)
+                    trio_token = getattr(startupDag, '_trio_token', None)
+
+                    # Subscribe to observations
+                    if oracle_network is not None and hasattr(startupDag, 'aiengine') and startupDag.aiengine is not None:
+                        try:
+                            engine = startupDag.aiengine
+
+                            def observation_callback(observation):
+                                """Handle observation and pass to engine."""
+                                for uuid, model in engine.streamModels.items():
+                                    if getattr(model, 'stream_name', None) == stream_id:
+                                        engine._handleP2PObservation(uuid, observation, stream_id)
+                                        return
+                                engine._handleP2PObservation(stream_id, observation, stream_id)
+
+                            async def do_subscribe():
+                                return await oracle_network.subscribe_to_stream(stream_id, observation_callback)
+
+                            if trio_token:
+                                obs_subscribed = trio.from_thread.run(do_subscribe, trio_token=trio_token)
+                                if obs_subscribed:
+                                    logging.info(f"Subscribed to observations for {stream_id}", color='green')
+                        except Exception as e:
+                            logging.warning(f"Failed to subscribe to observations: {e}")
+
+                    # Subscribe to predictions
+                    prediction_protocol = getattr(startupDag, '_prediction_protocol', None)
+                    if prediction_protocol is not None and trio_token:
+                        try:
+                            async def do_subscribe_predictions():
+                                def on_prediction_received(prediction):
+                                    logging.debug(f"Received prediction for {stream_id[:16]}...")
+                                return await prediction_protocol.subscribe_to_predictions(
+                                    stream_id=stream_id,
+                                    callback=on_prediction_received
+                                )
+                            prediction_subscribed = trio.from_thread.run(do_subscribe_predictions, trio_token=trio_token)
+                            if prediction_subscribed:
+                                logging.info(f"Auto-subscribed to predictions for {stream_id[:16]}...", color='green')
+                        except Exception as e:
+                            logging.warning(f"Failed to auto-subscribe to predictions: {e}")
+
+                # Start background thread for subscriptions
+                import threading
+                threading.Thread(target=setup_subscriptions_background, daemon=True).start()
+
+                return response
             else:
                 return jsonify({'success': False, 'error': 'Failed to claim stream'})
 
