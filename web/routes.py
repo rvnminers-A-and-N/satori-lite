@@ -4516,12 +4516,19 @@ def register_routes(app):
 
             # Get roles from heartbeats - this is the most reliable source!
             # Heartbeats contain the actual roles nodes advertise about themselves
-            heartbeat_roles = {}  # peer_id -> set of roles
+            heartbeat_roles_by_peer = {}  # peer_id -> set of roles
+            heartbeat_roles_by_address = {}  # evrmore_address -> set of roles
             try:
                 heartbeat_result = _ipc_get('/p2p/uptime/node_roles')
-                if heartbeat_result and 'node_roles' in heartbeat_result:
-                    for peer_id, roles in heartbeat_result['node_roles'].items():
-                        heartbeat_roles[peer_id] = set(roles) if isinstance(roles, list) else roles
+                if heartbeat_result:
+                    # Primary: peer_roles keyed by libp2p peer_id (16Uiu2HAk...)
+                    if 'peer_roles' in heartbeat_result:
+                        for peer_id, roles in heartbeat_result['peer_roles'].items():
+                            heartbeat_roles_by_peer[peer_id] = set(roles) if isinstance(roles, list) else roles
+                    # Fallback: node_roles keyed by evrmore address
+                    if 'node_roles' in heartbeat_result:
+                        for addr, roles in heartbeat_result['node_roles'].items():
+                            heartbeat_roles_by_address[addr] = set(roles) if isinstance(roles, list) else roles
             except Exception:
                 pass  # Heartbeat info is supplementary
 
@@ -4533,10 +4540,17 @@ def register_routes(app):
                 peer_id_str = str(peer_id)
                 known_peer_ids.add(peer_id_str)
                 roles = list(getattr(identity, 'roles', []))
+                evrmore_addr = getattr(identity, 'evrmore_address', '')
 
                 # First, supplement from heartbeats (most reliable - nodes self-report)
-                if peer_id_str in heartbeat_roles:
-                    for role in heartbeat_roles[peer_id_str]:
+                # Primary lookup: by peer_id
+                if peer_id_str in heartbeat_roles_by_peer:
+                    for role in heartbeat_roles_by_peer[peer_id_str]:
+                        if role not in roles:
+                            roles.append(role)
+                # Fallback lookup: by evrmore address (if peer_id lookup didn't find roles)
+                elif evrmore_addr and evrmore_addr in heartbeat_roles_by_address:
+                    for role in heartbeat_roles_by_address[evrmore_addr]:
                         if role not in roles:
                             roles.append(role)
 
@@ -4562,9 +4576,10 @@ def register_routes(app):
             for peer_id_str in connected_peers:
                 if peer_id_str not in known_peer_ids:
                     roles = []
-                    # First check heartbeat roles (most reliable)
-                    if peer_id_str in heartbeat_roles:
-                        roles = list(heartbeat_roles[peer_id_str])
+                    # First check heartbeat roles by peer_id (most reliable)
+                    if peer_id_str in heartbeat_roles_by_peer:
+                        roles = list(heartbeat_roles_by_peer[peer_id_str])
+                    # Note: Can't fallback to evrmore address here since we don't have identity
                     # Check if this peer is a registered oracle
                     if peer_id_str in oracle_peer_ids and 'oracle' not in roles:
                         roles.append('oracle')

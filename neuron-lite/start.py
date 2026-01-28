@@ -3747,15 +3747,24 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
 
             This is the most reliable source of node roles since nodes
             self-report their roles in heartbeats.
+
+            Returns roles keyed by BOTH peer_id (libp2p) and node_id (evrmore address)
+            so callers can look up by either identifier.
             """
             uptime_tracker = getattr(startupDag, '_uptime_tracker', None)
 
-            result = {'node_roles': {}}
+            result = {'node_roles': {}, 'peer_roles': {}}
 
-            if uptime_tracker and hasattr(uptime_tracker, '_node_roles'):
-                # _node_roles is Dict[str, Set[str]] - node_id -> set of roles
-                for node_id, roles in uptime_tracker._node_roles.items():
-                    result['node_roles'][node_id] = list(roles) if isinstance(roles, set) else roles
+            if uptime_tracker:
+                # _node_roles is keyed by evrmore address
+                if hasattr(uptime_tracker, '_node_roles'):
+                    for node_id, roles in uptime_tracker._node_roles.items():
+                        result['node_roles'][node_id] = list(roles) if isinstance(roles, set) else roles
+
+                # _peer_roles is keyed by libp2p peer_id (16Uiu2HAk...)
+                if hasattr(uptime_tracker, '_peer_roles'):
+                    for peer_id, roles in uptime_tracker._peer_roles.items():
+                        result['peer_roles'][peer_id] = list(roles) if isinstance(roles, set) else roles
 
             return jsonify(result)
 
