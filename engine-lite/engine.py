@@ -1566,31 +1566,24 @@ class StreamModel:
             # Store for potential reveal later
             self._pending_commits[self._current_round_id] = predicted_value
 
-            info(f"P2P prediction committed for {self.streamUuid} round={self._current_round_id} value={predicted_value}", color="cyan")
+            debug(f"P2P prediction committed for {self.streamUuid} round={self._current_round_id} value={predicted_value}")
 
             # If we have a prediction protocol instance, publish the prediction
             # Try to get it from various sources if not set on StreamModel
             prediction_protocol = self._prediction_protocol
-            info(f"[PUBLISH DEBUG] Initial prediction_protocol on StreamModel: {prediction_protocol is not None}", color="yellow")
             if prediction_protocol is None:
                 # Try to get from startupDag as fallback
                 try:
                     from satorineuron.init import start
                     startup = start.getStart() if hasattr(start, 'getStart') else None
-                    info(f"[PUBLISH DEBUG] startup from getStart: {startup is not None}", color="yellow")
-                    if startup:
-                        info(f"[PUBLISH DEBUG] startup has _prediction_protocol attr: {hasattr(startup, '_prediction_protocol')}", color="yellow")
-                        if hasattr(startup, '_prediction_protocol'):
-                            prediction_protocol = startup._prediction_protocol
-                            info(f"[PUBLISH DEBUG] Got protocol from startup: {prediction_protocol is not None}", color="yellow")
-                            # Cache it for future use
-                            if prediction_protocol is not None:
-                                self._prediction_protocol = prediction_protocol
-                                info(f"[PUBLISH DEBUG] Cached prediction protocol from startupDag for {self.streamUuid}", color="green")
-                except Exception as e:
-                    info(f"[PUBLISH DEBUG] Exception getting from startupDag: {e}", color="red")
+                    if startup and hasattr(startup, '_prediction_protocol'):
+                        prediction_protocol = startup._prediction_protocol
+                        # Cache it for future use
+                        if prediction_protocol is not None:
+                            self._prediction_protocol = prediction_protocol
+                except Exception:
+                    pass
 
-            info(f"[PUBLISH DEBUG] Final prediction_protocol: {prediction_protocol is not None}", color="yellow")
             if prediction_protocol is not None:
                 try:
                     # Check if we're an oracle for this stream
@@ -1606,32 +1599,21 @@ class StreamModel:
                     # Use the Peers' spawn_background_task to run async in Trio context
                     # This avoids conflicts with asyncio.run() and Trio event loops
                     p2p_peers = self._p2p_peers
-                    info(f"[PUBLISH DEBUG] Initial p2p_peers on StreamModel: {p2p_peers is not None}", color="yellow")
                     if p2p_peers is None:
                         # Try to get from startupDag as fallback
                         try:
                             from satorineuron.init import start
                             startup = start.getStart() if hasattr(start, 'getStart') else None
-                            if startup:
-                                info(f"[PUBLISH DEBUG] startup has _p2p_peers attr: {hasattr(startup, '_p2p_peers')}", color="yellow")
-                                if hasattr(startup, '_p2p_peers'):
-                                    p2p_peers = startup._p2p_peers
-                                    info(f"[PUBLISH DEBUG] Got p2p_peers from startup: {p2p_peers is not None}", color="yellow")
-                                    if p2p_peers is not None:
-                                        self._p2p_peers = p2p_peers
-                        except Exception as e:
-                            info(f"[PUBLISH DEBUG] Exception getting p2p_peers from startupDag: {e}", color="red")
-
-                    info(f"[PUBLISH DEBUG] Final p2p_peers: {p2p_peers is not None}", color="yellow")
-                    if p2p_peers is not None:
-                        has_spawn = hasattr(p2p_peers, 'spawn_background_task')
-                        info(f"[PUBLISH DEBUG] p2p_peers has spawn_background_task: {has_spawn}", color="yellow")
+                            if startup and hasattr(startup, '_p2p_peers'):
+                                p2p_peers = startup._p2p_peers
+                                if p2p_peers is not None:
+                                    self._p2p_peers = p2p_peers
+                        except Exception:
+                            pass
 
                     if p2p_peers is not None and hasattr(p2p_peers, 'spawn_background_task'):
-                        info(f"[PUBLISH DEBUG] About to spawn _publish task for stream={self.streamUuid}", color="green")
                         async def _publish():
                             try:
-                                info(f"[PUBLISH DEBUG] Inside _publish, calling prediction_protocol.publish_prediction", color="yellow")
                                 await prediction_protocol.publish_prediction(
                                     stream_id=self.streamUuid,
                                     value=predicted_value,
@@ -1643,12 +1625,8 @@ class StreamModel:
                                 info(f"Published P2P prediction{oracle_tag}: stream={self.streamUuid} value={predicted_value}", color="green")
                             except Exception as e:
                                 warning(f"Failed to publish P2P prediction: {e}")
-                                import traceback
-                                info(f"[PUBLISH DEBUG] Publish traceback: {traceback.format_exc()}", color="red")
                         p2p_peers.spawn_background_task(_publish)
-                        info(f"[PUBLISH DEBUG] spawn_background_task called successfully", color="green")
                     else:
-                        info(f"[PUBLISH DEBUG] Falling back to asyncio.run (p2p_peers={p2p_peers is not None})", color="yellow")
                         # Fallback to asyncio.run (may fail in Trio context)
                         asyncio.run(prediction_protocol.publish_prediction(
                             stream_id=self.streamUuid,
@@ -1658,11 +1636,7 @@ class StreamModel:
                             is_oracle=is_oracle
                         ))
                 except Exception as e:
-                    info(f"[PUBLISH DEBUG] Exception in publish block: {e}", color="red")
-                    import traceback
-                    info(f"[PUBLISH DEBUG] Traceback: {traceback.format_exc()}", color="red")
-            else:
-                info(f"[PUBLISH DEBUG] No prediction protocol available for {self.streamUuid}", color="red")
+                    warning(f"Exception publishing P2P prediction: {e}")
 
         except ImportError:
             debug("satorip2p not available for P2P prediction commit")
@@ -1782,7 +1756,11 @@ class StreamModel:
         model so far in order to replace it if the new model is better, always
         using the best known model to make predictions on demand.
         """
-        while len(self.data) > 0:
+        while True:
+            # Wait for data if we don't have any yet
+            if len(self.data) == 0:
+                time.sleep(10)
+                continue
             if self.paused:
                 time.sleep(10)
                 continue
