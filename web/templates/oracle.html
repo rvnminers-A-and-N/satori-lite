@@ -795,16 +795,29 @@ document.addEventListener('DOMContentLoaded', function() {
 // API HELPER
 // =========================================================================
 
-async function apiCall(endpoint, method = 'GET', data = null) {
+async function apiCall(endpoint, method = 'GET', data = null, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
     const options = {
         method: method,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal
     };
     if (data) {
         options.body = JSON.stringify(data);
     }
-    const response = await fetch('/api' + endpoint, options);
-    return response.json();
+    try {
+        const response = await fetch('/api' + endpoint, options);
+        clearTimeout(timeoutId);
+        return response.json();
+    } catch (e) {
+        clearTimeout(timeoutId);
+        if (e.name === 'AbortError') {
+            throw new Error('Request timed out');
+        }
+        throw e;
+    }
 }
 
 // =========================================================================
@@ -981,7 +994,8 @@ async function claimStream() {
     btn.textContent = 'Claiming...';
 
     try {
-        const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId });
+        // Use 70s timeout (backend has 60s timeout for claim operations)
+        const result = await apiCall('/p2p/streams/claim', 'POST', { stream_id: streamId }, 70000);
         if (result.success) {
             showToast('Claimed slot #' + (result.claim?.slot_index || 0), 'success');
             document.getElementById('claimStreamId').value = '';
@@ -993,6 +1007,10 @@ async function claimStream() {
         }
     } catch (e) {
         showToast('Error: ' + e.message, 'error');
+        // Still refresh in case claim succeeded but response timed out
+        loadStreamStats();
+        loadMyClaimedStreams();
+        loadDiscoveredStreams();
     } finally {
         btn.disabled = false;
         btn.textContent = originalText;
