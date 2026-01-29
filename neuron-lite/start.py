@@ -4418,6 +4418,29 @@ def startP2PInternalAPI(startupDag: StartupDag, port: int = 24602):
                 'secondary_streams': [],
             })
 
+        @ipc_app.route('/p2p/oracle/sync', methods=['POST'])
+        def p2p_oracle_sync():
+            """Request all peers to re-broadcast their oracle registrations."""
+            oracle = getattr(startupDag, '_oracle_network', None)
+
+            if not oracle:
+                return jsonify({'success': False, 'error': 'Oracle network not initialized'})
+
+            try:
+                # Run the async sync request
+                import trio
+                result = trio.from_thread.run_sync(
+                    lambda: trio.from_thread.run(oracle.request_network_sync)
+                )
+                return jsonify({
+                    'success': True,
+                    'message': 'Sync request broadcast to network',
+                    'known_registrations': result
+                })
+            except Exception as e:
+                logger.warning(f"Failed to request oracle sync: {e}")
+                return jsonify({'success': False, 'error': str(e)})
+
         @ipc_app.route('/p2p/oracle/role/<stream_id>')
         def p2p_oracle_role(stream_id: str):
             """Get our oracle role for a specific stream."""

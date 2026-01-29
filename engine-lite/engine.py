@@ -1723,10 +1723,15 @@ class StreamModel:
             availableSwapGigs = psutil.swap_memory().free / 1e9
             totalAvailableRamGigs = availableRamGigs + availableSwapGigs
             adapter = None
+            data_len = len(self.data) if hasattr(self.data, '__len__') else 0
+            info(f"chooseAdapter: data_len={data_len}, ram={totalAvailableRamGigs:.2f}GB, cpu={self.cpu}", color="yellow")
             for p in self.preferredAdapters:
                 if p in self.failedAdapters:
+                    info(f"chooseAdapter: {p.__name__} in failedAdapters, skipping", color="yellow")
                     continue
-                if p.condition(data=self.data, cpu=self.cpu, availableRamGigs=totalAvailableRamGigs) == 1:
+                condition_result = p.condition(data=self.data, cpu=self.cpu, availableRamGigs=totalAvailableRamGigs)
+                info(f"chooseAdapter: {p.__name__}.condition() = {condition_result}", color="yellow")
+                if condition_result == 1:
                     adapter = p
                     break
             if adapter is None:
@@ -1756,14 +1761,17 @@ class StreamModel:
         model so far in order to replace it if the new model is better, always
         using the best known model to make predictions on demand.
         """
+        info(f"Training loop started for stream {self.streamUuid}", color="cyan")
         while True:
             # Wait for data if we don't have any yet
             if len(self.data) == 0:
+                debug(f"Training loop waiting for data on {self.streamUuid}")
                 time.sleep(10)
                 continue
             if self.paused:
                 time.sleep(10)
                 continue
+            info(f"Training iteration: {len(self.data)} rows, adapter={self.adapter.__name__}", color="cyan")
             self.chooseAdapter(inplace=True)
             try:
                 trainingResult = self.pilot.fit(data=self.data, stable=self.stable)
@@ -1808,6 +1816,7 @@ class StreamModel:
 
         self.thread = threading.Thread(target=training_loop_thread, daemon=True)
         self.thread.start()
+        info(f"Training thread started for {self.streamUuid}", color="green")
 
 
 def main():

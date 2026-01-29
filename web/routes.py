@@ -6810,6 +6810,27 @@ def register_routes(app):
             logger.warning(f"Failed to get oracle summary: {e}")
             return jsonify({'error': str(e)})
 
+    @app.route('/api/p2p/oracle/sync', methods=['POST'])
+    @login_required
+    def api_p2p_oracle_sync():
+        """Request network sync - ask all peers to re-broadcast their oracle registrations."""
+        try:
+            import requests as req
+
+            resp = req.post(
+                'http://127.0.0.1:24602/p2p/oracle/sync',
+                timeout=10
+            )
+
+            if resp.status_code == 200:
+                return jsonify(resp.json())
+
+            return jsonify({'success': False, 'error': f'IPC returned {resp.status_code}'})
+
+        except Exception as e:
+            logger.warning(f"Failed to request oracle sync: {e}")
+            return jsonify({'success': False, 'error': str(e)})
+
     @app.route('/api/p2p/oracle/role/<stream_id>')
     @login_required
     def api_p2p_oracle_role(stream_id: str):

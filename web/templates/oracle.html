@@ -157,9 +157,14 @@
                                 <i class="material-icons align-middle me-2">explore</i>
                                 Discovered Streams
                             </h5>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="loadDiscoveredStreams()">
-                                <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
-                            </button>
+                            <div>
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="requestNetworkSync()" title="Request streams from network peers">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">cloud_sync</i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="loadDiscoveredStreams()">
+                                    <i class="material-icons align-middle" style="font-size: 16px;">refresh</i>
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body p-0">
                             <div id="discoveredStreamsList" style="max-height: 350px; overflow-y: auto;">
@@ -841,6 +846,26 @@ async function loadStreamStats() {
         document.getElementById('mySecondaryOracles').textContent = summary.secondary_count || 0;
     } catch (e) {
         console.error('Failed to load stream stats:', e);
+    }
+}
+
+async function requestNetworkSync() {
+    try {
+        showToast('Requesting stream data from network peers...', 'info');
+        const result = await apiCall('/p2p/oracle/sync', 'POST');
+        if (result.success) {
+            showToast('Sync request sent! Refreshing streams...', 'success');
+            // Wait a moment for responses to arrive, then refresh
+            setTimeout(() => {
+                loadDiscoveredStreams();
+                loadStreamStats();
+            }, 2000);
+        } else {
+            showToast('Sync request failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        console.error('Network sync failed:', e);
+        showToast('Network sync failed: ' + e.message, 'error');
     }
 }
 
