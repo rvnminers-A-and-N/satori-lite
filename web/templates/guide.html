@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Satori - Rewards Guide{% endblock %}
+{% block title %}Satori - Complete Guide{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -364,11 +364,11 @@
     <!-- Header -->
     <div class="text-center mb-5">
         <h1 style="font-size: 2.5rem; font-weight: 700; margin-bottom: 0.5rem;">
-            <i class="material-icons align-middle" style="font-size: 2.5rem; color: var(--accent-primary);">emoji_events</i>
-            Satori Rewards Guide
+            <i class="material-icons align-middle" style="font-size: 2.5rem; color: var(--accent-primary);">menu_book</i>
+            Satori Complete Guide
         </h1>
         <p class="text-muted" style="font-size: 1.1rem;">
-            Everything you need to know to maximize your rewards and achieve legendary status
+            Everything you need to know about running a Satori Neuron
         </p>
     </div>
 
@@ -376,33 +376,515 @@
     <div class="toc">
         <h4><i class="material-icons align-middle me-2">list</i>Contents</h4>
         <div class="row">
-            <div class="col-md-4">
+            <div class="col-md-3">
+                <strong>Getting Started</strong>
                 <ul>
-                    <li><a href="#scoring">1. Artificial Neuron Scoring</a></li>
-                    <li><a href="#multipliers">2. Reward Multipliers</a></li>
-                    <li><a href="#roles">3. Node Roles</a></li>
+                    <li><a href="#overview">1. What is Satori?</a></li>
+                    <li><a href="#quickstart">2. Quick Start</a></li>
+                    <li><a href="#network">3. P2P Network</a></li>
                 </ul>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
+                <strong>Core Features</strong>
                 <ul>
-                    <li><a href="#reputation">4. Reputation System</a></li>
-                    <li><a href="#slashing">5. Slashing & Penalties</a></li>
-                    <li><a href="#donations">6. Donation Tiers</a></li>
+                    <li><a href="#oracles">4. Oracles & Streams</a></li>
+                    <li><a href="#predictions">5. Predictions</a></li>
+                    <li><a href="#governance">6. Governance</a></li>
                 </ul>
             </div>
-            <div class="col-md-4">
+            <div class="col-md-3">
+                <strong>Rewards System</strong>
                 <ul>
-                    <li><a href="#badges">7. Badges & Achievements</a></li>
-                    <li><a href="#time">8. Time Hierarchy</a></li>
-                    <li><a href="#legendary">9. Path to Legend</a></li>
+                    <li><a href="#scoring">7. Neuron Scoring</a></li>
+                    <li><a href="#multipliers">8. Reward Multipliers</a></li>
+                    <li><a href="#roles">9. Node Roles</a></li>
+                </ul>
+            </div>
+            <div class="col-md-3">
+                <strong>Advanced</strong>
+                <ul>
+                    <li><a href="#reputation">10. Reputation</a></li>
+                    <li><a href="#badges">11. Badges</a></li>
+                    <li><a href="#legendary">12. Path to Legend</a></li>
                 </ul>
             </div>
         </div>
     </div>
 
-    <!-- Section 1: Artificial Neuron Scoring -->
+    <!-- Section 1: What is Satori? -->
+    <div class="guide-section" id="overview">
+        <h2><i class="material-icons align-middle me-2">lightbulb</i>1. What is Satori?</h2>
+
+        <p>
+            <strong>Satori</strong> is a decentralized prediction network where nodes (called "Neurons") collaborate to
+            forecast future values of data streams. Unlike traditional prediction markets, Satori uses a peer-to-peer
+            architecture where every participant contributes to and benefits from collective intelligence.
+        </p>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">hub</i>Key Concepts</h4>
+            <ul style="margin-bottom: 0;">
+                <li><strong>Neurons</strong> - Your node on the network. Each neuron has a unique identity, makes predictions, and earns rewards.</li>
+                <li><strong>Streams</strong> - Data feeds that neurons predict (e.g., crypto prices, economic indicators).</li>
+                <li><strong>Oracles</strong> - Neurons that publish observations (actual values) for streams.</li>
+                <li><strong>Predictors</strong> - Neurons that forecast future stream values and earn rewards for accuracy.</li>
+                <li><strong>SATORI</strong> - The native token used for staking, governance, and rewards.</li>
+                <li><strong>EVR (Evrmore)</strong> - The underlying blockchain for identity, assets, and transactions.</li>
+            </ul>
+        </div>
+
+        <h3>How It Works</h3>
+        <ol>
+            <li><strong>Oracles publish observations</strong> - Real-world data flows into the network</li>
+            <li><strong>Predictors make forecasts</strong> - Neurons analyze data and predict future values</li>
+            <li><strong>Consensus validates results</strong> - The network agrees on actual outcomes</li>
+            <li><strong>Rewards are distributed</strong> - Accurate predictors earn SATORI tokens</li>
+        </ol>
+
+        <h3>Network Modes</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Mode</th>
+                    <th>Description</th>
+                    <th>Use Case</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>P2P Mode</strong></td>
+                    <td>Fully decentralized, peer-to-peer networking</td>
+                    <td>Production, maximum decentralization</td>
+                </tr>
+                <tr>
+                    <td><strong>Hybrid Mode</strong></td>
+                    <td>P2P with central server fallback</td>
+                    <td>Transition period, reliability</td>
+                </tr>
+                <tr>
+                    <td><strong>Central Mode</strong></td>
+                    <td>Traditional client-server architecture</td>
+                    <td>Legacy compatibility</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 2: Quick Start -->
+    <div class="guide-section" id="quickstart">
+        <h2><i class="material-icons align-middle me-2">rocket_launch</i>2. Quick Start</h2>
+
+        <h3>First Login</h3>
+        <p>
+            When you first access your neuron's web interface, you'll see a login screen. Your initial password
+            is displayed in the terminal/logs when the neuron starts. After logging in, you should change this
+            password immediately.
+        </p>
+
+        <h3>Dashboard Overview</h3>
+        <p>The Dashboard is your home base. Key areas include:</p>
+        <ul>
+            <li><strong>P2P Network Card</strong> - Shows connected peers, heartbeats, and network health</li>
+            <li><strong>Wallet Card</strong> - Your Evrmore address, SATORI balance, and staking status</li>
+            <li><strong>Streams Card</strong> - Active streams you're predicting on</li>
+            <li><strong>Rewards Card</strong> - Your earnings and multiplier breakdown</li>
+        </ul>
+
+        <h3>Onboarding: Choosing Your Role</h3>
+        <p>
+            First-time users see an onboarding modal with three options:
+        </p>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Option</th>
+                    <th>Description</th>
+                    <th>Best For</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Auto-Pick</strong></td>
+                    <td>System selects streams based on load level (Light/Medium/Heavy)</td>
+                    <td>New users, hands-off operation</td>
+                </tr>
+                <tr>
+                    <td><strong>Manual Pick</strong></td>
+                    <td>Browse available streams and select which to predict</td>
+                    <td>Experienced users, specific interests</td>
+                </tr>
+                <tr>
+                    <td><strong>Skip</strong></td>
+                    <td>Run as a basic node without predictions</td>
+                    <td>Relays, observers, gradual onboarding</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="success-box">
+            <h4><i class="material-icons align-middle me-2">tips_and_updates</i>Tip: Start Light</h4>
+            <p style="margin-bottom: 0;">
+                If you're new, choose <strong>Auto-Pick → Light (5 streams)</strong>. This lets you learn the system
+                without overwhelming your machine. You can always claim more streams later from the Oracle page.
+            </p>
+        </div>
+
+        <h3>Essential Pages</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Page</th>
+                    <th>Purpose</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Dashboard</strong></td>
+                    <td>Overview of your neuron's status, wallet, and activity</td>
+                </tr>
+                <tr>
+                    <td><strong>Network</strong></td>
+                    <td>P2P mesh visualization, peer tools, connection status</td>
+                </tr>
+                <tr>
+                    <td><strong>Oracle</strong></td>
+                    <td>Manage streams - discover, claim, publish observations</td>
+                </tr>
+                <tr>
+                    <td><strong>Predictions</strong></td>
+                    <td>View your predictions and accuracy scores</td>
+                </tr>
+                <tr>
+                    <td><strong>Governance</strong></td>
+                    <td>Vote on proposals, participate in network decisions</td>
+                </tr>
+                <tr>
+                    <td><strong>Stake</strong></td>
+                    <td>Manage your SATORI stake, delegate to pools</td>
+                </tr>
+                <tr>
+                    <td><strong>Badges</strong></td>
+                    <td>View earned achievements and progress toward new ones</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 3: P2P Network -->
+    <div class="guide-section" id="network">
+        <h2><i class="material-icons align-middle me-2">hub</i>3. P2P Network</h2>
+
+        <p>
+            Satori uses a decentralized peer-to-peer network based on <strong>libp2p</strong> and <strong>GossipSub</strong>.
+            This means there's no central server - neurons communicate directly with each other.
+        </p>
+
+        <h3>How P2P Works</h3>
+        <ul>
+            <li><strong>Peer Discovery</strong> - Neurons find each other via DHT (Distributed Hash Table) and rendezvous points</li>
+            <li><strong>Mesh Formation</strong> - Connected peers form a mesh network for message propagation</li>
+            <li><strong>GossipSub</strong> - Messages are "gossiped" through the mesh, ensuring all nodes receive them</li>
+            <li><strong>Topic Subscriptions</strong> - Neurons subscribe to topics (streams, heartbeats, governance) to receive relevant messages</li>
+        </ul>
+
+        <h3>Heartbeats</h3>
+        <p>
+            Every neuron broadcasts a <strong>heartbeat</strong> every 60 seconds. Heartbeats contain:
+        </p>
+        <ul>
+            <li>Your Peer ID and Evrmore address</li>
+            <li>Your current roles (node, oracle, predictor, relay, signer)</li>
+            <li>A status message</li>
+            <li>Timestamp for uptime tracking</li>
+        </ul>
+        <p>
+            Heartbeats are how the network knows you're online. Consistent heartbeats build your uptime streak
+            and improve your reputation.
+        </p>
+
+        <h3>Network Page Features</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Network Map</strong></td>
+                    <td>Visual representation of the P2P mesh with your node at center</td>
+                </tr>
+                <tr>
+                    <td><strong>Identity Card</strong></td>
+                    <td>Your Peer ID, Evrmore address, public key, and roles</td>
+                </tr>
+                <tr>
+                    <td><strong>Connected Peers</strong></td>
+                    <td>List of peers you're directly connected to with latency</td>
+                </tr>
+                <tr>
+                    <td><strong>Known Peers</strong></td>
+                    <td>All peers discovered on the network (may not be directly connected)</td>
+                </tr>
+                <tr>
+                    <td><strong>Peer Tools</strong></td>
+                    <td>Ping peers, check connections, troubleshoot networking</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">network_check</i>Connection Health</h4>
+            <p style="margin-bottom: 0;">
+                A healthy neuron typically has <strong>4-8 direct peer connections</strong>. The GossipSub protocol
+                maintains this "mesh degree" automatically. If you see fewer than 3 connections, the system will
+                attempt mesh repair to find more peers.
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 4: Oracles & Streams -->
+    <div class="guide-section" id="oracles">
+        <h2><i class="material-icons align-middle me-2">cloud_upload</i>4. Oracles & Streams</h2>
+
+        <p>
+            <strong>Streams</strong> are data feeds that flow through the Satori network. <strong>Oracles</strong>
+            are the neurons that publish observations (actual values) to these streams.
+        </p>
+
+        <h3>Stream Anatomy</h3>
+        <p>Each stream has a unique identifier like: <code>source|author|target|metric</code></p>
+        <ul>
+            <li><strong>source</strong> - Where the data comes from (e.g., "coingecko", "fred")</li>
+            <li><strong>author</strong> - Who created the stream (e.g., "satori")</li>
+            <li><strong>target</strong> - What's being measured (e.g., "BTCUSD", "DGS10")</li>
+            <li><strong>metric</strong> - The specific measurement (e.g., "price", "rate")</li>
+        </ul>
+
+        <h3>Oracle Types</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th>Requirements</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Primary Oracle</strong></td>
+                    <td>Fetches data from external sources and publishes to the network</td>
+                    <td>API access, reliable uptime, data source configuration</td>
+                </tr>
+                <tr>
+                    <td><strong>Secondary Oracle</strong></td>
+                    <td>Subscribes to a stream and relays observations from primaries</td>
+                    <td>Just network connectivity - helps with redundancy</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Claiming a Stream</h3>
+        <p>To make predictions on a stream, you must first <strong>claim a slot</strong>:</p>
+        <ol>
+            <li>Go to the <strong>Oracle</strong> page</li>
+            <li>Browse <strong>Discovered Streams</strong> to see available streams</li>
+            <li>Click <strong>Claim</strong> on streams you want to predict</li>
+            <li>The system automatically creates a prediction model for that stream</li>
+        </ol>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">info</i>Slot Limits</h4>
+            <p style="margin-bottom: 0;">
+                Each stream has <strong>1000 predictor slots</strong>. When a stream is popular, slots fill up.
+                Claims are renewed automatically every 12 hours to prevent abandoned slots from blocking new predictors.
+                There's a 30-minute grace period before expired slots become available.
+            </p>
+        </div>
+
+        <h3>Running as a Primary Oracle</h3>
+        <p>
+            To run a primary oracle, you need to configure a data source. Satori-lite comes with pre-configured
+            sources that can be enabled:
+        </p>
+        <ul>
+            <li><strong>CoinGecko</strong> - Cryptocurrency prices (BTC, ETH, SATORI, EVR)</li>
+            <li><strong>FRED</strong> - Federal Reserve economic data (requires free API key)</li>
+            <li><strong>Custom HTTP</strong> - Any JSON API endpoint</li>
+        </ul>
+
+        <h3>Network Sync</h3>
+        <p>
+            If you join the network after oracles have already registered their streams, you might not see them
+            immediately. Use the <strong>cloud sync button</strong> on the Oracle page to request all peers
+            re-broadcast their stream registrations.
+        </p>
+    </div>
+
+    <!-- Section 5: Predictions -->
+    <div class="guide-section" id="predictions">
+        <h2><i class="material-icons align-middle me-2">trending_up</i>5. Predictions</h2>
+
+        <p>
+            <strong>Predictions</strong> are the core of Satori. Your neuron uses AI/ML models to forecast future
+            values of streams, and you earn rewards based on accuracy.
+        </p>
+
+        <h3>How Predictions Work</h3>
+        <ol>
+            <li><strong>Data Collection</strong> - Your neuron receives observations from oracles</li>
+            <li><strong>Model Training</strong> - The AI engine trains on historical data (requires 10+ observations)</li>
+            <li><strong>Forecasting</strong> - The model predicts future values</li>
+            <li><strong>Submission</strong> - Predictions are broadcast to the network</li>
+            <li><strong>Scoring</strong> - When actual values arrive, your accuracy is calculated</li>
+        </ol>
+
+        <h3>Prediction Adapters</h3>
+        <p>
+            Satori uses different AI adapters depending on data availability:
+        </p>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Adapter</th>
+                    <th>When Used</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>StarterAdapter</strong></td>
+                    <td>≤10 observations</td>
+                    <td>Simple baseline predictions while collecting data</td>
+                </tr>
+                <tr>
+                    <td><strong>XgbAdapter</strong></td>
+                    <td>>10 observations</td>
+                    <td>XGBoost gradient boosting for time series forecasting</td>
+                </tr>
+                <tr>
+                    <td><strong>XgbChronosAdapter</strong></td>
+                    <td>Future</td>
+                    <td>Advanced temporal modeling (coming soon)</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="success-box">
+            <h4><i class="material-icons align-middle me-2">tips_and_updates</i>Patience Pays Off</h4>
+            <p style="margin-bottom: 0;">
+                Your predictions will start weak with the StarterAdapter. Once you have 10+ observations (about
+                10 minutes for 1-minute streams), the XgbAdapter kicks in and accuracy typically improves significantly.
+                Give your neuron time to learn!
+            </p>
+        </div>
+
+        <h3>Viewing Your Predictions</h3>
+        <p>
+            The <strong>Predictions</strong> page shows:
+        </p>
+        <ul>
+            <li>Recent predictions with timestamps and values</li>
+            <li>Accuracy scores when actual values are known</li>
+            <li>Performance trends over time</li>
+            <li>Active streams you're predicting on</li>
+        </ul>
+    </div>
+
+    <!-- Section 6: Governance -->
+    <div class="guide-section" id="governance">
+        <h2><i class="material-icons align-middle me-2">how_to_vote</i>6. Governance</h2>
+
+        <p>
+            Satori is governed by its participants. Token holders can create proposals and vote on network
+            changes, making it a truly decentralized system.
+        </p>
+
+        <h3>Stake Requirements</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Action</th>
+                    <th>Minimum Stake</th>
+                    <th>Rationale</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Vote on Proposals</strong></td>
+                    <td>1 SATORI</td>
+                    <td>Anyone with skin in the game can participate</td>
+                </tr>
+                <tr>
+                    <td><strong>Create Proposals</strong></td>
+                    <td>250 SATORI</td>
+                    <td>Prevents spam, ensures commitment</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>Voting Power</h3>
+        <p>
+            Your voting power is based on your SATORI stake, with bonuses for contribution:
+        </p>
+        <div class="formula-box">
+            <div class="formula">
+                Voting Power = Stake × 1.0 × (1 + Uptime Bonus) × (1 + Signer Bonus)
+            </div>
+            <div class="explanation">
+                <ul style="margin: 0; padding-left: 1.5rem;">
+                    <li>Base: 1 SATORI = 1 voting power</li>
+                    <li>+10% bonus for 90+ days uptime</li>
+                    <li>+25% bonus for signers</li>
+                    <li>5% cap per node (prevents whale domination)</li>
+                </ul>
+            </div>
+        </div>
+
+        <h3>Proposal Types</h3>
+        <ul>
+            <li><strong>Parameter Changes</strong> - Adjust network constants (stake requirements, timing, etc.)</li>
+            <li><strong>Feature Proposals</strong> - Request new functionality</li>
+            <li><strong>Community Standards</strong> - Establish guidelines and best practices</li>
+            <li><strong>Emergency Actions</strong> - Address security or critical issues (higher threshold)</li>
+        </ul>
+
+        <h3>Voting Thresholds</h3>
+        <table class="guide-table">
+            <thead>
+                <tr>
+                    <th>Proposal Type</th>
+                    <th>Approval Needed</th>
+                    <th>Quorum</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Standard</td>
+                    <td>51%</td>
+                    <td>20%</td>
+                </tr>
+                <tr>
+                    <td>Critical/Emergency</td>
+                    <td>67%</td>
+                    <td>20%</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="info-box">
+            <h4><i class="material-icons align-middle me-2">gavel</i>Governance Rewards</h4>
+            <p style="margin-bottom: 0;">
+                Active governance participation earns you up to <strong>+15% reward bonus</strong>. Vote on proposals,
+                create thoughtful proposals, and engage with the community to maximize this multiplier.
+            </p>
+        </div>
+    </div>
+
+    <!-- Section 7: Artificial Neuron Scoring -->
     <div class="guide-section" id="scoring">
-        <h2><i class="material-icons align-middle me-2">psychology</i>1. Artificial Neuron Scoring System</h2>
+        <h2><i class="material-icons align-middle me-2">psychology</i>7. Artificial Neuron Scoring System</h2>
 
         <p>
             Satori uses a scientifically-grounded scoring model based on the <strong>McCulloch-Pitts Artificial Neuron</strong>
@@ -430,7 +912,7 @@
         </p>
         <ul>
             <li>Slashing status = "removed"</li>
-            <li>Stake below minimum (50 SATORI)</li>
+            <li>Stake below minimum (250 SATORI)</li>
             <li>Invalid or missing prediction</li>
             <li>Known malicious behavior</li>
         </ul>
@@ -455,9 +937,9 @@
         </p>
     </div>
 
-    <!-- Section 2: Reward Multipliers -->
+    <!-- Section 8: Reward Multipliers -->
     <div class="guide-section" id="multipliers">
-        <h2><i class="material-icons align-middle me-2">speed</i>2. Reward Multipliers (Max 2.50x)</h2>
+        <h2><i class="material-icons align-middle me-2">speed</i>8. Reward Multipliers (Max 2.50x)</h2>
 
         <p>
             Your base reward can be multiplied by up to <strong>2.50x</strong> (150% bonus) by stacking various multipliers.
@@ -492,7 +974,7 @@
                     <td><strong>Stake Bonus</strong></td>
                     <td class="positive">+25%</td>
                     <td>Stake above minimum</td>
-                    <td>+5% per SATORI above 50, max at 55 SATORI</td>
+                    <td>+0.5% per SATORI above 250, max at 300 SATORI</td>
                 </tr>
                 <tr>
                     <td><strong>Role Bonus</strong></td>
@@ -504,7 +986,7 @@
                     <td><strong>Referral Bonus</strong></td>
                     <td class="positive">+15%</td>
                     <td>Refer new nodes</td>
-                    <td>Bronze (10) +2%, up to Diamond (2000+) +15%</td>
+                    <td>Bronze (5) +2%, up to Diamond (2000+) +15%</td>
                 </tr>
                 <tr>
                     <td><strong>Pool Diversity</strong></td>
@@ -560,9 +1042,9 @@
         </div>
     </div>
 
-    <!-- Section 3: Node Roles -->
+    <!-- Section 9: Node Roles -->
     <div class="guide-section" id="roles">
-        <h2><i class="material-icons align-middle me-2">badge</i>3. Node Roles & Types</h2>
+        <h2><i class="material-icons align-middle me-2">badge</i>9. Node Roles & Types</h2>
 
         <h3>Functional Roles (Earn Bonuses)</h3>
         <p>These roles actively contribute to the network and earn bonus multipliers:</p>
@@ -670,9 +1152,9 @@
         </table>
     </div>
 
-    <!-- Section 4: Reputation System -->
+    <!-- Section 10: Reputation System -->
     <div class="guide-section" id="reputation">
-        <h2><i class="material-icons align-middle me-2">verified</i>4. Reputation System</h2>
+        <h2><i class="material-icons align-middle me-2">verified</i>10. Reputation System</h2>
 
         <p>
             Your reputation score (0-100) reflects your standing in the network. It affects both your rewards
@@ -739,9 +1221,8 @@
         </ul>
     </div>
 
-    <!-- Section 5: Slashing & Penalties -->
+    <!-- Slashing & Penalties (part of reputation) -->
     <div class="guide-section" id="slashing">
-        <h2><i class="material-icons align-middle me-2">warning</i>5. Slashing & Penalties</h2>
 
         <div class="warning-box">
             <h4><i class="material-icons align-middle me-2">error</i>Important: Things to Avoid</h4>
@@ -838,9 +1319,8 @@
         </ul>
     </div>
 
-    <!-- Section 6: Donation Tiers -->
+    <!-- Donation Tiers (part of multipliers info) -->
     <div class="guide-section" id="donations">
-        <h2><i class="material-icons align-middle me-2">volunteer_activism</i>6. Donation Tiers</h2>
 
         <p>
             Donating EVR to the treasury helps fund network operations (badge minting, transaction fees, development).
@@ -905,9 +1385,9 @@
         </div>
     </div>
 
-    <!-- Section 7: Badges & Achievements -->
+    <!-- Section 11: Badges & Achievements -->
     <div class="guide-section" id="badges">
-        <h2><i class="material-icons align-middle me-2">military_tech</i>7. Badges & Achievements</h2>
+        <h2><i class="material-icons align-middle me-2">military_tech</i>11. Badges & Achievements</h2>
 
         <p>
             Badges are permanent on-chain assets (minted on Evrmore) that recognize your achievements.
@@ -1080,9 +1560,8 @@
         </div>
     </div>
 
-    <!-- Section 8: Time Hierarchy -->
+    <!-- Time Hierarchy (reference info) -->
     <div class="guide-section" id="time">
-        <h2><i class="material-icons align-middle me-2">schedule</i>8. Time Hierarchy</h2>
 
         <p>
             Satori uses a consistent time hierarchy inspired by celestial cycles. Understanding these periods
@@ -1141,9 +1620,9 @@
         </table>
     </div>
 
-    <!-- Section 9: Path to Legend -->
+    <!-- Section 12: Path to Legend -->
     <div class="guide-section" id="legendary">
-        <h2><i class="material-icons align-middle me-2">auto_awesome</i>9. The Path to Legend</h2>
+        <h2><i class="material-icons align-middle me-2">auto_awesome</i>12. The Path to Legend</h2>
 
         <p>
             Becoming a <strong>Legend</strong> is the ultimate achievement in Satori. It requires dedication,
@@ -1158,7 +1637,7 @@
                 <li><strong>Friendly</strong> - Diamond referral tier (2000+ referrals)</li>
                 <li><strong>Charity</strong> - Diamond donor (250,000+ EVR)</li>
                 <li><strong>Civic</strong> - Diamond governance participation</li>
-                <li><strong>Whale</strong> - Maxed stake bonus (55+ SATORI)</li>
+                <li><strong>Whale</strong> - Maxed stake bonus (300+ SATORI)</li>
             </ul>
         </div>
 
@@ -1175,7 +1654,7 @@
             <tbody>
                 <tr>
                     <td>&#9744; Max Stake</td>
-                    <td>Stake 55+ SATORI</td>
+                    <td>Stake 300+ SATORI</td>
                     <td>+25%</td>
                     <td class="positive">Easy</td>
                 </tr>
